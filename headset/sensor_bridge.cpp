@@ -3,6 +3,7 @@
 #include "system_metrics.h"
 #include "vr_overlay.h"
 
+#include <algorithm>  // T04
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -281,6 +282,7 @@ void SensorBridge::readProcesses(double now, bool resumed) {
     // CPU % is a delta: after a pause, start a fresh one rather than average over the pause
     if (resumed) processes_.reset();
     const ProcessLists& l = processes_.scan(now, processOptions_);
+    ++processScans_;
     if (l.scanned == 0) {
         for (uint16_t id : {metric::kProcScanned, metric::kProcVanished, metric::kProcScanMs, metric::kCpuItemsRows,
                             metric::kRamItemsRows}) {
@@ -419,4 +421,51 @@ std::string SensorBridge::debugText() const {
     list(l.cpuValid ? "by CPU (% of one core):\n" : "by CPU: no interval yet\n", l.byCpu);
     list("by RSS:\n", l.byRam);
     return out;
+}
+
+// ---- T04 ----
+
+fph::ProcessListsView SensorBridge::processListsView() const {
+    const ProcessLists& l = processes_.lists();
+    const auto convert = [](const std::vector<ProcessRow>& rows) {
+        std::vector<fph::ProcessItem> out;
+        out.reserve(rows.size());
+        for (const ProcessRow& r : rows) {
+            fph::ProcessItem item;
+            // comm is the main thread's name ("vrlinkrunthread"); the exe basename ("vrlink") reads better
+            item.name = r.exe.empty() ? r.name : r.exe;
+            item.pid = r.pid;
+            item.count = r.count;
+            item.cpuCorePct = r.cpuCorePct;
+            item.rssMiB = r.rssMiB;
+            out.push_back(std::move(item));
+        }
+        return out;
+    };
+    fph::ProcessListsView view;
+    view.byCpu = convert(l.byCpu);
+    view.byRam = convert(l.byRam);
+    view.cpuValid = l.cpuValid;
+    view.generation = processScans_;
+    return view;
+}
+
+ProcessListOptions SensorBridge::processOptionsFor(const fph::Layout& layout) {
+    ProcessListOptions options;
+    options.cpuMax = 0;
+    options.ramMax = 0;
+    bool ramSum = false;
+    for (const fph::LayoutColumn& column : layout.columns) {
+        for (const fph::WidgetInstance& w : column.widgets) {
+            if (w.type == fph::WidgetType::CpuItems) {
+                options.cpuMax = std::max<size_t>(options.cpuMax, w.maxItems);
+                options.sumSameName = options.sumSameName || w.sumSameName;
+            } else if (w.type == fph::WidgetType::RamItems) {
+                options.ramMax = std::max<size_t>(options.ramMax, w.maxItems);
+                ramSum = ramSum || w.sumSameName;
+            }
+        }
+    }
+    options.ramSumSameName = ramSum ? 1 : 0;
+    return options;
 }

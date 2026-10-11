@@ -5,9 +5,11 @@
 #include "config.h"
 #include "draw.h"
 #include "dump_metrics.h"  // T03
+#include "grid_renderer.h"  // T04
 #include "i18n.h"
+#include "json.h"  // T04: --layout
+#include "layout.h"  // T04
 #include "metric_store.h"
-#include "panel.h"
 #include "paths.h"
 #include "scheduler.h"
 #include "sensor_bridge.h"
@@ -33,6 +35,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <thread>
@@ -88,6 +91,8 @@ struct Options {
     bool fakeWarnings = false;
     double fakeFps = 0.0;
     std::string fakeWifi;  ///< non-empty: fake the wireless link (dBm, "home:dBm" or "none")
+    std::string layoutPath;  ///< T04 --dump-png: draw this layout (a JSON file: a layout object or a whole config)
+    int benchCount = 20;     ///< T04 --dump-png: renders to time at the end
     bool verbose = false;
 };
 
@@ -194,6 +199,8 @@ void printUsage() {
         "  (none)               run as a SteamVR overlay (waits for SteamVR if it isn't running)\n"
         "  --print [--count N]  without OpenVR, print the readings every second, N times (default 5), and exit\n"
         "  --dump-png PATH      without OpenVR, render the panel to a PNG and exit\n"
+        "      --layout FILE    draw this layout instead of the config's (a layout object, or a whole config)\n"
+        "      --bench N        then time N more renders and print the average and max (default 20)\n"
         "      --seconds S      collect readings for S seconds first (default 4) so the graphs have data\n"
         "      --fake-frames    fill in fake frame timings and controllers (to check the look)\n"
         "      --fake-warnings  fake bad values (thermal limit, weak signal, low battery) to check warning colours\n"
@@ -281,6 +288,10 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fakeThrottle = true;
         } else if (arg == "--fake-wifi" && hasNext) {
             options.fakeWifi = argv[++i];
+        } else if (arg == "--layout" && hasNext) {  // T04
+            options.layoutPath = argv[++i];
+        } else if (arg == "--bench" && hasNext) {  // T04
+            options.benchCount = std::max(1, std::atoi(argv[++i]));
         } else if (arg == "--fake-warnings") {
             options.fakeWarnings = true;
         } else if (arg == "--config" && hasNext) {
@@ -399,33 +410,69 @@ FrameStats fakeFrameStats(double t, double fps) {
     return f;
 }
 
-/** Fake controller batteries (left charging). low = the low-battery picture. */
-ControllerStatus fakeControllers(bool low) {
-    ControllerStatus status;
-    status.left.present = true;
-    status.left.pct = low ? 8.0 : 80.0;
-    status.left.charging = true;
-    status.right.present = !low;  // the low-battery picture shows the right hand as not connected
-    status.right.pct = 75.0;
-    return status;
+/** T04: puts fake frame stats into the store, the way SensorBridge::readFrameTiming does. */
+void storeFakeFrame(fph::MetricStore& st, const FrameStats& f, double now) {
+    using namespace fph::metric;
+    st.setF32(kFrameAppFps, f.appFps, now);
+    st.setF32(kFrameDisplayHz, f.displayHz, now);
+    st.setF32(kFrameGpuMs, f.gpuMs, now);
+    st.setF32(kFrameCpuMs, f.cpuMs, now);
+    st.setF32(kFrameGpuMaxMs, f.gpuMaxMs, now);
+    st.setF32(kFrameCpuMaxMs, f.cpuMaxMs, now);
+    st.setF32(kFrameReprojectedPct, f.reprojectedPct, now);
+    st.setI32(kFrameDropped, static_cast<int32_t>(f.dropped), now);
+    st.setEnum(kFrameThrottled, static_cast<uint32_t>(f.throttledFrames), now);
+    st.setI32(kFrameCount, static_cast<int32_t>(f.frames), now);
+}
+
+/** Fake controller batteries (left charging). low = the low-battery picture (right hand not connected). */
+void storeFakeControllers(fph::MetricStore& st, bool low, double now) {
+    using namespace fph::metric;
+    st.setF32(kCtrlLeftPct, low ? 8.0 : 80.0, now);
+    st.setEnum(kCtrlLeftCharging, 1, now);
+    if (low) {
+        st.setNa(kCtrlRightPct, fph::Reason::NotConnected, now);
+        st.setNa(kCtrlRightCharging, fph::Reason::NotConnected, now);
+    } else {
+        st.setF32(kCtrlRightPct, 75.0, now);
+        st.setEnum(kCtrlRightCharging, 0, now);
+    }
+    st.setText(kSceneAppName, "Half-Life: Alyx", now);
 }
 
 /** Replaces some readings with bad values to check the warning colours. */
-void applyFakeWarnings(SensorSample& sample) {
-    sample.throttleCpu = true;
-    sample.throttleGpu = true;
-    sample.gpuBusyPct = 97.0;
-    sample.cpuTempC = 86.0;
-    sample.batteryPct = 12.0;
-    sample.batteryStatus = "Discharging";
-    sample.chargerOnline = false;
-    sample.wifi.interfaceUp = true;
-    sample.wifi.connected = true;
-    sample.wifi.signalDbm = -81.0;
-    sample.wifi.rxMbps = 42.5;
-    sample.wifi.txMbps = 1.2;
-    sample.wifi.txLinkMbps = 288.2;
-    sample.wifi.rxLinkMbps = 216.1;
+void storeFakeWarnings(fph::MetricStore& st, double now) {
+    using namespace fph::metric;
+    st.setEnum(kThrottleCpu, 1, now);
+    st.setEnum(kThrottleGpu, 1, now);
+    st.setF32(kGpuBusyPct, 97.0, now);
+    st.setF32(kTempCpuC, 86.0, now);
+    st.setF32(kBatteryPct, 12.0, now);
+    st.setEnum(kBatteryStatus, static_cast<uint32_t>(fph::BatteryStatus::Discharging), now);
+    st.setEnum(kBatteryChargerOnline, 0, now);
+    // A plugged-in charger with a bad cable: 9 V offered, 7.9 V arriving (sag ≥ 10%)
+    st.setEnum(kBatteryPlugged, 1, now);
+    st.setText(kBatteryUsbType, "PD", now);
+    st.setF32(kBatteryPdOfferedV, 9.0, now);
+    st.setF32(kBatteryPdOfferedA, 2.0, now);
+    st.setF32(kBatteryPdOfferedW, 18.0, now);
+    st.setF32(kBatteryInputV, 7.9, now);
+    st.setF32(kBatteryInputA, 1.1, now);
+    st.setF32(kBatteryInputW, 8.7, now);
+    st.setF32(kBatterySagV, 1.1, now);
+    st.setI32(kBatteryTimeToEmptyS, 2460, now);
+    st.setNa(kBatteryTimeToFullS, fph::Reason::NotConnected, now);
+    st.setF32(kCpuCluster0MaxMhz + 3, 2400.0, now);  // a Playtime cap on the prime cluster
+    st.setF32(kCpuCluster0HwMaxMhz + 3, 3052.8, now);
+    for (uint16_t base : {kNetDongleBase, kNetHomeBase}) {
+        st.setEnum(base + kNetAdapterPresent, 1, now);
+        st.setEnum(base + kNetAdapterConnected, 1, now);
+        st.setF32(base + kNetAdapterSignalDbm, -81.0, now);
+        st.setF32(base + kNetAdapterRxMbps, 42.5, now);
+        st.setF32(base + kNetAdapterTxMbps, 1.2, now);
+        st.setF32(base + kNetAdapterTxLinkMbps, 288.2, now);
+        st.setF32(base + kNetAdapterRxLinkMbps, 216.1, now);
+    }
 }
 
 /** Fakes SteamVR throttling the app to half rate (values seen in Half-Life: Alyx). */
@@ -440,19 +487,25 @@ void applyFakeThrottle(FrameStats& frame, double t) {
     frame.throttledFrames = 1;
 }
 
-/** Fakes the wireless link: "-65" (dongle), "home:-47" (home Wi-Fi) or "none" (not connected). */
-void applyFakeWifi(SensorSample& sample, const std::string& value) {
-    sample.wifi = WifiInfo();
-    sample.wifi.interfaceUp = true;
-    if (value == "none") return;
-    sample.wifi.connected = true;
+/** Fakes one link: "-65" (dongle), "home:-47" (home Wi-Fi) or "none" / "home:none" (not connected). */
+void storeFakeWifi(fph::MetricStore& st, const std::string& value, double now) {
+    using namespace fph::metric;
     const bool home = value.rfind("home:", 0) == 0;
-    sample.wifi.homeWifi = home;
-    sample.wifi.signalDbm = std::atof(value.c_str() + (home ? 5 : 0));
-    sample.wifi.rxMbps = 187.4;
-    sample.wifi.txMbps = 2.1;
-    sample.wifi.txLinkMbps = 1152.8;
-    sample.wifi.rxLinkMbps = 960.7;
+    const std::string rest = value.substr(home ? 5 : 0);
+    const uint16_t base = home ? kNetHomeBase : kNetDongleBase;
+    st.setEnum(base + kNetAdapterPresent, 1, now);
+    st.setEnum(base + kNetAdapterConnected, rest == "none" ? 0 : 1, now);
+    st.setText(base + kNetAdapterIfName, home ? "wlan0" : "wlanap", now);
+    if (rest == "none") return;
+    st.setF32(base + kNetAdapterSignalDbm, std::atof(rest.c_str()), now);
+    st.setF32(base + kNetAdapterRxMbps, 187.4, now);
+    st.setF32(base + kNetAdapterTxMbps, 2.1, now);
+    st.setF32(base + kNetAdapterTxLinkMbps, 1152.8, now);
+    st.setF32(base + kNetAdapterRxLinkMbps, 960.7, now);
+    st.setText(base + kNetAdapterIp, home ? "192.168.1.47" : "10.35.78.1", now);
+    st.setI32(base + kNetAdapterChannel, home ? 149 : 37, now);
+    st.setI32(base + kNetAdapterWidthMhz, home ? 80 : 160, now);
+    st.setEnum(base + kNetAdapterBand, static_cast<uint32_t>(home ? fph::WifiBand::Ghz5 : fph::WifiBand::Ghz6), now);
 }
 
 /** Update checker settings (install.sh puts the script in ~/.local/share/frame-perf-hud/). */
@@ -506,46 +559,120 @@ frame_updater::UpdateStatus fakeUpdateStatus(const std::string& name) {
     return s;
 }
 
-/** --dump-png: collect readings without OpenVR, render the panel and write a PNG. */
+/** T04: what the widgets draw with. */
+fph::WidgetContext widgetContext(const Config& config, const fph::MetricStore& store,
+                                 const fph::ProcessListsView& lists, double now) {
+    fph::WidgetContext ctx;
+    ctx.store = &store;
+    ctx.processes = &lists;
+    ctx.thresholds = config.thresholds;
+    ctx.now = now;
+    ctx.graphSeconds = config.graphSeconds;
+    ctx.clockFormat = config.clockFormat;
+    return ctx;
+}
+
+/** T04: applies a layout to the scheduler (which widgets are on) and the process scan (list sizes). */
+void applyLayout(const fph::Layout& layout, fph::Scheduler& scheduler, SensorBridge& bridge) {
+    scheduler.setEnabledWidgets(fph::enabledWidgets(layout));
+    bridge.setProcessListOptions(SensorBridge::processOptionsFor(layout));
+}
+
+/** T04 --layout: reads a layout file (a layout object, or a whole config with a "layout" key). */
+bool loadLayoutFile(const std::string& path, fph::Layout& layout) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        std::fprintf(stderr, "Can't read %s\n", path.c_str());
+        return false;
+    }
+    const std::string textIn((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    JsonValue root;
+    std::string error;
+    std::vector<std::string> warnings;
+    if (!parseJson(textIn, root, error)) {
+        std::fprintf(stderr, "%s: %s\n", path.c_str(), error.c_str());
+        return false;
+    }
+    const JsonValue* object = root.get("layout") != nullptr ? root.get("layout") : &root;
+    const bool ok = fph::layoutFromJson(*object, layout, warnings, error);
+    for (const std::string& w : warnings) std::fprintf(stderr, "[layout] %s\n", w.c_str());
+    if (!ok) std::fprintf(stderr, "%s: %s\n", path.c_str(), error.c_str());
+    return ok;
+}
+
+/** --dump-png: collect readings without OpenVR, render the widget grid and write a PNG. */
 int runDumpPng(const Options& options) {
     ConfigWatcher watcher(options.configPath);
     Config config = watcher.loadInitial();
+    fph::Layout layout = config.layout;
+    if (!options.layoutPath.empty() && !loadLayoutFile(options.layoutPath, layout)) return 1;
     Sensors sensors;
     sensors.discover();
     FontSet fonts;
     loadFonts(fonts, config);
-    PanelRenderer renderer(fonts);
-    PanelState state;
+    fph::GridRenderer renderer(fonts);
+    renderer.setLayout(layout);
     fph::MetricStore store;
     fph::Scheduler scheduler;
     SensorBridge bridge(sensors, nullptr, store);
     bridge.registerSources(scheduler);
-    scheduler.setEnabledWidgets(SensorBridge::upstreamPanelWidgets());
+    applyLayout(layout, scheduler, bridge);
     scheduler.setDemand(offlineDemand());
 
     scheduler.runDue(nowSeconds());  // CPU usage baseline
     const double interval = std::max(kMinPanelIntervalSec, config.updateIntervalMs / 1000.0);
     const double start = nowSeconds();
+    const bool fake = options.fakeFrames || options.fakeWarnings || options.fakeFps > 0 || options.fakeThrottle;
+    double renderMs = 0.0;
     do {
         sleepInterruptible(interval);
         const double t = nowSeconds();
         scheduler.runDue(t);
-        const bool fake = options.fakeFrames || options.fakeWarnings || options.fakeFps > 0 || options.fakeThrottle;
-        FrameStats frame = fake ? fakeFrameStats(t - start, options.fakeFps) : FrameStats();
-        if (options.fakeThrottle) applyFakeThrottle(frame, t - start);
-        SensorSample sample = bridge.sample();
-        if (options.fakeWarnings) applyFakeWarnings(sample);
-        if (!options.fakeWifi.empty()) applyFakeWifi(sample, options.fakeWifi);
-        state.update(t, sample, frame, fake, config.graphSeconds);
-        if (fake) state.controllers = fakeControllers(options.fakeWarnings);
+        if (fake) {
+            FrameStats frame = fakeFrameStats(t - start, options.fakeFps);
+            if (options.fakeThrottle) applyFakeThrottle(frame, t - start);
+            storeFakeFrame(store, frame, t);
+            storeFakeControllers(store, options.fakeWarnings, t);
+        }
+        if (options.fakeWarnings) storeFakeWarnings(store, t);
+        if (!options.fakeWifi.empty()) storeFakeWifi(store, options.fakeWifi, t);
+        const fph::ProcessListsView lists = bridge.processListsView();
+        const double r0 = nowSeconds();
+        renderer.render(widgetContext(config, store, lists, t));
+        renderMs = (nowSeconds() - r0) * 1e3;
     } while (!gStopRequested && nowSeconds() - start < options.dumpSeconds);
 
-    renderer.render(state, config);
     if (!renderer.writePng(options.pngPath)) {
         std::fprintf(stderr, "Couldn't write the PNG: %s\n", options.pngPath.c_str());
         return 1;
     }
-    std::printf("Wrote %s (%dx%d)\n", options.pngPath.c_str(), renderer.width(), renderer.visibleHeight());
+    const fph::GridGeometry& g = renderer.geometry();
+    std::printf("Wrote %s (%dx%d texture, layout %dx%d px, %d column%s, scale %.3f, %zu widgets)\n",
+                options.pngPath.c_str(), g.textureWidth, g.textureHeight, g.width, g.height, g.columns,
+                g.columns == 1 ? "" : "s", g.scale, g.slots.size());
+    std::printf("Physical width at width_m %.2f: %.2f m (head and wrist alike; width_m is one column)\n",
+                config.widthM, config.widthM * g.columns);
+    // Redraw cost with live data: render (cairo) and convert (RGBA for the upload), per redraw
+    const fph::ProcessListsView lists = bridge.processListsView();
+    double sumRender = 0.0, maxRender = 0.0, sumConvert = 0.0, maxConvert = 0.0;
+    int changed = 0;
+    for (int k = 0; k < options.benchCount; ++k) {
+        renderer.markAllDirty();  // worst case: every widget redrawn
+        const double t0 = nowSeconds();
+        changed += renderer.render(widgetContext(config, store, lists, t0 + 0.5 * k)) ? 1 : 0;
+        const double t1 = nowSeconds();
+        renderer.toRgba();
+        const double t2 = nowSeconds();
+        sumRender += t1 - t0;
+        maxRender = std::max(maxRender, t1 - t0);
+        sumConvert += t2 - t1;
+        maxConvert = std::max(maxConvert, t2 - t1);
+    }
+    std::printf("Full redraw %.2f ms avg / %.2f max, RGBA convert (FPH_RGBA_UPLOAD only) %.2f ms avg / %.2f max over %d redraws (%d changed); "
+                "last live render %.2f ms; static layer built %llu time(s)\n",
+                sumRender * 1e3 / options.benchCount, maxRender * 1e3, sumConvert * 1e3 / options.benchCount,
+                maxConvert * 1e3, options.benchCount, changed, renderMs,
+                static_cast<unsigned long long>(renderer.staticBuilds()));
     return 0;
 }
 
@@ -605,11 +732,8 @@ void handleSettingsAction(SettingsAction action, Config& config, ConfigWatcher& 
     if (!applySettingsAction(action, config, angleStepDeg)) return;
     vr.applyConfig(config);
     std::string error;
-    if (saveConfig(watcher.path(), config, error)) {
-        watcher.noteSaved();
-    } else {
-        std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
-    }
+    // T04: through the watcher, so an unreadable file is kept as config.json.bad instead of being overwritten
+    if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
 }
 
 /** @return the single-instance lock file path */
@@ -754,6 +878,40 @@ int runDebugDump() {
     return 1;
 }
 
+/** T04: what the HUD redraws cost, for the debug dump (ticket 05 checks the budget against it). */
+struct RenderStats {
+    uint64_t redraws = 0;
+    uint64_t uploads = 0;  ///< redraws whose pixels changed (submitted)
+    uint64_t widgets = 0;  ///< widgets redrawn, summed (the rest kept their pixels)
+    double renderWallMs = 0.0, renderCpuMs = 0.0, uploadCpuMs = 0.0;
+    double maxRenderWallMs = 0.0;
+
+    void add(double wallMs, double cpuMs, double uploadMs, bool changed, size_t widgetsRedrawn) {
+        ++redraws;
+        widgets += widgetsRedrawn;
+        uploads += changed ? 1 : 0;
+        renderWallMs += wallMs;
+        renderCpuMs += cpuMs;
+        uploadCpuMs += uploadMs;
+        maxRenderWallMs = std::max(maxRenderWallMs, wallMs);
+    }
+
+    std::string text(const fph::GridGeometry& g) const {
+        char buffer[512];
+        const double n = redraws > 0 ? static_cast<double>(redraws) : 1.0;
+        const double u = uploads > 0 ? static_cast<double>(uploads) : 1.0;
+        std::snprintf(buffer, sizeof(buffer),
+                      "== HUD redraws ==\npanel %dx%d texture (layout %dx%d, scale %.3f, %d columns, %zu widgets)\n"
+                      "redraws %llu, uploads %llu, widgets redrawn %.1f per redraw | render wall %.2f ms avg / %.2f max, render CPU %.2f ms avg | "
+                      "submit CPU %.2f ms per upload\n",
+                      g.textureWidth, g.textureHeight, g.width, g.height, g.scale, g.columns, g.slots.size(),
+                      static_cast<unsigned long long>(redraws), static_cast<unsigned long long>(uploads),
+                      static_cast<double>(widgets) / n,
+                      renderWallMs / n, maxRenderWallMs, renderCpuMs / n, uploadCpuMs / u);
+        return buffer;
+    }
+};
+
 /**
  * Runs as the overlay. Waits for SteamVR, and exits quietly on SIGTERM.
  * If another instance runs, tells it to toggle the HUD and exits at once (no VR_Init).
@@ -795,16 +953,26 @@ int runOverlay(const Options& options) {
 
     ConfigWatcher watcher(options.configPath);
     Config config = watcher.loadInitial();
+    if (!config.layoutInFile && !watcher.lastLoadFailed()) {
+        // T04 first run (or a config from before the grid): write the default layout so it can be edited.
+        // An unparsable file is left alone: the defaults run in memory and the log says why
+        std::string error;
+        if (watcher.save(config, error)) {
+            std::fprintf(stderr, "[config] Wrote the default layout to %s\n", watcher.path().c_str());
+        } else {
+            std::fprintf(stderr, "[config] Couldn't write the default layout: %s\n", error.c_str());
+        }
+    }
     Sensors sensors;
     sensors.discover();
     FontSet fonts;
     loadFonts(fonts, config);
-    PanelRenderer renderer(fonts);
+    fph::GridRenderer renderer(fonts);  // T04: the widget grid replaces upstream's fixed panel
+    renderer.setLayout(config.layout);
     SettingsPanel settings(fonts);
     Autostart autostart;  // autostart (systemd user unit): state and switching
     frame_updater::UpdateChecker updater(makeUpdaterConfig());
     std::uint64_t lastUpdaterRevision = updater.revision();
-    PanelState state;
     VrOverlay vr;
     vr.setVerbose(options.verbose);
 
@@ -813,7 +981,10 @@ int runOverlay(const Options& options) {
     fph::Scheduler scheduler;
     SensorBridge bridge(sensors, &vr, store);
     bridge.registerSources(scheduler);
-    scheduler.setEnabledWidgets(SensorBridge::upstreamPanelWidgets());
+    applyLayout(config.layout, scheduler, bridge);  // T04: a widget off in the layout reads nothing
+    std::fprintf(stderr, "[layout] version %u, %zu widget(s) in %zu column(s), panel %dx%d\n", config.layout.version,
+                 fph::enabledWidgets(config.layout).size(), config.layout.columns.size(),
+                 renderer.geometry().textureWidth, renderer.geometry().textureHeight);
     const int cameraFd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);  // stub: the camera thread arrives in ticket 10
 
     // Wait for SteamVR
@@ -821,7 +992,8 @@ int runOverlay(const Options& options) {
     while (!gStopRequested) {
         std::string message;
         const VrOverlay::ConnectResult result =
-            vr.connect(renderer.width(), renderer.height(), settings.width(), settings.height(), message);
+            vr.connect(renderer.geometry().textureWidth, renderer.geometry().textureHeight, settings.width(),
+                       settings.height(), message);
         if (result == VrOverlay::ConnectResult::Ok) break;
         if (message != lastMessage) {
             if (result == VrOverlay::ConnectResult::NotRunning) {
@@ -861,7 +1033,7 @@ int runOverlay(const Options& options) {
     double lastPointerEvent = -1e9;  // last dashboard pointer event (poll faster while it's active)
     int activityLevel = -2;          // last HMD activity level we logged (-2 = none yet)
     bool userQuit = false;
-    bool panelDrawnWithClock = true;  // the last panel had the clock row (the texture is created at that height)
+    RenderStats renderStats;  // T04: redraw cost, in the debug dump
     unsigned loopCount = 0;  // --verbose: loop iterations since the last log line
     while (!gStopRequested && !userQuit) {
         ++loopCount;
@@ -880,6 +1052,14 @@ int runOverlay(const Options& options) {
             if (watcher.reloadIfChanged(config)) {
                 vr.applyConfig(config);
                 loadFonts(fonts, config);
+                renderer.invalidateStatic();  // the fonts may have changed
+                // T04: a hand-edited layout takes effect at once (widgets off stop their sources)
+                if (renderer.setLayout(config.layout)) {
+                    applyLayout(config.layout, scheduler, bridge);
+                    std::fprintf(stderr, "[layout] reloaded: version %u, %zu widget(s), panel %dx%d\n",
+                                 config.layout.version, fph::enabledWidgets(config.layout).size(),
+                                 renderer.geometry().textureWidth, renderer.geometry().textureHeight);
+                }
                 settingsDirty = true;
             }
             // Update check: only goes to GitHub when the script's cache has expired
@@ -999,51 +1179,36 @@ int runOverlay(const Options& options) {
         scheduler.runDue(nowSeconds());
         const double c1 = cpuSeconds();
 
-        // ---- HUD redraw (2 Hz at most; at once when the clock row is switched, since the height changes).
-        // Only while it's shown and the headset is in use: nobody sees it otherwise ----
+        // ---- HUD redraw (2 Hz at most). Only while it's shown and the headset is in use: nobody sees it
+        // otherwise. The texture is converted and uploaded only when a pixel changed ----
         double now = nowSeconds();
         const double panelInterval = std::max(kMinPanelIntervalSec, config.updateIntervalMs / 1000.0);
-        if (config.visible && (config.clockFormat != 0) != panelDrawnWithClock) nextPanel = now;
         if (now >= nextPanel) {
             if (config.visible && scheduler.demand().hmdInUse) {
                 const double c2 = cpuSeconds();
-                const SensorSample sample = bridge.sample();
-                const FrameStats frame = bridge.frame();
-                state.controllers = bridge.controllers();
-                state.update(now, sample, frame, true, config.graphSeconds);
-                renderer.render(state, config);
+                const double w2 = nowSeconds();
+                const fph::ProcessListsView lists = bridge.processListsView();
+                const bool changed = renderer.render(widgetContext(config, store, lists, now));
                 const double c3 = cpuSeconds();
-                const std::vector<uint8_t>& rgba = renderer.toRgba();
-                const double c4 = cpuSeconds();
-                // When the visible height changes (clock row on / off): grow before sending, shrink after, so the
-                // only thing visible during the switch is one transparent row, never cut-off content
-                const int visibleHeight = renderer.visibleHeight();
-                vr.setPanelVisibleHeight(std::max(visibleHeight, vr.panelVisibleHeight()));
-                const bool sent = vr.submitPanel(rgba.data());
-                vr.setPanelVisibleHeight(visibleHeight);
-                panelDrawnWithClock = config.clockFormat != 0;
+                const double w3 = nowSeconds();
+                bool sent = false;
+                if (changed) {
+                    // T04: cairo's pixels go up as they are (premultiplied BGRA) unless FPH_RGBA_UPLOAD is set
+                    const uint8_t* pixels =
+                        vr.panelTakesCairoPixels() ? renderer.pixels() : renderer.toRgba().data();
+                    const fph::GridGeometry& g = renderer.geometry();
+                    sent = vr.submitPanel(pixels, g.textureWidth, g.textureHeight, g.columns);
+                }
                 const double c5 = cpuSeconds();
+                renderStats.add((w3 - w2) * 1e3, (c3 - c2) * 1e3, (c5 - c3) * 1e3, changed, renderer.lastRedrawn());
                 if (options.verbose && now - lastVerbose >= 2.0) {
                     lastVerbose = now;
                     std::fprintf(stderr,
-                                 "[values] loops %u | fps %s frames=%u GPU %s/%sms CPU %s/%sms target %sms(%sHz) "
-                                 "reproj %s%% dropped %u | GPU busy %s%% CPU %s°C GPU %s°C vph %sW throttle %d/%d | "
-                                 "wifi %s down %sMbps %sdBm | ctrl L%s R%s | dashboard %s tab %s | submit %s | "
-                                 "CPU ms: sources %.2f build %.2f draw %.2f convert %.2f submit %.2f\n",
-                                 loopCount, fmt(frame.appFps, 1).c_str(), frame.frames, fmt(frame.gpuMs, 2).c_str(),
-                                 fmt(frame.gpuMaxMs, 2).c_str(), fmt(frame.cpuMs, 2).c_str(),
-                                 fmt(frame.cpuMaxMs, 2).c_str(), fmt(frame.targetMs, 2).c_str(),
-                                 fmt(frame.displayHz, 1).c_str(), fmt(frame.reprojectedPct, 1).c_str(), frame.dropped,
-                                 fmt(sample.gpuBusyPct, 1).c_str(), fmt(sample.cpuTempC, 1).c_str(),
-                                 fmt(sample.gpuTempC, 1).c_str(), fmt(sample.powerMainW, 2).c_str(),
-                                 sample.throttleCpu ? 1 : 0, sample.throttleGpu ? 1 : 0,
-                                 !sample.wifi.connected ? "none" : (sample.wifi.homeWifi ? "home" : "dongle"),
-                                 fmt(sample.wifi.rxMbps, 1).c_str(), fmt(sample.wifi.signalDbm, 0).c_str(),
-                                 state.controllers.left.present ? fmt(state.controllers.left.pct, 0).c_str() : "-",
-                                 state.controllers.right.present ? fmt(state.controllers.right.pct, 0).c_str() : "-",
-                                 vr.dashboardOpen() ? "open" : "closed", settingsVisible ? "visible" : "hidden",
-                                 sent ? "OK" : "failed", (c1 - c0) * 1e3, (c2 - c1) * 1e3, (c3 - c2) * 1e3,
-                                 (c4 - c3) * 1e3, (c5 - c4) * 1e3);
+                                 "[values] loops %u | dashboard %s tab %s | %s | CPU ms: sources %.2f render %.2f "
+                                 "convert+submit %.2f\n",
+                                 loopCount, vr.dashboardOpen() ? "open" : "closed", settingsVisible ? "visible" : "hidden",
+                                 changed ? (sent ? "uploaded" : "upload failed") : "unchanged, not uploaded",
+                                 (c1 - c0) * 1e3, (c3 - c2) * 1e3, (c5 - c3) * 1e3);
                     loopCount = 0;
                 }
             }
@@ -1054,7 +1219,8 @@ int runOverlay(const Options& options) {
 
         if (gDumpRequested) {
             gDumpRequested = 0;
-            writeDebugDump(scheduler, store, activityLevel, settingsVisible, nowSeconds(), bridge.debugText());
+            writeDebugDump(scheduler, store, activityLevel, settingsVisible, nowSeconds(),
+                           bridge.debugText() + renderStats.text(renderer.geometry()));
         }
 
         // ---- Sleep until the earliest deadline ----

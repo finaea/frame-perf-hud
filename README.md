@@ -67,9 +67,9 @@ everything except `~/.config/frame-perf-hud/`.
   | Control | What it does |
   |---|---|
   | Show: On / Off | Show or hide the HUD. While hidden (and the tab is closed), nothing is read or drawn |
-  | Size − / + | HUD width in 2 cm steps (6 cm to 1 m) |
+  | Column − / + | Size (per column): width of one widget column in 2 cm steps (6 cm to 1 m). The HUD is that × its number of columns |
   | Opacity − / + | 10 % steps (20 % to 100 %) |
-  | Clock: Off / 12h / 24h | The clock on the bottom line |
+  | Clock: Off / 12h / 24h | The Time row in the General widget: hidden, 12-hour or 24-hour |
   | Reset | Back to the default show, attachment, position, facing, fade, clock, size and opacity |
   | Attach to: Head / L hand / R hand | In front of your eyes, or on a controller like a wristwatch. Each hand keeps its own position and facing |
   | Top L / Top R / Bottom L / Bottom C / Bottom R (head) | Move it to that corner of your view, facing you |
@@ -99,6 +99,13 @@ its default. The keys are the same as frame-perf-overlay's, except:
 - `language`: `"en"` is the only value for now.
 - `font` / `font_bold`: empty (the default) means the bundled Noto Sans. Set a path to use another font.
 - `update_interval_ms`: the HUD never redraws faster than 2 Hz, whatever this says.
+- `width_m`: the width of **one column** of widgets (default 0.2 m), so text keeps the same size whatever the
+  layout. A three-column HUD is three times as wide. Old configs are read as-is.
+- `layout`: the widget grid, written on first run. `columns` is a list of columns, each a list of widgets top
+  to bottom. A widget that isn't listed is off and reads nothing. Types: `frame`, `cpu`, `gpu_ram`, `power`,
+  `battery`, `temp`, `cpu_items` / `ram_items` (`max_items`, `sum_same_name`), `network` (`adapter`: `"dongle"`
+  or `"home"`, add it twice for both), `general`, and `streaming`, `headset_camera`, `eye_camera` (not live yet).
+  `version` goes up on every edit. A broken `layout` falls back to the default one, with a log line.
 
 ## Updates
 

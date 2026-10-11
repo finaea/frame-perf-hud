@@ -6,6 +6,7 @@
 #pragma once
 
 #include "history.h"
+#include "layout.h"         // T04
 #include "metric_store.h"
 #include "process_scan.h"   // T03
 #include "scheduler.h"
@@ -13,6 +14,7 @@
 #include "session_tracker.h"  // T03
 #include "stream_link.h"    // T03
 #include "wifi_link.h"      // T03
+#include "widgets.h"        // T04: ProcessListsView
 
 #include <string>
 #include <vector>
@@ -56,6 +58,15 @@ public:
     /** Sets list sizes and "sum same name" (ticket 04 wires the widget settings); used from the next scan. */
     void setProcessListOptions(const ProcessListOptions& options) { processOptions_ = options; }
 
+    /** T04: the process lists as the widgets draw them (exe basename when readable, else comm) */
+    fph::ProcessListsView processListsView() const;
+
+    /**
+     * T04: scan options for a layout: the largest max_items of the list widgets, and each list's "sum same
+     * name" (on if any instance of that list asks for it).
+     */
+    static ProcessListOptions processOptionsFor(const fph::Layout& layout);
+
     /** @return the current headset session */
     const fph::SessionInfo& session() const { return session_.current(); }
 
@@ -74,6 +85,7 @@ private:
     WifiLink wifi_;
     ProcessScanner processes_;
     ProcessListOptions processOptions_;
+    uint64_t processScans_ = 0;  ///< T04: ProcessListsView::generation
     InterfaceCounters streamDongle_;  ///< own baselines: Network's would be reset by the same tick
     InterfaceCounters streamHome_;
     VrlinkWatch vrlink_;

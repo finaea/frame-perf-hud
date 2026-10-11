@@ -28,6 +28,7 @@ struct ClusterClock {
     std::string policy;  ///< "policy0", ...
     double curMHz = kNoValue;
     double maxMHz = kNoValue;  ///< scaling_max_freq: lower than the hardware max under a Playtime cap
+    double hwMaxMHz = kNoValue;  ///< T04: cpuinfo_max_freq, the hardware max (read once)
 };
 
 /**
@@ -202,6 +203,7 @@ private:
     // Ticket 02 additions
     std::vector<Source> powerVolts_;    ///< in*_input matching powers_[i] by label (fd -1 if none)
     std::vector<Source> cpuMaxFreqs_;   ///< policy*/scaling_max_freq, same index as cpuFreqs_
+    std::vector<double> cpuHwMaxMHz_;   ///< T04: policy*/cpuinfo_max_freq, read once at discover()
     std::vector<Source> npuTemps_, cameraTemps_, videoTemps_;
     Source wifiTemp_, flashTemp_, nrfTemp_, connectorTemp_;
     Source batCurrentAvg_, batChargeNow_, batChargeFull_, batChargeDesign_, batHealth_, batCycles_;

@@ -156,10 +156,43 @@ const ProcessLists& ProcessScanner::scan(double now, const ProcessListOptions& o
 
     lists.cpuValid = haveInterval && dir != nullptr;
     if (lists.cpuValid) lists.byCpu = topRows(rows, options.sumSameName, options.cpuMax, true);
-    lists.byRam = topRows(std::move(rows), options.sumSameName, options.ramMax, false);
+    const bool ramSum = options.ramSumSameName < 0 ? options.sumSameName : options.ramSumSameName != 0;
+    lists.byRam = topRows(std::move(rows), ramSum, options.ramMax, false);
+    fillExeNames(lists.byCpu, current);
+    fillExeNames(lists.byRam, current);
+    for (auto it = exeNames_.begin(); it != exeNames_.end();) {
+        it = current.count(it->first) != 0 ? std::next(it) : exeNames_.erase(it);
+    }
     previous_ = std::move(current);
     previousTime_ = dir != nullptr ? now : -1.0;
     lists.scanMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wallStart).count();
     lists_ = std::move(lists);
     return lists_;
+}
+
+void ProcessScanner::fillExeNames(std::vector<ProcessRow>& rows, const std::unordered_map<int, Previous>& current) {
+    char path[512];
+    char target[4096];
+    for (ProcessRow& row : rows) {
+        if (row.pid <= 0) continue;
+        const auto cur = current.find(row.pid);
+        const uint64_t start = cur != current.end() ? cur->second.starttime : 0;
+        auto it = exeNames_.find(row.pid);
+        if (it == exeNames_.end() || it->second.starttime != start) {
+            // Only our own processes' exe links are readable (others: EACCES), and kernel threads have none
+            std::snprintf(path, sizeof(path), "%s/%d/exe", root_.c_str(), row.pid);
+            const ssize_t n = ::readlink(path, target, sizeof(target) - 1);
+            std::string name;
+            if (n > 0) {
+                std::string full(target, static_cast<size_t>(n));
+                const std::string deleted = " (deleted)";
+                if (full.size() > deleted.size() && full.compare(full.size() - deleted.size(), deleted.size(), deleted) == 0) {
+                    full.resize(full.size() - deleted.size());
+                }
+                name = full.substr(full.find_last_of('/') + 1);
+            }
+            it = exeNames_.insert_or_assign(row.pid, ExeName {start, name}).first;
+        }
+        row.exe = it->second.name;
+    }
 }

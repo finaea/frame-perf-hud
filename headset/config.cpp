@@ -1,6 +1,7 @@
 // 設定の読み込みと変更の監視の実装。
 #include "config.h"
 
+#include "atomic_file.h"  // T04
 #include "json.h"
 
 #include <sys/stat.h>
@@ -219,7 +220,7 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
     warnUnknownKeys(root,
                     {"visible", "update_check", "language", "attachment", "position", "rotation", "left_wrist",
                      "right_wrist", "wrist_fade", "wrist_fade_end_deg", "clock_format", "width_m", "alpha",
-                     "update_interval_ms", "graph_seconds", "font", "font_bold", "thresholds"},
+                     "update_interval_ms", "graph_seconds", "font", "font_bold", "thresholds", "layout"},
                     "", warnings);
     readBool(root, "visible", config.visible, warnings);
     readBool(root, "update_check", config.updateCheck, warnings);
@@ -279,25 +280,20 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
             warnings.push_back("thresholds must be { ... }");
         }
     }
+    // T04: the widget grid. A broken layout falls back to the default one; the rest of the file still counts
+    if (const JsonValue* layout = root.get("layout")) {
+        std::string layoutError;
+        if (fph::layoutFromJson(*layout, config.layout, warnings, layoutError)) {
+            config.layoutInFile = true;
+        } else {
+            warnings.push_back(layoutError + ": using the default layout");
+        }
+    }
     out = config;
     return true;
 }
 
 namespace {
-
-/**
- * フォルダを親から順に作る（mkdir -p と同じ）。
- * @param dir 作るフォルダ
- * @return できた（元からあった）なら true
- */
-bool makeDirectories(const std::string& dir) {
-    for (size_t pos = 1; pos <= dir.size(); ++pos) {
-        if (pos != dir.size() && dir[pos] != '/') continue;
-        const std::string part = dir.substr(0, pos);
-        if (::mkdir(part.c_str(), 0755) != 0 && errno != EEXIST) return false;
-    }
-    return true;
-}
 
 /**
  * 数値を JSON 用の短い文字列にする。
@@ -327,11 +323,6 @@ std::string jsonString(const std::string& text) {
 }  // namespace
 
 bool saveConfig(const std::string& path, const Config& config, std::string& error) {
-    const size_t slash = path.find_last_of('/');
-    if (slash != std::string::npos && !makeDirectories(path.substr(0, slash))) {
-        error = "can't create folder: " + std::string(std::strerror(errno));
-        return false;
-    }
     /**
      * 手首の位置と向きを 1 行の JSON にする。
      */
@@ -383,29 +374,12 @@ bool saveConfig(const std::string& path, const Config& config, std::string& erro
         << "    \"wifi_crit_dbm\": " << jsonNumber(th.wifiCritDbm) << ",\n"
         << "    \"controller_warn_pct\": " << jsonNumber(th.controllerWarnPct) << ",\n"
         << "    \"controller_crit_pct\": " << jsonNumber(th.controllerCritPct) << "\n"
-        << "  }\n"
+        << "  },\n"
+        << "  \"layout\": " << fph::layoutToJson(config.layout, 2) << "\n"
         << "}\n";
 
-    // 途中で止まっても壊れたファイルが残らないよう、一時ファイルに書いてから置き換える
-    const std::string temp = path + ".tmp";
-    {
-        std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-        if (!file) {
-            error = "can't open for writing: " + temp;
-            return false;
-        }
-        file << out.str();
-        if (!file.flush()) {
-            error = "write failed: " + temp;
-            return false;
-        }
-    }
-    if (std::rename(temp.c_str(), path.c_str()) != 0) {
-        error = "rename failed: " + std::string(std::strerror(errno));
-        ::unlink(temp.c_str());
-        return false;
-    }
-    return true;
+    // T04: temp file + fsync + rename (core/atomic_file), since PartOf=steamvr.service can stop us mid-save
+    return fph::atomicWriteFile(path, out.str(), error);
 }
 
 void resetDisplaySettings(Config& config) {
@@ -490,6 +464,23 @@ bool isFacingHead(const Config& config) {
     return std::fabs(config.yawDeg - yaw) < 0.25 && std::fabs(config.pitchDeg - pitch) < 0.25;
 }
 
+bool ConfigWatcher::save(const Config& config, std::string& error) {
+    if (loadFailed_) {
+        const std::string bad = path_ + ".bad";
+        if (std::rename(path_.c_str(), bad.c_str()) == 0) {
+            std::fprintf(stderr, "[config] %s couldn't be read; kept it as %s and saving a fresh one\n", path_.c_str(),
+                         bad.c_str());
+        } else if (errno != ENOENT) {
+            error = "can't keep the unreadable config as " + bad + ": " + std::strerror(errno);
+            return false;
+        }
+        loadFailed_ = false;
+    }
+    if (!saveConfig(path_, config, error)) return false;
+    noteSaved();
+    return true;
+}
+
 void ConfigWatcher::noteSaved() {
     statFile(existed_, mtime_, size_);
 }
@@ -507,7 +498,9 @@ bool ConfigWatcher::loadAndLog(Config& config) const {
     std::vector<std::string> warnings;
     std::string error;
     Config loaded;
+    loadFailed_ = false;
     if (!loadConfig(path_, loaded, warnings, error)) {
+        loadFailed_ = true;
         std::fprintf(stderr, "[config] couldn't read %s: %s (keeping previous settings)\n", path_.c_str(), error.c_str());
         return false;
     }

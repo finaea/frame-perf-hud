@@ -113,6 +113,7 @@ constexpr uint16_t kCpuCore0Pct = 210;  ///< 210-217: load of core 0-7 (N/A Sens
 constexpr uint16_t kCpuCoreSlots = 8;
 constexpr uint16_t kCpuCluster0Mhz = 220;     ///< 220-223: current clock of cluster 0-3 (cpufreq policies, ascending)
 constexpr uint16_t kCpuCluster0MaxMhz = 224;  ///< 224-227: scaling_max_freq of cluster 0-3 (drops under a Playtime cap)
+constexpr uint16_t kCpuCluster0HwMaxMhz = 228;  ///< 228-231: cpuinfo_max_freq of cluster 0-3 (T04: "capped" = max < this)
 constexpr uint16_t kCpuClusterSlots = 4;
 // GPU & RAM (widget 3)
 constexpr uint16_t kGpuBusyPct = 300;

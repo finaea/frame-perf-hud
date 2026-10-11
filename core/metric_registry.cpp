@@ -22,6 +22,7 @@ constexpr uint32_t kPowerMs = 2000;    // max34417 updates every 1.5-2 s
 constexpr uint32_t kChargeMs = 2000;   // battery, charger, USB-PD
 constexpr uint32_t kUptimeMs = 1000;
 constexpr uint32_t kSelfMs = 2000;
+constexpr uint32_t kProcessMs = 2000;  // T04: was 1000 (budget)
 
 const std::vector<MetricDef> kRegistry = {
     // Frame
@@ -56,6 +57,11 @@ const std::vector<MetricDef> kRegistry = {
     {metric::kCpuCluster0MaxMhz + 1, "cpu.cluster1_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
     {metric::kCpuCluster0MaxMhz + 2, "cpu.cluster2_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
     {metric::kCpuCluster0MaxMhz + 3, "cpu.cluster3_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    // T04: hardware max per cluster (read once at start; "capped" when scaling_max_freq is below it)
+    {metric::kCpuCluster0HwMaxMhz + 0, "cpu.cluster0_hw_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0HwMaxMhz + 1, "cpu.cluster1_hw_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0HwMaxMhz + 2, "cpu.cluster2_hw_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0HwMaxMhz + 3, "cpu.cluster3_hw_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
     // GPU & RAM
     {metric::kGpuBusyPct, "gpu.busy_pct", "%", W::GpuRam, S::GpuBusy, kGpuMs, T::F32},
     {metric::kGpuClockMhz, "gpu.clock_mhz", "MHz", W::GpuRam, S::GpuClock, kGpuMs, T::F32},
@@ -168,12 +174,13 @@ const std::vector<MetricDef> kRegistry = {
     {metric::kNetHomeBase + metric::kNetAdapterWidthMhz, "net.home.width_mhz", "MHz", W::Network, S::Network, 2000, T::I32},
     {metric::kNetHomeBase + metric::kNetAdapterBand, "net.home.band", "", W::Network, S::Network, 2000, T::Enum},
     {metric::kNetHomeBase + metric::kNetAdapterIfName, "net.home.ifname", "", W::Network, S::Network, 2000, T::ShortString},
-    // T03: CPU / RAM usage items (one /proc scan feeds both)
-    {metric::kProcScanned, "cpu_items.scanned", "", W::CpuItems, S::Processes, 1000, T::I32},
-    {metric::kProcVanished, "cpu_items.vanished", "", W::CpuItems, S::Processes, 1000, T::I32},
-    {metric::kProcScanMs, "cpu_items.scan_ms", "ms", W::CpuItems, S::Processes, 1000, T::F32},
-    {metric::kCpuItemsRows, "cpu_items.rows", "", W::CpuItems, S::Processes, 1000, T::I32},
-    {metric::kRamItemsRows, "ram_items.rows", "", W::RamItems, S::Processes, 1000, T::I32},
+    // T03: CPU / RAM usage items (one /proc scan feeds both). T04: every 2 s, not 1 s: the scan costs 5.7-8.1 ms,
+    // and the core HUD's 2%-of-a-core budget is tight with both lists on
+    {metric::kProcScanned, "cpu_items.scanned", "", W::CpuItems, S::Processes, kProcessMs, T::I32},
+    {metric::kProcVanished, "cpu_items.vanished", "", W::CpuItems, S::Processes, kProcessMs, T::I32},
+    {metric::kProcScanMs, "cpu_items.scan_ms", "ms", W::CpuItems, S::Processes, kProcessMs, T::F32},
+    {metric::kCpuItemsRows, "cpu_items.rows", "", W::CpuItems, S::Processes, kProcessMs, T::I32},
+    {metric::kRamItemsRows, "ram_items.rows", "", W::RamItems, S::Processes, kProcessMs, T::I32},
     // T03: Streaming, headset side
     {metric::kStreamLinkMode, "streaming.link_mode", "", W::Streaming, S::StreamLink, 1000, T::Enum},
     {metric::kStreamVrlinkRunning, "streaming.vrlink_running", "", W::Streaming, S::StreamLink, 1000, T::Enum},

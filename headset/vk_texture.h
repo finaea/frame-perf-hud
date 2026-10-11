@@ -79,9 +79,10 @@ public:
      * @param width 幅（px）
      * @param height 高さ（px）
      * @param error 失敗したときの理由
+     * @param bgra T04: B8G8R8A8 (cairo's ARGB32 bytes as they are) instead of R8G8B8A8
      * @return 成功したら true
      */
-    bool create(VulkanContext& context, int width, int height, std::string& error);
+    bool create(VulkanContext& context, int width, int height, std::string& error, bool bgra = false);
 
     /** 作ったものを壊す（GPU の処理が終わるのを待ってから）。 */
     void destroy();
@@ -103,6 +104,7 @@ private:
     VulkanContext* context_ = nullptr;
     int width_ = 0;
     int height_ = 0;
+    VkFormat format_ = VK_FORMAT_R8G8B8A8_UNORM;
     VkImage images_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDeviceMemory imageMemory_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     bool imageUsed_[2] = {false, false};  ///< 一度でも書いたか（レイアウト遷移の元を決める）

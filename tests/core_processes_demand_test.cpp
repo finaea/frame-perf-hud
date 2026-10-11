@@ -39,13 +39,13 @@ struct Rig {
     }
 };
 
-void cpuItemsScansAtOneSecond() {
+void cpuItemsScansEveryTwoSeconds() {
     Rig r;
-    CHECK(r.sched.interval(SourceId::Processes) == 1.0);
+    CHECK(r.sched.interval(SourceId::Processes) == 2.0);  // T04: was 1 s (budget)
     r.sched.setEnabledWidgets({W::CpuItems});
     CHECK(r.sched.refCount(SourceId::Processes) == 1);
     r.run(5.0);
-    CHECK(r.reads == 5);  // 1 s interval over 5 s
+    CHECK(r.reads == 3);  // 2 s interval over 5 s: t = 0, 2, 4
 }
 
 void ramItemsAloneStillScans() {
@@ -53,7 +53,7 @@ void ramItemsAloneStillScans() {
     r.sched.setEnabledWidgets({W::RamItems});
     CHECK(r.sched.refCount(SourceId::Processes) == 1);
     r.run(5.0);
-    CHECK(r.reads == 5);
+    CHECK(r.reads == 3);
 }
 
 void withoutItemsWidgetsScanStops() {
@@ -80,7 +80,7 @@ void noScanWithoutAnyWidgetEver() {
 }  // namespace
 
 int main() {
-    cpuItemsScansAtOneSecond();
+    cpuItemsScansEveryTwoSeconds();
     ramItemsAloneStillScans();
     withoutItemsWidgetsScanStops();
     noScanWithoutAnyWidgetEver();

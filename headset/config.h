@@ -2,36 +2,12 @@
 #pragma once
 
 #include "i18n.h"
+#include "layout.h"      // T04: core/, the widget grid
+#include "thresholds.h"  // T04: moved to core/ so the widgets share it
 
 #include <ctime>
 #include <string>
 #include <vector>
-
-/**
- * 色を変えるしきい値。warn で黄色、crit で赤。
- */
-struct Thresholds {
-    double fpsWarnRatio = 0.95;    ///< アプリの fps がリフレッシュレートのこの割合を下回ったら黄
-    double fpsCritRatio = 0.75;    ///< 同じく赤
-    double frameWarnRatio = 0.9;   ///< GPU フレーム時間が目標時間のこの倍率を超えたら黄
-    double frameCritRatio = 1.0;   ///< 同じく赤
-    double reprojWarnPct = 5.0;    ///< 再投影の割合（%）
-    double reprojCritPct = 20.0;
-    double tempWarnC = 70.0;       ///< CPU・GPU 温度（℃）
-    double tempCritC = 80.0;
-    double batteryWarnPct = 30.0;  ///< バッテリー残量（%）。これ以下で色が変わる
-    double batteryCritPct = 15.0;
-    double powerWarnW = 13.0;      ///< 本体の消費電力（vph、W）
-    double powerCritW = 16.0;
-    double cpuWarnPct = 85.0;      ///< CPU 使用率（最も忙しいコア、%）
-    double cpuCritPct = 97.0;
-    double gpuWarnPct = 85.0;      ///< GPU 使用率の目安（%）
-    double gpuCritPct = 95.0;
-    double wifiWarnDbm = -70.0;    ///< 直通回線の電波（dBm）。これ以下で色が変わる
-    double wifiCritDbm = -78.0;
-    double controllerWarnPct = 20.0;  ///< コントローラーの電池（%）。これ以下で色が変わる
-    double controllerCritPct = 10.0;
-};
 
 /** 性能パネルをどこに固定するか。 */
 enum class Attachment {
@@ -85,13 +61,15 @@ struct Config {
     bool wristFade = true;          ///< 手首のとき、パネルの面が目から外れるほど薄くして消す
     double wristFadeEndDeg = 75.0;  ///< 消えきる角度（度、35〜90）。その 30° 手前から薄くなり始める
     int clockFormat = 24;           ///< 性能パネルの時計（0 = 出さない、12 = 12 時間制、24 = 24 時間制。本体の時刻）
-    double widthM = 0.20;           ///< パネルの幅（m）
+    double widthM = 0.20;           ///< T04: width of ONE 512 px column (m); the panel is columns × this
     double alpha = 0.9;             ///< パネル全体の不透明度（0〜1）
     int updateIntervalMs = 500;     ///< 更新間隔（ms）
     int graphSeconds = 30;          ///< グラフに出す秒数
     std::string fontPath;      ///< font file; empty = the bundled Noto Sans (paths::resolveFontPath)
     std::string boldFontPath;  ///< bold font file; empty = the bundled Noto Sans Bold
     Thresholds thresholds;
+    fph::Layout layout = fph::defaultLayout();  ///< T04: the widget grid ("layout" key)
+    bool layoutInFile = false;  ///< T04: the file had a usable "layout" (false = first run, or it was unreadable)
 };
 
 /**
@@ -217,11 +195,25 @@ public:
     /** @return 監視しているパス */
     const std::string& path() const { return path_; }
 
+    /** T04: @return true if the file exists but the last load couldn't parse it (so don't overwrite it) */
+    bool lastLoadFailed() const { return loadFailed_; }
+
+    /**
+     * T04: saves the config (saveConfig) and notes it (noteSaved). If the file on disk couldn't be parsed, it's
+     * first renamed to `<path>.bad` (replacing an older one), so the user's text survives and the save still
+     * persists. Every save of the running app goes through here.
+     * @param config what to save
+     * @param error why it failed
+     * @return true if saved
+     */
+    bool save(const Config& config, std::string& error);
+
 private:
     std::string path_;
     bool existed_ = false;
     struct timespec mtime_ {};
     off_t size_ = 0;
+    mutable bool loadFailed_ = false;  ///< T04
 
     /**
      * 今のファイルの状態（有無・更新時刻・サイズ）を取る。

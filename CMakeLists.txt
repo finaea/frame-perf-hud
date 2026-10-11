@@ -15,9 +15,36 @@ add_library(fph-core STATIC
   core/metric_store.cpp
   core/scheduler.cpp
   core/session_tracker.cpp  # T03
+  core/json.cpp             # T04: moved from headset/ (the layout is JSON on disk and on the link)
+  core/layout.cpp           # T04
+  core/atomic_file.cpp      # T04: temp + fsync + rename, POSIX and Windows
 )
 target_include_directories(fph-core PUBLIC core)
-target_compile_options(fph-core PRIVATE -Wall -Wextra)
+if(NOT MSVC)
+  target_compile_options(fph-core PRIVATE -Wall -Wextra)
+endif()
+
+# core/render/: the widgets and the grid renderer, shared by the headset and the PC app. Needs cairo + freetype
+# only (draw.* / theme.* moved here from headset/).
+find_package(PkgConfig)
+if(PKG_CONFIG_FOUND)
+  pkg_check_modules(CAIRO IMPORTED_TARGET cairo)
+  pkg_check_modules(FREETYPE IMPORTED_TARGET freetype2)
+endif()
+if(TARGET PkgConfig::CAIRO AND TARGET PkgConfig::FREETYPE)
+  add_library(fph-render STATIC
+    core/render/draw.cpp
+    core/render/theme.cpp
+    core/render/widget_text.cpp
+    core/render/widgets.cpp
+    core/render/grid_renderer.cpp
+  )
+  target_include_directories(fph-render PUBLIC core/render)
+  target_link_libraries(fph-render PUBLIC fph-core PkgConfig::CAIRO PkgConfig::FREETYPE)
+  if(NOT MSVC)
+    target_compile_options(fph-render PRIVATE -Wall -Wextra)
+  endif()
+endif()
 
 # Everything below is the headset agent, which only builds on the Steam Frame (SteamOS, aarch64).
 option(FPH_BUILD_HEADSET "Build the headset agent (needs cairo, freetype, vulkan, libnl, SteamVR's OpenVR)" ON)
@@ -27,8 +54,9 @@ if(FPH_BUILD_HEADSET)
   set(OPENVR_LIB_DIR "/opt/steamvr/bin/linuxarm64" CACHE PATH "Directory holding libopenvr_api.so")
 
   find_package(PkgConfig REQUIRED)
-  pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
-  pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
+  if(NOT TARGET fph-render)
+    message(FATAL_ERROR "the headset agent needs cairo and freetype2 (fph-render)")
+  endif()
   pkg_check_modules(VULKAN REQUIRED IMPORTED_TARGET vulkan)
   pkg_check_modules(LIBNL REQUIRED IMPORTED_TARGET libnl-genl-3.0)
   pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)  # T03: sd_journal for vrlink's events
@@ -39,14 +67,11 @@ if(FPH_BUILD_HEADSET)
     headset/placement.cpp
     headset/clock.cpp
     headset/config.cpp
-    headset/json.cpp
     headset/sensors.cpp
     headset/sensor_math.cpp     # T02
     headset/system_metrics.cpp  # T02
-    headset/panel.cpp
     headset/vr_overlay.cpp
     headset/vk_texture.cpp
-    headset/draw.cpp
     headset/settings_panel.cpp
     headset/gpu_usage.cpp
     headset/wifi_link.cpp
@@ -55,7 +80,6 @@ if(FPH_BUILD_HEADSET)
     headset/dump_metrics.cpp  # T03
     headset/i18n.cpp
     headset/autostart.cpp
-    headset/theme.cpp
     headset/paths.cpp
     vendor/frame-updater/cpp/update_check.cpp
   )
@@ -65,6 +89,7 @@ if(FPH_BUILD_HEADSET)
   target_compile_definitions(frame-perf-hud PRIVATE FRAME_PERF_HUD_VERSION="${PROJECT_VERSION}")
   target_link_libraries(frame-perf-hud PRIVATE
     fph-core
+    fph-render
     PkgConfig::CAIRO
     PkgConfig::FREETYPE
     PkgConfig::VULKAN
@@ -106,6 +131,22 @@ if(BUILD_TESTING)
   target_compile_options(core-processes-demand-test PRIVATE -Wall -Wextra)
   add_test(NAME core-processes-demand COMMAND core-processes-demand-test)
 
+  # T04: layout model, JSON round trip, atomic save
+  add_executable(core-layout-test tests/core_layout_test.cpp)
+  target_link_libraries(core-layout-test PRIVATE fph-core)
+  target_compile_options(core-layout-test PRIVATE -Wall -Wextra)
+  add_test(NAME core-layout COMMAND core-layout-test)
+
+  if(TARGET fph-render)
+    # T04: grid geometry, 2048 cap, widget draw rules (renders PNGs into a temp dir)
+    add_executable(render-grid-test tests/render_grid_test.cpp)
+    target_link_libraries(render-grid-test PRIVATE fph-render)
+    target_compile_definitions(render-grid-test PRIVATE
+      FPH_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts")
+    target_compile_options(render-grid-test PRIVATE -Wall -Wextra)
+    add_test(NAME render-grid COMMAND render-grid-test)
+  endif()
+
   if(FPH_BUILD_HEADSET)
     # Upstream's tests: wrist placement maths, clock, config file, panel height, settings panel hit-testing
     add_executable(wrist-clock-test
@@ -113,19 +154,27 @@ if(BUILD_TESTING)
       headset/placement.cpp
       headset/clock.cpp
       headset/config.cpp
-      headset/json.cpp
-      headset/panel.cpp
       headset/settings_panel.cpp
-      headset/draw.cpp
       headset/i18n.cpp
-      headset/theme.cpp
       headset/wifi_link.cpp
       headset/paths.cpp
     )
     target_include_directories(wrist-clock-test PRIVATE headset third_party/openvr vendor/frame-updater/cpp)
     target_compile_options(wrist-clock-test PRIVATE -Wall -Wextra)
-    target_link_libraries(wrist-clock-test PRIVATE PkgConfig::CAIRO PkgConfig::FREETYPE PkgConfig::LIBNL)
+    target_link_libraries(wrist-clock-test PRIVATE fph-render PkgConfig::LIBNL)
     add_test(NAME wrist-clock COMMAND wrist-clock-test)
+
+    # T04: config.json layout key (missing / broken files) and the atomic save under kill -9
+    add_executable(config-layout-test
+      tests/config_layout_test.cpp
+      headset/config.cpp
+      headset/i18n.cpp
+      headset/paths.cpp
+    )
+    target_include_directories(config-layout-test PRIVATE headset)
+    target_compile_options(config-layout-test PRIVATE -Wall -Wextra)
+    target_link_libraries(config-layout-test PRIVATE fph-core)
+    add_test(NAME config-layout COMMAND config-layout-test)
 
     # System sensor parsing/derivations: pure, fed from tests/fixtures/sensors
     add_executable(sensor-math-test tests/sensor_math_test.cpp headset/sensor_math.cpp)

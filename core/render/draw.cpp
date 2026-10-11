@@ -1,4 +1,5 @@
 // 描画の共通部品の実装。
+#define _USE_MATH_DEFINES  // M_PI on MSVC (the PC app builds core/ too)
 #include "draw.h"
 
 #include <cairo-ft.h>

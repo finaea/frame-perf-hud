@@ -111,6 +111,7 @@ void Sensors::closeAll() {
         for (auto& s : *list) closeOne(s);
         list->clear();
     }
+    cpuHwMaxMHz_.clear();  // T04
     for (Source* s : {&ddrTemp_, &cpuBigFreq_, &gpuFreq_, &fan_, &batCapacity_, &batVoltage_, &batCurrent_,
                       &batTemp_, &batStatus_, &chargerOnline_, &procStat_, &memInfo_, &displayTemp_, &exhaustTemp_,
                       &heatsinkTemp_}) {
@@ -202,6 +203,11 @@ void Sensors::discover(const std::string& root) {
     for (const auto& policy : listDir(cpufreqDir, "policy")) {
         cpuFreqs_.push_back(openSource(cpufreqDir + policy + "/scaling_cur_freq", policy));
         cpuMaxFreqs_.push_back(openSource(cpufreqDir + policy + "/scaling_max_freq", policy));
+        // T04: the hardware max never changes, so read it once (the CPU widget compares it to scaling_max_freq)
+        Source hwMax = openSource(cpufreqDir + policy + "/cpuinfo_max_freq", policy);
+        long long khz = 0;
+        cpuHwMaxMHz_.push_back(readLong(hwMax, khz) ? static_cast<double>(khz) / 1000.0 : kNoValue);
+        if (hwMax.fd >= 0) ::close(hwMax.fd);
     }
     // 大コア（いちばん番号の大きい CPU）
     for (int cpu = 15; cpu >= 0; --cpu) {
@@ -524,6 +530,7 @@ void Sensors::readCpuClocks(SensorSample& sample) {
         cluster.policy = cpuFreqs_[i].name;
         if (readLong(cpuFreqs_[i], v)) cluster.curMHz = static_cast<double>(v) / 1000.0;  // kHz → MHz
         if (i < cpuMaxFreqs_.size() && readLong(cpuMaxFreqs_[i], v)) cluster.maxMHz = static_cast<double>(v) / 1000.0;
+        if (i < cpuHwMaxMHz_.size()) cluster.hwMaxMHz = cpuHwMaxMHz_[i];  // T04
         if (!std::isnan(cluster.curMHz) && (std::isnan(sample.cpuFreqMHz) || cluster.curMHz > sample.cpuFreqMHz)) {
             sample.cpuFreqMHz = cluster.curMHz;
         }

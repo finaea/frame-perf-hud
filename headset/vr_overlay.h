@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -208,11 +209,18 @@ public:
     void dumpFrameTimings(double seconds, const volatile int& stop);
 
     /**
-     * 性能パネルの画像を送る。
-     * @param rgba 非乗算済み RGBA 8bit（connect で指定した大きさ）
-     * @return 送れたら true
+     * T04: sends the panel image. When the size differs from the current texture (the layout changed), a new
+     * texture is made and the old one is kept alive for one more submit, since the compositor may still read it.
+     * @param rgba non-premultiplied RGBA 8 bit, width × height
+     * @param width texture width (px)
+     * @param height texture height (px)
+     * @param columns grid columns: the overlay is width_m × columns wide (width_m is one column's width)
+     * @return true if it was sent
      */
-    bool submitPanel(const uint8_t* rgba);
+    bool submitPanel(const uint8_t* rgba, int width, int height, int columns);
+
+    /** T04: @return true if submitPanel takes cairo's premultiplied ARGB32 bytes as they are (no conversion) */
+    bool panelTakesCairoPixels() const { return panelBgra_; }
 
     /**
      * 設定パネルの画像を送る。
@@ -251,7 +259,12 @@ private:
     std::string lastSettingsError_;
 
     VulkanContext vulkan_;
-    OverlayTexture panelTexture_;
+    std::unique_ptr<OverlayTexture> panelTexture_;    ///< T04: recreated when the layout changes its size
+    std::unique_ptr<OverlayTexture> retiredPanelTexture_;  ///< the previous size, destroyed on the next submit
+    int panelTextureWidth_ = 0;
+    int panelColumns_ = 1;
+    bool panelBgra_ = true;       ///< T04: panel texture is B8G8R8A8 + premultiplied        ///< T04: the overlay is width_m × this wide
+    double configWidthM_ = 0.20;  ///< T04: width_m from the last applyConfig
     OverlayTexture settingsTexture_;
     OverlayTexture thumbnailTexture_;
 

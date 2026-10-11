@@ -3,7 +3,6 @@
 #include "clock.h"
 #include "config.h"
 #include "draw.h"
-#include "panel.h"
 #include "paths.h"
 #include "placement.h"
 #include "settings_panel.h"
@@ -568,38 +567,6 @@ void configuration(const std::string& file) {
     NEAR(c.rollDeg, 0);
 }
 
-/**
- * 性能パネルの高さ: 時計を出すと 460、出さないと時計の 1 行ぶん詰めた 434（テクスチャは 460 のまま、下は透明）。
- * @param directory PNG を書く一時フォルダ
- */
-void panelHeights(const std::string& directory) {
-    Config c;
-    FontSet fonts;
-    fonts.load(paths::resolveFontPath(c.fontPath, false), paths::resolveFontPath(c.boldFontPath, true));
-    PanelRenderer renderer(fonts);
-    PanelState state;
-    CHECK(renderer.width() == 512 && renderer.height() == 460);
-    CHECK(PanelRenderer::heightFor(true) == 460 && PanelRenderer::heightFor(false) == 434);
-    for (const int format : {24, 12, 0}) {
-        c.clockFormat = format;
-        renderer.render(state, c);
-        const int expected = format != 0 ? 460 : 434;
-        CHECK(renderer.visibleHeight() == expected);
-        const std::vector<uint8_t>& rgba = renderer.toRgba();
-        CHECK(rgba.size() == 512u * 460u * 4u);
-        // 見える部分のいちばん下の近く（角の丸みの内側）は地の色で不透明、その下は透明
-        const auto alphaAt = [&rgba](int x, int y) { return rgba[(static_cast<size_t>(y) * 512 + x) * 4 + 3]; };
-        CHECK(alphaAt(256, expected - 3) == 255);
-        if (expected < 460) CHECK(alphaAt(256, expected + 2) == 0 && alphaAt(256, 458) == 0);
-        // PNG は見える部分の高さで書き出す
-        const std::string path = directory + "/panel-" + std::to_string(format) + ".png";
-        CHECK(renderer.writePng(path));
-        cairo_surface_t* png = cairo_image_surface_create_from_png(path.c_str());
-        CHECK(cairo_image_surface_get_width(png) == 512 && cairo_image_surface_get_height(png) == expected);
-        cairo_surface_destroy(png);
-    }
-}
-
 /** ボタン 1 つの期待する場所（設定パネルの画像の px）。 */
 struct ExpectedButton {
     SettingsAction action;
@@ -779,7 +746,7 @@ int main() {
         placementRecovery();
         clockCases();
         configuration(std::string(directory) + "/config.json");
-        panelHeights(directory);
+        // T04: upstream's fixed panel (and its 460 / 434 heights) is gone; the grid has its own test
         controls(directory);
         std::cout << "Geometry, rotation convention, panel-axis nudges, polling, placement recovery, clock, config, panel heights and UI controls passed.\n";
         std::filesystem::remove_all(directory);

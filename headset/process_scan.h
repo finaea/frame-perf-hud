@@ -29,7 +29,8 @@ bool parseProcStat(const char* text, size_t length, ProcStat& out);
 
 /** One list row: a process, or with "sum same name" every process of that name. */
 struct ProcessRow {
-    std::string name;
+    std::string name;      ///< comm: the main thread's name, e.g. "vrlinkrunthread"
+    std::string exe;       ///< T04: basename of /proc/[pid]/exe ("vrlink"); empty for summed rows, other users' processes
     int pid = 0;           ///< 0 for a summed row
     int count = 1;         ///< processes in this row
     double cpuCorePct = 0.0;   ///< % of one core over the last interval (top's convention: 4 busy cores = 400%)
@@ -50,7 +51,9 @@ struct ProcessLists {
 struct ProcessListOptions {
     size_t cpuMax = 15;
     size_t ramMax = 15;
-    bool sumSameName = false;  ///< one row per name, CPU and RSS summed (Halo's option)
+    bool sumSameName = false;  ///< one row per name, CPU and RSS summed (Halo's option); both lists unless
+                               ///< ramSumSameName says otherwise
+    int ramSumSameName = -1;   ///< T04: RAM list's own setting (0 / 1), -1 = same as sumSameName
 };
 
 /**
@@ -97,6 +100,14 @@ private:
     long ticksPerSecond_;
     long pageSize_;
     std::unordered_map<int, Previous> previous_;
+    struct ExeName {
+        uint64_t starttime = 0;
+        std::string name;
+    };
+    std::unordered_map<int, ExeName> exeNames_;  ///< T04: readlink cache for listed rows only (≤ 2 × max per scan)
+
+    /** T04: fills ProcessRow::exe for the listed rows, from the cache or one readlink each. */
+    void fillExeNames(std::vector<ProcessRow>& rows, const std::unordered_map<int, Previous>& current);
     double previousTime_ = -1.0;
     ProcessLists lists_;
 };

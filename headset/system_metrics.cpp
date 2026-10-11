@@ -212,9 +212,11 @@ void registerSystemSources(fph::Scheduler& scheduler, Sensors& sensors, fph::Met
             if (i < s.clusters.size()) {
                 st.setF32(metric::kCpuCluster0Mhz + i, s.clusters[i].curMHz, now);
                 st.setF32(metric::kCpuCluster0MaxMhz + i, s.clusters[i].maxMHz, now);
+                st.setF32(metric::kCpuCluster0HwMaxMhz + i, s.clusters[i].hwMaxMHz, now, Reason::SensorMissing);
             } else {
                 st.setNa(metric::kCpuCluster0Mhz + i, Reason::SensorMissing, now);
                 st.setNa(metric::kCpuCluster0MaxMhz + i, Reason::SensorMissing, now);
+                st.setNa(metric::kCpuCluster0HwMaxMhz + i, Reason::SensorMissing, now);
             }
         }
     });

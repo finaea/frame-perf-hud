@@ -169,7 +169,18 @@ VrOverlay::ConnectResult VrOverlay::connect(int panelWidth, int panelHeight, int
 
     // 3) Vulkan と性能パネルのテクスチャ
     std::string vkMessage;
-    if (!vulkan_.init(vkMessage) || !panelTexture_.create(vulkan_, panelWidth, panelHeight, vkMessage)) {
+    panelTexture_ = std::make_unique<OverlayTexture>();
+    retiredPanelTexture_.reset();
+    panelTextureWidth_ = panelWidth;
+    // T04: cairo's premultiplied ARGB32 goes up as it is (B8G8R8A8 + IsPremultiplied), which saves a
+    // ~3 ms per-redraw conversion. FPH_RGBA_UPLOAD=1 brings back upstream's non-premultiplied RGBA path
+    const char* rgbaEnv = std::getenv("FPH_RGBA_UPLOAD");
+    panelBgra_ = rgbaEnv == nullptr || rgbaEnv[0] == '\0' || rgbaEnv[0] == '0';
+    checkOverlay("SetOverlayFlag(IsPremultiplied)",
+                 vr::VROverlay()->SetOverlayFlag(panelHandle_, vr::VROverlayFlags_IsPremultiplied, panelBgra_));
+    std::fprintf(stderr, "[VR] panel upload: %s\n",
+                 panelBgra_ ? "premultiplied BGRA (no conversion)" : "RGBA (converted, FPH_RGBA_UPLOAD)");
+    if (!vulkan_.init(vkMessage) || !panelTexture_->create(vulkan_, panelWidth, panelHeight, vkMessage, panelBgra_)) {
         message = "Vulkan setup failed: " + vkMessage;
         shutdown();
         return ConnectResult::Error;
@@ -278,15 +289,20 @@ void VrOverlay::shutdown() {
     // 6) Vulkan の画像とデバイスを壊す
     thumbnailTexture_.destroy();
     settingsTexture_.destroy();
-    panelTexture_.destroy();
+    if (retiredPanelTexture_) retiredPanelTexture_->destroy();
+    if (panelTexture_) panelTexture_->destroy();
+    retiredPanelTexture_.reset();
+    panelTexture_.reset();
     vulkan_.destroy();
     std::fprintf(stderr, "[VR] shutdown Vulkan cleaned up\n");
 }
 
 void VrOverlay::applyConfig(const Config& config) {
     if (!connected_ || panelHandle_ == 0) return;
-    checkOverlay("SetOverlayWidthInMeters",
-                 vr::VROverlay()->SetOverlayWidthInMeters(panelHandle_, static_cast<float>(config.widthM)));
+    // T04: width_m is one column's width, so the text keeps upstream's size whatever the layout
+    configWidthM_ = config.widthM;
+    checkOverlay("SetOverlayWidthInMeters", vr::VROverlay()->SetOverlayWidthInMeters(
+                                                panelHandle_, static_cast<float>(config.widthM * panelColumns_)));
     transformDirty_ = true;
     updatePlacement(config, nowSeconds());
     // 変換を渡した直後に交差を聞くと、SteamVR はまだ前の変換で答える（実機で確かめた）ので、少し待ってから聞く。
@@ -734,10 +750,37 @@ void VrOverlay::dumpFrameTimings(double seconds, const volatile int& stop) {
     }
 }
 
-bool VrOverlay::submitPanel(const uint8_t* rgba) {
-    if (!connected_ || panelHandle_ == 0) return false;
+bool VrOverlay::submitPanel(const uint8_t* rgba, int width, int height, int columns) {
+    if (!connected_ || panelHandle_ == 0 || !panelTexture_) return false;
     std::string message;
-    const bool ok = panelTexture_.update(panelHandle_, rgba, message);
+    // The previous texture has been off-screen for a whole submit interval (≥ 0.5 s): safe to free now
+    if (retiredPanelTexture_) {
+        retiredPanelTexture_->destroy();
+        retiredPanelTexture_.reset();
+    }
+    if (width != panelTextureWidth_ || height != panelTextureHeight_) {
+        auto next = std::make_unique<OverlayTexture>();
+        if (!next->create(vulkan_, width, height, message, panelBgra_)) {
+            std::fprintf(stderr, "[VR] can't create a %dx%d panel texture: %s\n", width, height, message.c_str());
+            return false;
+        }
+        std::fprintf(stderr, "[VR] panel texture %dx%d -> %dx%d (%d column%s)\n", panelTextureWidth_,
+                     panelTextureHeight_, width, height, columns, columns == 1 ? "" : "s");
+        retiredPanelTexture_ = std::move(panelTexture_);
+        panelTexture_ = std::move(next);
+        panelTextureWidth_ = width;
+        panelTextureHeight_ = height;
+        // The whole new texture is visible (undo upstream's clock-row bounds)
+        const vr::VRTextureBounds_t full {0.0f, 0.0f, 1.0f, 1.0f};
+        checkOverlay("SetOverlayTextureBounds", vr::VROverlay()->SetOverlayTextureBounds(panelHandle_, &full));
+        panelVisibleHeight_ = height;
+    }
+    if (columns != panelColumns_) {
+        panelColumns_ = std::max(1, columns);
+        checkOverlay("SetOverlayWidthInMeters", vr::VROverlay()->SetOverlayWidthInMeters(
+                                                    panelHandle_, static_cast<float>(configWidthM_ * panelColumns_)));
+    }
+    const bool ok = panelTexture_->update(panelHandle_, rgba, message);
     // 同じエラーを毎回出さない
     if (message != lastPanelError_) {
         if (!ok) std::fprintf(stderr, "[VR] can't submit panel: %s\n", message.c_str());

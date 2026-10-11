@@ -17,7 +17,7 @@ const UiText kEnglish = {
     "Batt ", "L", "R", "No controllers", "Mem",
     // Settings panel. The bundled Noto Sans has no arrow glyphs (U+2190-2193), so buttons use ‹ › or words
     "Frame Perf HUD", "Panel", ". ", "Panel shown", "Panel hidden",
-    "Show", "Language", "Position", "Nudge", "Size", "Opacity",
+    "Show", "Language", "Position", "Nudge", "Column", "Opacity",
     "Autostart", "Autostart changes apply from the next SteamVR start",
     "The autostart unit is not installed, so it can't be switched (see \"Autostart\" in the README)",
     "Switching autostart…", "Failed to switch autostart (see the log)",
