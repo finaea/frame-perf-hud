@@ -1,0 +1,20 @@
+[Unit]
+Description=Frame Perf HUD (performance HUD for Steam Frame)
+# An OpenVR overlay, so it only runs while SteamVR does
+After=steamvr.service
+PartOf=steamvr.service
+
+[Service]
+# Settings: ~/.config/frame-perf-hud/config.json (defaults if missing)
+ExecStart=%h/.local/bin/frame-perf-hud
+# Restart even after a clean exit, so it comes back when only SteamVR restarts (steamvr.service keeps running).
+# When steamvr.service stops, PartOf stops this too, and it isn't restarted
+Restart=always
+RestartSec=5
+# Quit from the dashboard exits with 3: the user stopped it, so don't start it again
+RestartPreventExitStatus=3
+# ...and it's a normal exit, not a failure (otherwise systemd shows the unit as failed after Quit / Close)
+SuccessExitStatus=3
+
+[Install]
+WantedBy=steamvr.service

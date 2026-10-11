@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Frame Perf HUD
+Comment=Performance HUD in SteamVR. Launch again while running to show/hide it.
+# install.sh replaces the Exec value with the binary's absolute path (Steam may start it without ~/.local/bin on PATH)
+Exec=@BINARY@
+Icon=frame-perf-hud
+Terminal=false
+Categories=Utility;

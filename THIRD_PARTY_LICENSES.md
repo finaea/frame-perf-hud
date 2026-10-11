@@ -1,14 +1,28 @@
 # Third-party licenses
 
-frame-perf-overlay itself is released under the MIT License (see [LICENSE](LICENSE)).
-This file lists the third-party code it contains and the system software it uses at run time.
+frame-perf-hud is a fork of [frame-perf-overlay](https://github.com/sasaken1102r/frame-perf-overlay) by
+sasaken1102r (MIT). Both are released under the MIT License (see [LICENSE](LICENSE), which keeps the original
+copyright line). This file lists the third-party code it contains and the system software it uses at run time.
 
 ## Bundled in this repository
 
 ### Update helper (`vendor/frame-updater/`)
 
-- A copy of the author's own shared update code (frame-updater, a private repository), kept in sync with `vendor/frame-updater/UPSTREAM` and checked by `vendor/frame-updater/verify.sh`.
-- It is not third-party code: it is by the same author and is released under the same MIT License as this project (see [LICENSE](LICENSE)).
+- A copy of frame-perf-overlay's author's shared update code (frame-updater, a private repository), unchanged from upstream (version and commit in `vendor/frame-updater/UPSTREAM`) and checked by `vendor/frame-updater/verify.sh`.
+- It is by sasaken1102r and is released under the same MIT License as frame-perf-overlay (see [LICENSE](LICENSE)). frame-perf-hud only changes the repository it checks (`finaea/frame-perf-hud`, set in `headset/main.cpp`), not these files.
+
+### Noto Sans font (`assets/fonts/`)
+
+- Project: Noto Sans by the Noto Project Authors, https://github.com/notofonts/latin-greek-cyrillic
+- Version: NotoSans-v2.015 (release asset `NotoSans-v2.015.zip`, hinted TTFs)
+- Downloaded from: https://github.com/notofonts/latin-greek-cyrillic/releases/download/NotoSans-v2.015/NotoSans-v2.015.zip
+  (SHA-256 of the zip: `0c34df072a3fa7efbb7cbf34950e1f971a4447cffe365d3a359e2d4089b958f5`)
+- Files and their SHA-256:
+  - `NotoSans-Regular.ttf` (from `NotoSans/hinted/ttf/`): `478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823`
+  - `NotoSans-Bold.ttf` (from `NotoSans/hinted/ttf/`): `1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913`
+  - `OFL.txt` (from the zip's root): `cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a`
+- License: SIL Open Font License 1.1, full text in [`assets/fonts/OFL.txt`](assets/fonts/OFL.txt)
+- How it is used: unmodified font files, installed to `~/.local/share/frame-perf-hud/fonts/` and loaded at run time. Bundled so the headset and the (later) Windows app draw with the same font.
 
 ### OpenVR SDK header (`third_party/openvr/openvr.h`)
 
@@ -52,8 +66,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Used at run time from the Steam Frame, not bundled
 
-The release tarball contains only the frame-perf-overlay program, its install script, the files in
-`contrib/` and the documentation. The libraries and the font below are **not** included. The program
+The release tarball contains only the frame-perf-hud program, its install script, the files in
+`contrib/`, the bundled font and the documentation. The libraries below are **not** included. The program
 links to or reads the copies that are already on the Steam Frame (SteamOS and SteamVR).
 
 The direct library dependencies below were checked with `readelf -d` and `ldd` on the release binary
@@ -67,7 +81,6 @@ on a Steam Frame. Versions are the SteamOS packages on the headset at the time o
 | FreeType (`libfreetype.so.6`, 2.13.2) | Dynamically linked; loads the font | FreeType License (FTL) or GPL-2.0 | https://gitlab.freedesktop.org/freetype/freetype/-/blob/master/LICENSE.TXT |
 | libnl (`libnl-3.so.200`, `libnl-genl-3.so.200`, 3.9.0) | Dynamically linked; reads the Wi-Fi link status over nl80211 | LGPL-2.1 | https://github.com/thom311/libnl/blob/main/COPYING |
 | Vulkan loader (`libvulkan.so.1`, 1.4.309) | Dynamically linked; hands the panel image to SteamVR | Apache-2.0 | https://github.com/KhronosGroup/Vulkan-Loader/blob/main/LICENSE.txt |
-| Noto Sans CJK (`/usr/share/fonts/noto-cjk/`) | Font file read at run time; not embedded in the program | SIL Open Font License 1.1 | https://github.com/notofonts/noto-cjk/blob/main/Sans/LICENSE |
 | GNU C Library (`libc.so.6`, `libm.so.6`, 2.39) | Dynamically linked | LGPL-2.1-or-later | https://www.gnu.org/software/libc/ |
 | GCC runtime libraries (`libstdc++.so.6`, `libgcc_s.so.1`) | Dynamically linked | GPL-3.0 with the GCC Runtime Library Exception 3.1 | https://www.gnu.org/licenses/gcc-exception-3.1.html |
 

@@ -1,56 +1,55 @@
-name: Bug report / 不具合の報告
-description: Something doesn't work as expected. / 思ったとおりに動かないとき
+name: Bug report
+description: Something doesn't work as expected.
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting! English or Japanese is fine. / 報告ありがとう！英語でも日本語でも大丈夫です。
+        Thanks for reporting!
         Logs may contain IP addresses on your home network. Feel free to replace them with `x.x.x.x`.
-        ログには家のネットワークの IP アドレスが入ることがあります。気になるときは `x.x.x.x` などに書き換えてください。
   - type: textarea
     id: what
     attributes:
-      label: What happened / 何が起きたか
-      description: What you did, what you expected, and what happened instead (a screenshot helps). / 何をしたら、どうなるはずが、どうなったか（スクリーンショットがあると助かります）
+      label: What happened
+      description: What you did, what you expected, and what happened instead (a screenshot helps).
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: Version / 版
-      description: Shown in the bar at the top of the Perf tab in the SteamVR dashboard, or run `~/.local/bin/frame-perf-overlay --version` on the Frame. / SteamVR ダッシュボードの Perf タブの上の帯、または Frame で `~/.local/bin/frame-perf-overlay --version`
-      placeholder: "0.3.0"
+      label: Version
+      description: Shown in the bar at the top of the Frame Perf HUD tab in the SteamVR dashboard, or run `~/.local/bin/frame-perf-hud --version` on the Frame.
+      placeholder: "0.1.0"
     validations:
       required: true
   - type: dropdown
     id: item
     attributes:
-      label: What looks wrong / 表示がおかしい項目
+      label: What looks wrong
       multiple: true
       options:
-        - Frame rate (fps) or reprojection / フレームレート（fps）・再投影
-        - GPU or CPU / GPU・CPU
-        - Temperature / 温度
-        - Power or fan / 電力・ファン
-        - Battery (headset or controllers) / 電池（本体・コントローラー）
-        - Steam Link or Wi-Fi / Steam Link・Wi-Fi
-        - Clock / 時計
-        - Panel position, facing or wrist mode / パネルの位置・向き・手首
-        - Settings tab / 設定タブ
-        - Updates / 更新
-        - Not about a value / 値の話ではない
+        - Frame rate (fps) or reprojection
+        - GPU or CPU
+        - Temperature
+        - Power or fan
+        - Battery (headset or controllers)
+        - Steam Link or Wi-Fi
+        - Clock
+        - HUD position, facing or wrist mode
+        - Settings tab
+        - Updates
+        - Not about a value
   - type: textarea
     id: logs
     attributes:
-      label: Logs / ログ
+      label: Logs
       description: |
-        Run this on the Frame (Desktop Mode terminal or ssh) soon after the problem, and paste the output.
-        問題が起きたあとすぐに Frame で（デスクトップモードの端末か ssh で）次を実行して、出てきた内容を貼ってください。
-        `journalctl --user -u frame-perf-overlay --since "1 hour ago" --no-pager`
+        Run these on the Frame (Desktop Mode terminal or ssh) soon after the problem, and paste the output.
+        `journalctl --user -u frame-perf-hud --since "1 hour ago" --no-pager`
+        `~/.local/bin/frame-perf-hud --debug-dump`
       render: shell
   - type: textarea
     id: extra
     attributes:
-      label: Anything else / そのほか
-      description: Your settings if you changed any (`~/.config/frame-perf-overlay/config.json`), what was running at the time, etc. / 変えた設定（`~/.config/frame-perf-overlay/config.json`）、そのとき動かしていたアプリなど
+      label: Anything else
+      description: Your settings if you changed any (`~/.config/frame-perf-hud/config.json`), what was running at the time, etc.

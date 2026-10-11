@@ -1,7 +1,7 @@
 {
   "visible": true,
   "update_check": true,
-  "language": "ja",
+  "language": "en",
   "attachment": "head",
   "position": { "x": -0.15, "y": -0.12, "z": -0.5 },
   "rotation": { "yaw": 0, "pitch": 0, "roll": 0 },
@@ -14,8 +14,8 @@
   "alpha": 0.9,
   "update_interval_ms": 500,
   "graph_seconds": 30,
-  "font": "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-  "font_bold": "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
+  "font": "",
+  "font_bold": "",
   "thresholds": {
     "fps_warn_ratio": 0.95,
     "fps_crit_ratio": 0.75,

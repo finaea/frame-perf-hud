@@ -1,0 +1,218 @@
+// core/ scheduler tests: reference counting, visibility rules, intervals (CTest runs them; no platform code).
+#include "scheduler.h"
+
+#include <cmath>
+#include <cstdio>
+#include <vector>
+
+namespace {
+
+int failures = 0;
+
+#define CHECK(expr)                                                              \
+    do {                                                                         \
+        if (!(expr)) {                                                           \
+            std::printf("FAIL line %d: %s\n", __LINE__, #expr);                  \
+            ++failures;                                                          \
+        }                                                                        \
+    } while (false)
+
+using namespace fph;
+using W = WidgetType;
+using S = SourceId;
+
+// 3 sources, 3 widgets. CpuLoad is shared by Cpu and CpuItems; Ram has two metrics (shortest interval wins).
+const std::vector<MetricDef> kDefs = {
+    {1, "cpu.a", "", W::Cpu, S::CpuLoad, 500, WireType::F32},
+    {2, "cpu.items", "", W::CpuItems, S::CpuLoad, 1000, WireType::F32},
+    {3, "gpu.busy", "", W::GpuRam, S::GpuBusy, 2000, WireType::F32},
+    {4, "ram.used", "", W::GpuRam, S::Ram, 2000, WireType::F32},
+    {5, "ram.total", "", W::GpuRam, S::Ram, 1000, WireType::F32},
+};
+
+struct Counts {
+    int cpu = 0, gpu = 0, ram = 0;
+    bool lastCpuResumed = false;
+    std::vector<bool> cpuResumed;
+};
+
+struct Rig {
+    Scheduler sched {kDefs};
+    Counts c;
+    double now = 0.0;
+    Rig() {
+        sched.addSource(S::CpuLoad, [this](double, bool resumed) {
+            ++c.cpu;
+            c.lastCpuResumed = resumed;
+            c.cpuResumed.push_back(resumed);
+        });
+        sched.addSource(S::GpuBusy, [this](double, bool) { ++c.gpu; });
+        sched.addSource(S::Ram, [this](double, bool) { ++c.ram; });
+    }
+    /** Runs the scheduler on a 500 ms tick for the given number of ticks. */
+    void run(int ticks) {
+        for (int i = 0; i < ticks; ++i) {
+            sched.runDue(now);
+            now += 0.5;
+        }
+    }
+    void look() {
+        DemandInputs d;
+        d.editorOpen = true;
+        sched.setDemand(d);
+    }
+};
+
+void testNothingWithoutWidgets() {
+    Rig r;
+    r.look();
+    r.run(10);
+    CHECK(r.c.cpu == 0 && r.c.gpu == 0 && r.c.ram == 0);
+    CHECK(r.sched.refCount(S::CpuLoad) == 0);
+}
+
+void testEnableDisable() {
+    Rig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Cpu});
+    CHECK(r.sched.refCount(S::CpuLoad) == 1);
+    CHECK(r.sched.refCount(S::GpuBusy) == 0);
+    r.run(4);
+    CHECK(r.c.cpu == 4);  // 500 ms source, 500 ms ticks
+    CHECK(r.sched.readCount(S::CpuLoad) == 4);
+    CHECK(r.c.gpu == 0);
+
+    r.sched.setEnabledWidgets({});
+    CHECK(r.sched.refCount(S::CpuLoad) == 0);
+    const int frozen = r.c.cpu;
+    r.run(10);
+    CHECK(r.c.cpu == frozen);
+}
+
+void testSharedSource() {
+    Rig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Cpu, W::CpuItems});
+    CHECK(r.sched.refCount(S::CpuLoad) == 2);
+    r.sched.setEnabledWidgets({W::CpuItems});
+    CHECK(r.sched.refCount(S::CpuLoad) == 1);
+    r.run(4);
+    CHECK(r.c.cpu > 0);
+}
+
+void testTwoInstances() {
+    Rig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Cpu, W::Cpu});
+    CHECK(r.sched.refCount(S::CpuLoad) == 2);
+}
+
+void testVisibility() {
+    Rig r;
+    r.sched.setEnabledWidgets({W::Cpu});
+
+    DemandInputs d;
+    d.hudShown = true;
+    d.hmdInUse = false;
+    r.sched.setDemand(d);
+    r.run(4);
+    CHECK(r.c.cpu == 0);  // shown but headset in standby
+
+    d.hmdInUse = true;
+    r.sched.setDemand(d);
+    r.run(4);
+    CHECK(r.c.cpu == 4);
+
+    d.hudShown = false;
+    r.sched.setDemand(d);
+    const int frozen = r.c.cpu;
+    r.run(6);
+    CHECK(r.c.cpu == frozen);
+}
+
+void testSingleSignals() {
+    for (int which = 0; which < 3; ++which) {
+        Rig r;
+        r.sched.setEnabledWidgets({W::Cpu});
+        DemandInputs d;
+        if (which == 0) d.editorOpen = true;
+        if (which == 1) d.pcLease = true;
+        if (which == 2) d.record = true;
+        r.sched.setDemand(d);
+        r.run(4);
+        CHECK(r.c.cpu == 4);
+
+        r.sched.setDemand(DemandInputs {});
+        const int frozen = r.c.cpu;
+        r.run(10);
+        CHECK(r.c.cpu == frozen);
+    }
+}
+
+void testResumed() {
+    Rig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Cpu});
+    r.run(3);
+    CHECK(r.c.cpuResumed.size() == 3);
+    CHECK(r.c.cpuResumed.size() == 3 && r.c.cpuResumed[0] && !r.c.cpuResumed[1] && !r.c.cpuResumed[2]);
+
+    // pause, then reactivate: first read is resumed again
+    r.sched.setDemand(DemandInputs {});
+    r.run(4);
+    r.look();
+    r.c.cpuResumed.clear();
+    r.run(3);
+    CHECK(r.c.cpuResumed.size() == 3);
+    CHECK(r.c.cpuResumed.size() == 3 && r.c.cpuResumed[0] && !r.c.cpuResumed[1] && !r.c.cpuResumed[2]);
+}
+
+void testIntervals() {
+    Rig r;
+    CHECK(std::fabs(r.sched.interval(S::CpuLoad) - 0.5) < 1e-9);  // shortest of 500 / 1000
+    CHECK(std::fabs(r.sched.interval(S::GpuBusy) - 2.0) < 1e-9);
+    CHECK(std::fabs(r.sched.interval(S::Ram) - 1.0) < 1e-9);       // shortest of 2000 / 1000
+    CHECK(r.sched.interval(S::Fan) == 0.0);                        // no metric uses it
+
+    CHECK(std::isinf(r.sched.nextDue(0.0)));  // nothing active
+
+    r.look();
+    r.sched.setEnabledWidgets({W::GpuRam});
+    r.run(8);  // 4 seconds of 500 ms ticks
+    CHECK(r.c.gpu == 2);  // reads at t=0 and t=2 only (t=4 not reached)
+    CHECK(r.c.ram == 4);  // 1 s interval: t=0,1,2,3
+    CHECK(!std::isinf(r.sched.nextDue(r.now)));
+
+    r.sched.setEnabledWidgets({});
+    CHECK(std::isinf(r.sched.nextDue(r.now)));
+}
+
+void testRecomputeCount() {
+    Rig r;
+    const uint64_t start = r.sched.recomputeCount();
+    DemandInputs d;
+    d.editorOpen = true;
+    r.sched.setDemand(d);
+    CHECK(r.sched.recomputeCount() == start + 1);
+    r.sched.setDemand(d);  // identical inputs
+    CHECK(r.sched.recomputeCount() == start + 1);
+    d.record = true;
+    r.sched.setDemand(d);
+    CHECK(r.sched.recomputeCount() == start + 2);
+}
+
+}  // namespace
+
+int main() {
+    testNothingWithoutWidgets();
+    testEnableDisable();
+    testSharedSource();
+    testTwoInstances();
+    testVisibility();
+    testSingleSignals();
+    testResumed();
+    testIntervals();
+    testRecomputeCount();
+    if (failures) std::printf("%d check(s) failed\n", failures);
+    return failures ? 1 : 0;
+}

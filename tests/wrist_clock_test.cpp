@@ -4,6 +4,7 @@
 #include "config.h"
 #include "draw.h"
 #include "panel.h"
+#include "paths.h"
 #include "placement.h"
 #include "settings_panel.h"
 #include "theme.h"
@@ -574,7 +575,7 @@ void configuration(const std::string& file) {
 void panelHeights(const std::string& directory) {
     Config c;
     FontSet fonts;
-    fonts.load(c.fontPath, c.boldFontPath);
+    fonts.load(paths::resolveFontPath(c.fontPath, false), paths::resolveFontPath(c.boldFontPath, true));
     PanelRenderer renderer(fonts);
     PanelState state;
     CHECK(renderer.width() == 512 && renderer.height() == 460);
@@ -665,7 +666,7 @@ void controls(const std::string& directory) {
     Config c;
     c.language = Language::En;
     FontSet fonts;
-    fonts.load(c.fontPath, c.boldFontPath);
+    fonts.load(paths::resolveFontPath(c.fontPath, false), paths::resolveFontPath(c.boldFontPath, true));
     SettingsPanel panel(fonts);
     const AutostartStatus service {AutostartStatus::State::Enabled, false, false};
     CHECK(panel.width() == 1600 && panel.height() <= 760);
@@ -703,10 +704,10 @@ void controls(const std::string& directory) {
         {SettingsAction::FadeAngleDown, 1264, 504, 84, 68}, {SettingsAction::FadeAngleUp, 1468, 504, 84, 68},
     };
 
-    for (const Language language : {Language::En, Language::Ja}) {
+    for (const Language language : {Language::En}) {
         c = Config();
         c.language = language;
-        const std::string code = language == Language::En ? "en" : "ja";
+        const std::string code = "en";
         // 頭
         panel.render(c, service, {});
         checkButtons(panel, common, 1);
