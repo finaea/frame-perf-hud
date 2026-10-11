@@ -472,7 +472,7 @@ void drawPowerRow(const Pen& pen, double top, const PanelState& state, const Con
     pen.dot(x + 4, top + 42, kAccent);
     drawBigValue(pen, x + 14, top + 52, num(s.powerMainW, 2), "W",
                  colorOf(levelOf(s.powerMainW, th.powerWarnW, th.powerCritW)));
-    pen.text(x + 14, top + 72, t.allChannels + num(s.powerSumW, 1) + "W", 15, kTextMuted);
+    pen.text(x + 14, top + 72, t.unmeasured + num(s.powerUnmeasuredW, 1) + "W", 15, kTextMuted);
     pen.text(x + 14, top + 90, t.fan + grouped(s.fanRpm) + "rpm", 15, kTextMuted);
 
     const double maxData = state.powerW.maxValue();

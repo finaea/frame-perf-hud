@@ -1,0 +1,311 @@
+#include "system_metrics.h"
+
+#include "sensor_math.h"
+
+#include <cmath>
+#include <ctime>
+
+using fph::Reason;
+using fph::SourceId;
+namespace metric = fph::metric;
+
+namespace {
+
+/** Measured rails by max34417 label; volts are at id + kPowerRailVoltsOffset. vph has its own ids. */
+struct RailId {
+    const char* label;
+    uint16_t wattsId;
+};
+constexpr RailId kRails[] = {
+    {"apc0", metric::kPowerApc0W}, {"apc1", metric::kPowerApc1W}, {"apc2", metric::kPowerApc2W},
+    {"gfx", metric::kPowerGfxW},   {"nsp1", metric::kPowerNsp1W}, {"nsp2", metric::kPowerNsp2W},
+    {"s1c", metric::kPowerS1cW},   {"s3c", metric::kPowerS3cW},   {"s6c", metric::kPowerS6cW},
+    {"bob", metric::kPowerBobW},
+};
+
+uint32_t batteryStatusCode(const std::string& status) {
+    using fph::BatteryStatus;
+    if (status == "Charging") return static_cast<uint32_t>(BatteryStatus::Charging);
+    if (status == "Discharging") return static_cast<uint32_t>(BatteryStatus::Discharging);
+    if (status == "Full") return static_cast<uint32_t>(BatteryStatus::Full);
+    if (status == "Not charging") return static_cast<uint32_t>(BatteryStatus::NotCharging);
+    return static_cast<uint32_t>(BatteryStatus::Unknown);
+}
+
+/** Stores a NaN-able seconds value as i32, or N/A with the reason. */
+void setSeconds(fph::MetricStore& st, uint16_t id, double seconds, double now, Reason nanReason) {
+    if (std::isnan(seconds)) {
+        st.setNa(id, nanReason, now);
+    } else {
+        st.setI32(id, static_cast<int32_t>(std::lround(seconds)), now);
+    }
+}
+
+/** Stores a short string, or N/A with the reason when it's empty. */
+void setTextOr(fph::MetricStore& st, uint16_t id, const std::string& text, double now, Reason emptyReason) {
+    if (text.empty()) {
+        st.setNa(id, emptyReason, now);
+    } else {
+        st.setText(id, text, now);
+    }
+}
+
+void storePower(fph::MetricStore& st, const SensorSample& s, double now) {
+    std::vector<sensor_math::RailReading> readings;
+    const PowerChannel* vph = nullptr;
+    for (const PowerChannel& ch : s.powerChannels) {
+        readings.push_back({ch.label, ch.watts, ch.volts});
+        if (ch.label == "vph" && vph == nullptr) vph = &ch;
+    }
+    const sensor_math::PowerTree tree = sensor_math::powerTree(readings);
+    if (vph == nullptr) {
+        st.setNa(metric::kPowerVphW, Reason::SensorMissing, now);
+        st.setNa(metric::kPowerVphV, Reason::SensorMissing, now);
+        st.setNa(metric::kPowerUnmeasuredW, Reason::SensorMissing, now);
+    } else {
+        st.setF32(metric::kPowerVphW, tree.vphW, now);
+        st.setF32(metric::kPowerVphV, tree.vphV, now);
+        st.setF32(metric::kPowerUnmeasuredW, tree.unmeasuredW, now);
+    }
+    // Never vph + rails: the rails are fed from vph, so that sum double-counts
+    st.setF32(metric::kPowerRailsW, tree.railsW, now, readings.size() > (vph ? 1u : 0u) ? Reason::ReadFailed
+                                                                                        : Reason::SensorMissing);
+    for (const RailId& rail : kRails) {
+        const uint16_t voltsId = rail.wattsId + metric::kPowerRailVoltsOffset;
+        const PowerChannel* found = nullptr;
+        for (const PowerChannel& ch : s.powerChannels) {
+            if (ch.label == rail.label) {
+                found = &ch;
+                break;
+            }
+        }
+        if (found == nullptr) {
+            st.setNa(rail.wattsId, Reason::SensorMissing, now);
+            st.setNa(voltsId, Reason::SensorMissing, now);
+            continue;
+        }
+        st.setF32(rail.wattsId, found->watts, now);
+        if (!sensor_math::railVoltsMeaningful(found->label)) {
+            st.setNa(voltsId, Reason::InvalidReading, now);  // gfx: shown as "—"
+        } else {
+            st.setF32(voltsId, found->volts, now);
+        }
+    }
+}
+
+void storeBattery(fph::MetricStore& st, const SensorSample& s, double now) {
+    const Reason bat = s.haveBattery ? Reason::ReadFailed : Reason::SensorMissing;
+    const Reason chg = s.haveCharger ? Reason::ReadFailed : Reason::SensorMissing;
+    st.setF32(metric::kBatteryPct, s.batteryPct, now, bat);
+    st.setF32(metric::kBatteryVoltageV, s.batteryVoltageV, now, bat);
+    st.setF32(metric::kBatteryCurrentMa, s.batteryCurrentMa, now, bat);
+    st.setF32(metric::kTempBatteryC, s.batteryTempC, now, bat);
+    if (s.haveBattery) {
+        st.setEnum(metric::kBatteryStatus, batteryStatusCode(s.batteryStatus), now);
+    } else {
+        st.setNa(metric::kBatteryStatus, Reason::SensorMissing, now);
+    }
+    if (s.haveCharger) {
+        st.setEnum(metric::kBatteryChargerOnline, s.chargerOnline ? 1 : 0, now);
+    } else {
+        st.setNa(metric::kBatteryChargerOnline, Reason::SensorMissing, now);
+    }
+    st.setF32(metric::kBatteryChargeNowMah, s.chargeNowMah, now, bat);
+    st.setF32(metric::kBatteryChargeFullMah, s.chargeFullMah, now, bat);
+    st.setF32(metric::kBatteryChargeDesignMah, s.chargeDesignMah, now, bat);
+    // Driver sign: positive = into the battery (FramePerf checked while charging, 2026-10-09)
+    st.setF32(metric::kBatteryPowerW, s.batteryVoltageV * s.batteryCurrentMa / 1000.0, now, bat);
+    setTextOr(st, metric::kBatteryHealth, s.batteryHealth, now, bat);
+    if (s.batteryCycles >= 0) {
+        st.setI32(metric::kBatteryCycles, static_cast<int32_t>(s.batteryCycles), now);
+    } else {
+        st.setNa(metric::kBatteryCycles, bat, now);
+    }
+
+    const bool plugged = s.chargerOnline || s.sourceOnline;
+    if (s.haveCharger || s.haveSource) {
+        st.setEnum(metric::kBatteryPlugged, plugged ? 1 : 0, now);
+    } else {
+        st.setNa(metric::kBatteryPlugged, Reason::SensorMissing, now);
+    }
+
+    // Time to full / empty from the gauge's mAh and the averaged current (FramePerf's TimeLeftSeconds)
+    const double amps = (std::isnan(s.batteryAvgCurrentMa) ? s.batteryCurrentMa : s.batteryAvgCurrentMa) / 1000.0;
+    setSeconds(st, metric::kBatteryTimeToFullS,
+               sensor_math::timeLeftSeconds(true, s.batteryStatus, amps, s.chargeNowMah, s.chargeFullMah), now,
+               !s.haveBattery ? Reason::SensorMissing : plugged ? Reason::InvalidReading : Reason::NotConnected);
+    setSeconds(st, metric::kBatteryTimeToEmptyS,
+               sensor_math::timeLeftSeconds(false, s.batteryStatus, amps, s.chargeNowMah, s.chargeFullMah), now,
+               s.haveBattery ? Reason::InvalidReading : Reason::SensorMissing);
+
+    sensor_math::ChargeModeInputs mode;
+    mode.haveBattery = s.haveBattery;
+    mode.haveCharger = s.haveCharger;
+    mode.plugged = plugged;
+    mode.batteryStatus = s.batteryStatus;
+    mode.chargingEnable = s.chargingEnable;
+    mode.chargingPause = s.chargingPause;
+    mode.flags = sensor_math::parseStatusDetailed(s.chargerStatusDetailed);
+    setTextOr(st, metric::kBatteryChargerMode, sensor_math::chargeMode(mode), now, Reason::SensorMissing);
+    st.setF32(metric::kBatterySetCurrentA, s.setCurrentA, now, chg);
+    st.setF32(metric::kBatterySetCurrentMaxA, s.setCurrentMaxA, now, chg);
+
+    // USB-PD: what the charger offers (the contract) vs what arrives at the USB input
+    const Reason src = !s.haveSource ? Reason::SensorMissing : Reason::NotConnected;
+    if (s.sourceOnline) {
+        setTextOr(st, metric::kBatteryUsbType, sensor_math::activeUsbType(s.usbType), now, Reason::ReadFailed);
+        st.setF32(metric::kBatteryPdOfferedV, s.sourceV, now);
+        st.setF32(metric::kBatteryPdOfferedA, s.sourceAMax, now);
+        st.setF32(metric::kBatteryPdOfferedW, s.sourceV * s.sourceAMax, now);
+    } else {
+        for (uint16_t id : {metric::kBatteryUsbType, metric::kBatteryPdOfferedV, metric::kBatteryPdOfferedA,
+                            metric::kBatteryPdOfferedW}) {
+            st.setNa(id, src, now);
+        }
+    }
+    if (plugged) {
+        st.setF32(metric::kBatteryInputV, s.usbInV, now);
+        st.setF32(metric::kBatteryInputA, s.usbInA, now);
+        st.setF32(metric::kBatteryInputW, s.usbInV * s.usbInA, now);
+    } else {
+        for (uint16_t id : {metric::kBatteryInputV, metric::kBatteryInputA, metric::kBatteryInputW}) {
+            st.setNa(id, Reason::NotConnected, now);
+        }
+    }
+    if (plugged && s.sourceOnline) {
+        st.setF32(metric::kBatterySagV, sensor_math::sagVolts(s.sourceV, s.usbInV), now);
+    } else {
+        st.setNa(metric::kBatterySagV, s.haveSource ? Reason::NotConnected : Reason::SensorMissing, now);
+    }
+}
+
+}  // namespace
+
+void registerSystemSources(fph::Scheduler& scheduler, Sensors& sensors, fph::MetricStore& store) {
+    fph::MetricStore& st = store;
+    Sensors& se = sensors;
+
+    scheduler.addSource(SourceId::CpuLoad, [&st, &se](double now, bool resumed) {
+        // A delta: after a pause, rebuild the baseline instead of showing the average over the pause
+        if (resumed) se.resetCpuBaseline();
+        SensorSample s;
+        se.readCpuUsage(s);
+        const Reason nan = resumed ? Reason::NotSampledYet : Reason::ReadFailed;
+        st.setF32(metric::kCpuUsagePct, s.cpuUsagePct, now, nan);
+        st.setF32(metric::kCpuMaxCorePct, s.cpuMaxCorePct, now, nan);
+        for (uint16_t i = 0; i < metric::kCpuCoreSlots; ++i) {
+            const uint16_t id = metric::kCpuCore0Pct + i;
+            if (i < s.corePct.size()) {
+                st.setF32(id, s.corePct[i], now, nan);
+            } else {
+                // After the first delta, a slot past the last core is a core this SoC doesn't have
+                st.setNa(id, s.corePct.empty() ? nan : Reason::SensorMissing, now);
+            }
+        }
+    });
+    scheduler.addSource(SourceId::CpuClock, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readCpuClocks(s);
+        st.setF32(metric::kCpuFastestClockMhz, s.cpuFreqMHz, now);
+        st.setF32(metric::kCpuBigCoreClockMhz, s.cpuBigFreqMHz, now);
+        for (uint16_t i = 0; i < metric::kCpuClusterSlots; ++i) {
+            if (i < s.clusters.size()) {
+                st.setF32(metric::kCpuCluster0Mhz + i, s.clusters[i].curMHz, now);
+                st.setF32(metric::kCpuCluster0MaxMhz + i, s.clusters[i].maxMHz, now);
+            } else {
+                st.setNa(metric::kCpuCluster0Mhz + i, Reason::SensorMissing, now);
+                st.setNa(metric::kCpuCluster0MaxMhz + i, Reason::SensorMissing, now);
+            }
+        }
+    });
+    scheduler.addSource(SourceId::GpuClock, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readGpuClock(s);
+        st.setF32(metric::kGpuClockMhz, s.gpuFreqMHz, now);
+        st.setF32(metric::kGpuMaxClockMhz, s.gpuMaxFreqMHz, now);
+    });
+    scheduler.addSource(SourceId::GpuBusy, [&st, &se](double now, bool resumed) {
+        SensorSample s;
+        se.readGpuBusy(s, now);
+        // A delta too: the first value after a pause would be the average over the pause
+        if (resumed) {
+            st.setNa(metric::kGpuBusyPct, Reason::NotSampledYet, now);
+        } else {
+            st.setF32(metric::kGpuBusyPct, s.gpuBusyPct, now);
+        }
+    });
+    scheduler.addSource(SourceId::Ram, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readMemory(s);
+        st.setF32(metric::kRamUsedGib, s.memUsedGiB, now);
+        st.setF32(metric::kRamTotalGib, s.memTotalGiB, now);
+    });
+    scheduler.addSource(SourceId::Temps, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readThermal(s);
+        st.setF32(metric::kTempCpuC, s.cpuTempC, now);
+        st.setF32(metric::kTempGpuC, s.gpuTempC, now);
+        st.setF32(metric::kTempDdrC, s.ddrTempC, now);
+        st.setF32(metric::kTempNpuC, s.npuTempC, now);
+        st.setF32(metric::kTempCameraC, s.cameraTempC, now);
+        st.setF32(metric::kTempVideoC, s.videoTempC, now);
+    });
+    scheduler.addSource(SourceId::BoardTemps, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readIioTemps(s);
+        st.setF32(metric::kTempDisplayC, s.displayTempC, now);
+        st.setF32(metric::kTempExhaustC, s.exhaustTempC, now);
+        st.setF32(metric::kTempHeatsinkC, s.heatsinkTempC, now);
+        st.setF32(metric::kTempWifiC, s.wifiTempC, now);
+        st.setF32(metric::kTempFlashC, s.flashTempC, now);
+        st.setF32(metric::kTempNrfC, s.nrfTempC, now);
+        st.setF32(metric::kTempConnectorC, s.connectorTempC, now);
+    });
+    scheduler.addSource(SourceId::Throttle, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readThrottle(s);
+        st.setEnum(metric::kThrottleCpu, s.throttleCpu ? 1 : 0, now);
+        st.setEnum(metric::kThrottleGpu, s.throttleGpu ? 1 : 0, now);
+    });
+    scheduler.addSource(SourceId::Fan, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readFan(s);
+        st.setF32(metric::kFanRpm, s.fanRpm, now);
+    });
+    scheduler.addSource(SourceId::Power, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readPower(s);
+        storePower(st, s, now);
+    });
+    scheduler.addSource(SourceId::Battery, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readBattery(s);
+        storeBattery(st, s, now);
+    });
+    scheduler.addSource(SourceId::Uptime, [&st, &se](double now, bool) {
+        SensorSample s;
+        se.readUptime(s);
+        if (std::isnan(s.uptimeS)) {
+            st.setNa(metric::kUptimeS, Reason::ReadFailed, now);
+        } else {
+            st.setI32(metric::kUptimeS, static_cast<int32_t>(s.uptimeS), now);
+        }
+        const std::time_t t = std::time(nullptr);
+        std::tm tm {};
+        char text[32];
+        if (localtime_r(&t, &tm) != nullptr && std::strftime(text, sizeof(text), "%Y-%m-%d %H:%M:%S", &tm) > 0) {
+            st.setText(metric::kClock, text, now);
+        } else {
+            st.setNa(metric::kClock, Reason::ReadFailed, now);
+        }
+    });
+    scheduler.addSource(SourceId::SelfCost, [&st, &se](double now, bool resumed) {
+        if (resumed) se.resetSelfBaseline();
+        SensorSample s;
+        se.readSelfCost(s, now);
+        const Reason nan = resumed ? Reason::NotSampledYet : Reason::ReadFailed;
+        st.setF32(metric::kSelfCpuPct, s.selfCpuPct, now, nan);
+        st.setF32(metric::kSelfRssMib, s.selfRssMiB, now);
+        st.setF32(metric::kSelfPowerW, s.selfPowerW, now, nan);
+    });
+}

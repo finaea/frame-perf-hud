@@ -4,6 +4,7 @@
 #include "autostart.h"
 #include "config.h"
 #include "draw.h"
+#include "dump_metrics.h"  // T03
 #include "i18n.h"
 #include "metric_store.h"
 #include "panel.h"
@@ -64,8 +65,10 @@ constexpr double kPlacementCoalesceSec = 0.02;   ///< do a placement check this 
 /** Command line. */
 struct Options {
     enum class Mode {
-        Overlay, Print, DumpPng, DumpSettingsPng, DumpFrameTimings, DebugDump, ContrastReport, Help, Version
+        Overlay, Print, DumpPng, DumpSettingsPng, DumpFrameTimings, DebugDump, ContrastReport, Help, Version,
+        DumpMetrics  // T03
     };
+    DumpMetricsOptions dumpMetrics;  // T03: --dump-metrics
     Mode mode = Mode::Overlay;
     std::string configPath;
     std::string pngPath;
@@ -209,6 +212,11 @@ void printUsage() {
         "  --force-settings-visible  diagnostics: run as if the dashboard tab were visible (to measure the cost)\n"
         "  --debug-dump         print the running instance's debug dump (sources, reference counts, read counters,\n"
         "                       every metric with its status) and exit\n"
+        "  --dump-metrics [--count N]  without the overlay, read every enabled widget's sources once a second and\n"
+        "                       print the metrics, read counters and process lists N times (default 5)\n"
+        "      --widgets LIST   enabled widgets, e.g. 1,7,9 (default 1-11)\n"
+        "      --vr             also connect to SteamVR as a Background app (frame timing, controllers, game)\n"
+        "      --sum-same-name  process lists: one row per process name\n"
         "  --contrast-report    print the WCAG contrast ratio of every text/background colour pair\n"
         "  --dump-frame-timings [S]  diagnostics: connect to SteamVR and print raw frame timings for S seconds\n"
         "                       (default 5). Read-only (Background app type), so it can run next to the overlay\n"
@@ -237,6 +245,17 @@ bool parseOptions(int argc, char** argv, Options& options) {
             }
         } else if (arg == "--debug-dump") {
             options.mode = Options::Mode::DebugDump;
+        } else if (arg == "--dump-metrics") {  // T03
+            options.mode = Options::Mode::DumpMetrics;
+        } else if (arg == "--widgets" && hasNext) {
+            if (!parseWidgetList(argv[++i], options.dumpMetrics.widgets)) {
+                std::fprintf(stderr, "--widgets wants widget numbers 1-13, e.g. 1,7,9\n");
+                return false;
+            }
+        } else if (arg == "--vr") {
+            options.dumpMetrics.vr = true;
+        } else if (arg == "--sum-same-name") {
+            options.dumpMetrics.sumSameName = true;
         } else if (arg == "--thumbnail-png" && hasNext) {
             options.thumbnailPngPath = argv[++i];
         } else if (arg == "--thumbnail-size" && hasNext) {
@@ -313,9 +332,11 @@ void printSample(const SensorSample& s) {
                     fmt(s.wifi.txMbps, 2).c_str(), fmt(s.wifi.txLinkMbps, 1).c_str(),
                     fmt(s.wifi.rxLinkMbps, 1).c_str(), fmt(s.wifi.signalDbm, 0).c_str());
     }
-    std::printf("  Power    vph %s W  all channels %s W\n          ", fmt(s.powerMainW, 3).c_str(),
-                fmt(s.powerSumW, 3).c_str());
-    for (const auto& ch : s.powerChannels) std::printf(" %s=%s", ch.label.c_str(), fmt(ch.watts, 3).c_str());
+    std::printf("  Power    vph %s W  unmeasured %s W\n          ", fmt(s.powerMainW, 3).c_str(),
+                fmt(s.powerUnmeasuredW, 3).c_str());
+    for (const auto& ch : s.powerChannels) {
+        std::printf(" %s=%sW/%sV", ch.label.c_str(), fmt(ch.watts, 3).c_str(), fmt(ch.volts, 3).c_str());
+    }
     std::printf("\n  Fan      %s rpm\n", fmt(s.fanRpm, 0).c_str());
     std::printf("  Battery  %s%%  %s V  %s mA  %s (charger %s)\n", fmt(s.batteryPct, 0).c_str(),
                 fmt(s.batteryVoltageV, 3).c_str(), fmt(s.batteryCurrentMa, 0).c_str(), s.batteryStatus.c_str(),
@@ -680,7 +701,7 @@ bool hmdInUse(int activityLevel) {
  * paths::debugDumpPath(), via a temp file + rename so a reader never sees half of it.
  */
 void writeDebugDump(const fph::Scheduler& scheduler, const fph::MetricStore& store, int activityLevel,
-                    bool settingsVisible, double now) {
+                    bool settingsVisible, double now, const std::string& extra = "") {
     std::string text = "frame-perf-hud " FRAME_PERF_HUD_VERSION " debug dump, pid " + std::to_string(::getpid()) +
                        ", " + localTimeText() + "\n";
     text += "hmd activity level: " + std::to_string(activityLevel) + " (" + activityName(activityLevel) +
@@ -688,6 +709,7 @@ void writeDebugDump(const fph::Scheduler& scheduler, const fph::MetricStore& sto
     text += scheduler.dump(now);
     text += "\n";
     text += store.dump(now);
+    if (!extra.empty()) text += "\n" + extra;  // T03: process lists, session
     const std::string path = paths::debugDumpPath();
     const std::string tmp = path + ".tmp";
     FILE* file = std::fopen(tmp.c_str(), "w");
@@ -821,6 +843,7 @@ int runOverlay(const Options& options) {
     }
     if (gStopRequested) return 0;
     std::fprintf(stderr, "[VR] Connected to SteamVR\n");
+    bridge.refreshSceneApp(nowSeconds());  // T03: starting mid-game opens that game's session at once
     vr.applyConfig(config);
     if (vr.hasSettings()) {
         std::vector<uint8_t> thumbnail;
@@ -871,6 +894,7 @@ int runOverlay(const Options& options) {
         // SteamVR itself quitting (VREvent_Quit) exits with 0. Close on the dashboard icon (VREvent_OverlayClosed)
         // is the user quitting, like Quit on the tab: exit code 3, so systemd doesn't restart us
         if (events.quit) break;
+        if (events.sceneAppChanged) bridge.refreshSceneApp(loopStart);  // T03
         if (events.closeRequested) {
             std::fprintf(stderr, "[VR] Closed from the dashboard; exiting\n");
             userQuit = true;
@@ -1030,7 +1054,7 @@ int runOverlay(const Options& options) {
 
         if (gDumpRequested) {
             gDumpRequested = 0;
-            writeDebugDump(scheduler, store, activityLevel, settingsVisible, nowSeconds());
+            writeDebugDump(scheduler, store, activityLevel, settingsVisible, nowSeconds(), bridge.debugText());
         }
 
         // ---- Sleep until the earliest deadline ----
@@ -1076,6 +1100,9 @@ int main(int argc, char** argv) {
         case Options::Mode::DumpSettingsPng: return runDumpSettingsPng(options);
         case Options::Mode::DumpFrameTimings: return runDumpFrameTimings(options);
         case Options::Mode::DebugDump: return runDebugDump();
+        case Options::Mode::DumpMetrics:
+            options.dumpMetrics.count = options.printCount;
+            return runDumpMetrics(options.dumpMetrics, gStopRequested);
         case Options::Mode::Overlay: break;
     }
     return runOverlay(options);

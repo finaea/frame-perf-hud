@@ -106,7 +106,8 @@ void Sensors::closeAll() {
         for (auto& s : *list) closeOne(s);
         list->clear();
     }
-    for (auto* list : {&cpuCooling_, &gpuCooling_}) {
+    for (auto* list : {&cpuCooling_, &gpuCooling_, &powerVolts_, &cpuMaxFreqs_, &npuTemps_, &cameraTemps_,
+                       &videoTemps_}) {
         for (auto& s : *list) closeOne(s);
         list->clear();
     }
@@ -115,13 +116,20 @@ void Sensors::closeAll() {
                       &heatsinkTemp_}) {
         closeOne(*s);
     }
+    for (Source* s : {&wifiTemp_, &flashTemp_, &nrfTemp_, &connectorTemp_, &batCurrentAvg_, &batChargeNow_,
+                      &batChargeFull_, &batChargeDesign_, &batHealth_, &batCycles_, &chgStatusDetailed_, &chgEnable_,
+                      &chgPause_, &chgCc_, &chgCcMax_, &srcOnline_, &srcUsbType_, &srcVoltage_, &srcCurrentMax_,
+                      &usbInV_, &usbInA_, &uptime_, &selfStatm_}) {
+        closeOne(*s);
+    }
+    cpuRailIdx_.clear();
 }
 
-void Sensors::discover() {
+void Sensors::discover(const std::string& root) {
     closeAll();
 
     // 温度: thermal_zone の type で分類する（番号は起動ごとに変わりうる）
-    const std::string thermalDir = "/sys/class/thermal/";
+    const std::string thermalDir = root + "/sys/class/thermal/";
     for (const auto& zone : listDir(thermalDir, "thermal_zone")) {
         const std::string base = thermalDir + zone;
         const std::string type = readSmallFile(base + "/type");
@@ -131,40 +139,74 @@ void Sensors::discover() {
             gpuTemps_.push_back(openSource(base + "/temp", type));
         } else if (startsWith(type, "ddr") && ddrTemp_.fd < 0) {
             ddrTemp_ = openSource(base + "/temp", type);
+        } else if (startsWith(type, "nsph")) {
+            npuTemps_.push_back(openSource(base + "/temp", type));
+        } else if (startsWith(type, "camera")) {
+            cameraTemps_.push_back(openSource(base + "/temp", type));
+        } else if (startsWith(type, "video")) {
+            videoTemps_.push_back(openSource(base + "/temp", type));
         }
     }
 
     // hwmon: name で探す（消費電力 max34417_*、ファン）
-    const std::string hwmonDir = "/sys/class/hwmon/";
+    const std::string hwmonDir = root + "/sys/class/hwmon/";
+    struct Channel {
+        Source watts;
+        Source volts;
+    };
+    std::vector<Channel> channels;
     for (const auto& hw : listDir(hwmonDir, "hwmon")) {
         const std::string base = hwmonDir + hw;
         const std::string name = readSmallFile(base + "/name");
         if (startsWith(name, "max34417")) {
+            // The chip's own voltage sense: in<N>_label carries the same label as its power channel
+            // (in0 = power1 = apc0 on max34417_12, probe 2026-10-11), so match by label, not by number
+            std::vector<std::pair<std::string, std::string>> voltsByLabel;
+            for (int ch = 0; ch <= 8; ++ch) {
+                const std::string label = readSmallFile(base + "/in" + std::to_string(ch) + "_label");
+                if (!label.empty()) voltsByLabel.emplace_back(label, base + "/in" + std::to_string(ch) + "_input");
+            }
             for (int ch = 1; ch <= 8; ++ch) {
                 const std::string input = base + "/power" + std::to_string(ch) + "_input";
                 if (!fileExists(input)) continue;
                 std::string label = readSmallFile(base + "/power" + std::to_string(ch) + "_label");
                 if (label.empty()) label = "power" + std::to_string(ch);
                 if (label == "unused") continue;
-                powers_.push_back(openSource(input, name + "/" + label));
+                Channel c;
+                c.watts = openSource(input, name + "/" + label);
+                for (const auto& v : voltsByLabel) {
+                    if (v.first == label) {
+                        c.volts = openSource(v.second, name + "/" + label);
+                        break;
+                    }
+                }
+                channels.push_back(c);
             }
         } else if (fan_.fd < 0 && fileExists(base + "/fan1_input")) {
             fan_ = openSource(base + "/fan1_input", name);
         }
     }
     // チップ名の順に並べる（表示を毎回同じ順にする）
-    std::stable_sort(powers_.begin(), powers_.end(),
-                     [](const Source& a, const Source& b) { return a.name.substr(0, a.name.find('/')) <
-                                                                   b.name.substr(0, b.name.find('/')); });
+    std::stable_sort(channels.begin(), channels.end(), [](const Channel& a, const Channel& b) {
+        return a.watts.name.substr(0, a.watts.name.find('/')) < b.watts.name.substr(0, b.watts.name.find('/'));
+    });
+    for (const Channel& c : channels) {
+        const std::string label = c.watts.name.substr(c.watts.name.find('/') + 1);
+        if (label == "apc0" || label == "apc1" || label == "apc2") cpuRailIdx_.push_back(powers_.size());
+        powers_.push_back(c.watts);
+        powerVolts_.push_back(c.volts);
+    }
 
     // CPU クロック: cpufreq の policy ごと
-    const std::string cpufreqDir = "/sys/devices/system/cpu/cpufreq/";
+    const std::string cpufreqDir = root + "/sys/devices/system/cpu/cpufreq/";
     for (const auto& policy : listDir(cpufreqDir, "policy")) {
         cpuFreqs_.push_back(openSource(cpufreqDir + policy + "/scaling_cur_freq", policy));
+        cpuMaxFreqs_.push_back(openSource(cpufreqDir + policy + "/scaling_max_freq", policy));
     }
     // 大コア（いちばん番号の大きい CPU）
     for (int cpu = 15; cpu >= 0; --cpu) {
-        const std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/scaling_cur_freq";
+        const std::string path =
+            root + "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/scaling_cur_freq";
         if (fileExists(path)) {
             cpuBigFreq_ = openSource(path, "cpu" + std::to_string(cpu));
             break;
@@ -172,7 +214,7 @@ void Sensors::discover() {
     }
 
     // GPU クロック: devfreq の名前に gpu を含むもの
-    const std::string devfreqDir = "/sys/class/devfreq/";
+    const std::string devfreqDir = root + "/sys/class/devfreq/";
     for (const auto& dev : listDir(devfreqDir, "")) {
         if (dev.find("gpu") == std::string::npos) continue;
         gpuFreq_ = openSource(devfreqDir + dev + "/cur_freq", dev);
@@ -182,7 +224,8 @@ void Sensors::discover() {
     }
 
     // バッテリーと充電器: power_supply の type / 名前で探す
-    const std::string psDir = "/sys/class/power_supply/";
+    // Same discovery as FramePerf's Sensors.discover() (frame_sampler.py:144-153), files kept open
+    const std::string psDir = root + "/sys/class/power_supply/";
     for (const auto& ps : listDir(psDir, "")) {
         const std::string base = psDir + ps;
         const std::string type = readSmallFile(base + "/type");
@@ -192,25 +235,51 @@ void Sensors::discover() {
             batCurrent_ = openSource(base + "/current_now", ps);
             batTemp_ = openSource(base + "/temp", ps);
             batStatus_ = openSource(base + "/status", ps);
+            batCurrentAvg_ = openSource(base + "/current_avg", ps);
+            batChargeNow_ = openSource(base + "/charge_now", ps);
+            batChargeFull_ = openSource(base + "/charge_full", ps);
+            batChargeDesign_ = openSource(base + "/charge_full_design", ps);
+            batHealth_ = openSource(base + "/health", ps);
+            batCycles_ = openSource(base + "/cycle_count", ps);
         } else if (ps.find("charger") != std::string::npos && chargerOnline_.fd < 0) {
             chargerOnline_ = openSource(base + "/online", ps);
+            chgStatusDetailed_ = openSource(base + "/status_detailed", ps);
+            chgEnable_ = openSource(base + "/charging_enable", ps);
+            chgPause_ = openSource(base + "/charging_pause", ps);
+            chgCc_ = openSource(base + "/constant_charge_current", ps);
+            chgCcMax_ = openSource(base + "/constant_charge_current_max", ps);
+        } else if ((startsWith(ps, "tcpm-source-psy") || type == "USB") && srcOnline_.fd < 0) {
+            srcOnline_ = openSource(base + "/online", ps);
+            srcUsbType_ = openSource(base + "/usb_type", ps);
+            srcVoltage_ = openSource(base + "/voltage_now", ps);
+            srcCurrentMax_ = openSource(base + "/current_max", ps);
         }
     }
 
     // iio の温度: name で vadc を探す（device 番号は変わりうる）
-    const std::string iioDir = "/sys/bus/iio/devices/";
+    const std::string iioDir = root + "/sys/bus/iio/devices/";
     for (const auto& dev : listDir(iioDir, "iio:device")) {
         const std::string base = iioDir + dev + "/";
         if (readSmallFile(base + "name") != "c400000.spmi:pmic@0:vadc@9000") continue;
         // display_right は -17℃ などおかしな値なので読まない
+        // (also skipped: pm8550b_chg_temp reads 0 and pm8550b_lite_die_temp -60 °C, probe 2026-10-11)
         displayTemp_ = openSource(base + "in_temp_display_left_therm_input", "display_left");
         exhaustTemp_ = openSource(base + "in_temp_pcba_at_fan_exhaust_input", "fan_exhaust");
         heatsinkTemp_ = openSource(base + "in_temp_pcba_at_heat_sink_fins_input", "heat_sink_fins");
+        wifiTemp_ = openSource(base + "in_temp_pcba_at_wifi_input", "wifi");
+        flashTemp_ = openSource(base + "in_temp_pcba_at_flash_input", "flash");
+        nrfTemp_ = openSource(base + "in_temp_pcba_at_nrf_input", "nrf");
+        connectorTemp_ = openSource(base + "in_temp_pcba_at_40pin_connector_input", "40pin_connector");
+        // What actually arrives over USB, measured by the charger PMIC's ADC (µV / µA, already scaled).
+        // FramePerf checked these against the power balance on 15 V PD and a 5 V powerbank (2026-10-10);
+        // the *_hs twins on vadc@9100 return EINVAL (frame_sampler.py:166-173)
+        usbInV_ = openSource(base + "in_voltage_pm8550b_usb_sns_v_div_16_input", "usb_sns");
+        usbInA_ = openSource(base + "in_current_pm8550b_iin_fb_input", "iin_fb");
         break;
     }
 
     // 熱による制限: cooling_device の type で CPU と GPU を分ける
-    const std::string coolingDir = "/sys/class/thermal/";
+    const std::string coolingDir = root + "/sys/class/thermal/";
     for (const auto& dev : listDir(coolingDir, "cooling_device")) {
         const std::string base = coolingDir + dev + "/";
         const std::string type = readSmallFile(base + "type");
@@ -221,14 +290,20 @@ void Sensors::discover() {
         }
     }
 
-    procStat_ = openSource("/proc/stat", "stat");
-    memInfo_ = openSource("/proc/meminfo", "meminfo");
+    procStat_ = openSource(root + "/proc/stat", "stat");
+    memInfo_ = openSource(root + "/proc/meminfo", "meminfo");
+    uptime_ = openSource(root + "/proc/uptime", "uptime");
+    selfStatm_ = openSource(root + "/proc/self/statm", "statm");
     resetCpuBaseline();
+    resetSelfBaseline();
 }
 
 void Sensors::resetCpuBaseline() {
-    prevBusy_.clear();
-    prevTotal_.clear();
+    prevCpu_ = sensor_math::CpuTicks();
+}
+
+void Sensors::resetSelfBaseline() {
+    haveSelfPrev_ = false;
 }
 
 long Sensors::readRaw(const Source& source, char* buffer, size_t size) {
@@ -272,49 +347,19 @@ void Sensors::readCpuUsage(SensorSample& sample) {
     char buffer[4096];
     if (readRaw(procStat_, buffer, sizeof(buffer)) <= 0) return;
 
-    std::vector<uint64_t> busy;
-    std::vector<uint64_t> total;
-    const char* line = buffer;
-    while (line != nullptr && std::strncmp(line, "cpu", 3) == 0) {
-        // cpu  user nice system idle iowait irq softirq steal ...
-        const char* p = line + 3;
-        while (*p != ' ' && *p != '\0') ++p;  // "cpu" の後ろの番号を飛ばす
-        uint64_t fields[10] = {};
-        int count = 0;
-        char* end = nullptr;
-        while (count < 10) {
-            const unsigned long long v = std::strtoull(p, &end, 10);
-            if (end == p) break;
-            fields[count++] = v;
-            p = end;
-        }
-        if (count >= 5) {
-            uint64_t all = 0;
-            for (int i = 0; i < std::min(count, 8); ++i) all += fields[i];  // guest は user に含まれるので除く
-            const uint64_t idle = fields[3] + fields[4];                    // idle + iowait
-            busy.push_back(all - idle);
-            total.push_back(all);
-        }
-        const char* next = std::strchr(line, '\n');
-        line = next != nullptr ? next + 1 : nullptr;
-    }
-
-    if (!prevTotal_.empty() && prevTotal_.size() == total.size()) {
+    sensor_math::CpuTicks cur;
+    if (!sensor_math::parseProcStat(buffer, cur)) return;
+    if (!prevCpu_.total.empty()) {
+        const std::vector<double> pct = sensor_math::cpuPercents(prevCpu_, cur);
         double maxCore = kNoValue;
-        for (size_t i = 0; i < total.size(); ++i) {
-            const double dt = static_cast<double>(total[i] - prevTotal_[i]);
-            const double db = static_cast<double>(busy[i] - prevBusy_[i]);
-            const double pct = dt > 0 ? 100.0 * db / dt : 0.0;
-            if (i == 0) {
-                sample.cpuUsagePct = pct;
-            } else if (std::isnan(maxCore) || pct > maxCore) {
-                maxCore = pct;
-            }
+        for (size_t i = 1; i < pct.size(); ++i) {
+            sample.corePct.push_back(pct[i]);
+            if (!std::isnan(pct[i]) && (std::isnan(maxCore) || pct[i] > maxCore)) maxCore = pct[i];
         }
+        sample.cpuUsagePct = pct.empty() ? kNoValue : pct[0];
         sample.cpuMaxCorePct = maxCore;
     }
-    prevBusy_ = std::move(busy);
-    prevTotal_ = std::move(total);
+    prevCpu_ = std::move(cur);
 }
 
 void Sensors::readMemory(SensorSample& sample) {
@@ -337,25 +382,24 @@ void Sensors::readMemory(SensorSample& sample) {
 
 void Sensors::readPower(SensorSample& sample) {
     sample.powerMainW = kNoValue;
-    sample.powerSumW = kNoValue;
+    sample.powerUnmeasuredW = kNoValue;
     sample.powerChannels.clear();
     long long v = 0;
-    double sum = 0.0;
-    bool any = false;
-    for (const auto& s : powers_) {
+    std::vector<sensor_math::RailReading> rails;
+    for (size_t i = 0; i < powers_.size(); ++i) {
+        const Source& s = powers_[i];
         PowerChannel ch;
         const size_t slash = s.name.find('/');
         ch.chip = s.name.substr(0, slash);
         ch.label = s.name.substr(slash + 1);
-        if (readLong(s, v)) {
-            ch.watts = static_cast<double>(v) / 1e6;  // µW → W
-            sum += ch.watts;
-            any = true;
-            if (ch.label == "vph" && std::isnan(sample.powerMainW)) sample.powerMainW = ch.watts;
-        }
+        if (readLong(s, v)) ch.watts = static_cast<double>(v) / 1e6;                               // µW → W
+        if (i < powerVolts_.size() && readLong(powerVolts_[i], v)) ch.volts = static_cast<double>(v) / 1e3;  // mV → V
         sample.powerChannels.push_back(ch);
+        rails.push_back({ch.label, ch.watts, ch.volts});
     }
-    if (any) sample.powerSumW = sum;
+    const sensor_math::PowerTree tree = sensor_math::powerTree(rails);
+    sample.powerMainW = tree.vphW;
+    sample.powerUnmeasuredW = tree.unmeasuredW;
 }
 
 void Sensors::readBattery(SensorSample& sample) {
@@ -366,6 +410,37 @@ void Sensors::readBattery(SensorSample& sample) {
     sample.batteryTempC = readLong(batTemp_, v) ? static_cast<double>(v) / 10.0 : kNoValue;           // 0.1℃ → ℃
     sample.batteryStatus = readText(batStatus_);
     sample.chargerOnline = readLong(chargerOnline_, v) && v != 0;
+
+    // Ticket 02: the rest of FramePerf's Sensors.charge() (frame_sampler.py:297-399)
+    const auto scaled = [&v](const Source& s, double divisor) {
+        return readLong(s, v) ? static_cast<double>(v) / divisor : kNoValue;
+    };
+    sample.haveBattery = batCapacity_.fd >= 0;
+    sample.haveCharger = chargerOnline_.fd >= 0;
+    sample.haveSource = srcOnline_.fd >= 0;
+    sample.batteryAvgCurrentMa = scaled(batCurrentAvg_, 1000.0);  // µA → mA, + = into the battery
+    sample.chargeNowMah = scaled(batChargeNow_, 1000.0);          // µAh → mAh
+    sample.chargeFullMah = scaled(batChargeFull_, 1000.0);
+    sample.chargeDesignMah = scaled(batChargeDesign_, 1000.0);
+    sample.batteryHealth = readText(batHealth_);
+    sample.batteryCycles = readLong(batCycles_, v) ? v : -1;
+    // status_detailed is ~25 lines, longer than readText's buffer
+    char detailed[1024];
+    sample.chargerStatusDetailed = readRaw(chgStatusDetailed_, detailed, sizeof(detailed)) > 0 ? detailed : "";
+    sample.chargingEnable = readLong(chgEnable_, v) ? static_cast<int>(v) : -1;
+    sample.chargingPause = readLong(chgPause_, v) ? static_cast<int>(v) : -1;
+    sample.setCurrentA = scaled(chgCc_, 1e6);  // µA → A
+    sample.setCurrentMaxA = scaled(chgCcMax_, 1e6);
+    sample.sourceOnline = readLong(srcOnline_, v) && v != 0;
+    sample.usbType = readText(srcUsbType_);
+    sample.sourceV = scaled(srcVoltage_, 1e6);  // µV → V
+    sample.sourceAMax = scaled(srcCurrentMax_, 1e6);
+    // Unplugged, these ADC channels read noise (3 mV, −14 mA on 2026-10-11) and each costs ~1.2 ms of
+    // conversion, so only read them while something is plugged in
+    if (sample.chargerOnline || sample.sourceOnline) {
+        sample.usbInV = scaled(usbInV_, 1e6);
+        sample.usbInA = scaled(usbInA_, 1e6);
+    }
 }
 
 void Sensors::readIioTemps(SensorSample& sample) {
@@ -373,6 +448,61 @@ void Sensors::readIioTemps(SensorSample& sample) {
     sample.displayTempC = readLong(displayTemp_, v) ? static_cast<double>(v) / 1000.0 : kNoValue;  // m℃ → ℃
     sample.exhaustTempC = readLong(exhaustTemp_, v) ? static_cast<double>(v) / 1000.0 : kNoValue;
     sample.heatsinkTempC = readLong(heatsinkTemp_, v) ? static_cast<double>(v) / 1000.0 : kNoValue;
+    sample.wifiTempC = readLong(wifiTemp_, v) ? static_cast<double>(v) / 1000.0 : kNoValue;
+    sample.flashTempC = readLong(flashTemp_, v) ? static_cast<double>(v) / 1000.0 : kNoValue;
+    sample.nrfTempC = readLong(nrfTemp_, v) ? static_cast<double>(v) / 1000.0 : kNoValue;
+    sample.connectorTempC = readLong(connectorTemp_, v) ? static_cast<double>(v) / 1000.0 : kNoValue;
+}
+
+void Sensors::readUptime(SensorSample& sample) {
+    char buffer[128];
+    double seconds = 0;
+    sample.uptimeS = readRaw(uptime_, buffer, sizeof(buffer)) > 0 && sensor_math::parseUptime(buffer, seconds)
+                         ? seconds
+                         : kNoValue;
+}
+
+void Sensors::readSelfCost(SensorSample& sample, double now) {
+    // RSS
+    char buffer[256];
+    long long pages = 0;
+    if (readRaw(selfStatm_, buffer, sizeof(buffer)) > 0 && sensor_math::parseStatmResident(buffer, pages)) {
+        static const long pageSize = ::sysconf(_SC_PAGESIZE);
+        sample.selfRssMiB = static_cast<double>(pages) * static_cast<double>(pageSize) / (1024.0 * 1024.0);
+    }
+    // Own CPU time in ns (all threads). /proc/self/stat counts 10 ms ticks: at the ~1% this HUD aims for,
+    // that's 2 ticks per 2 s read, far too coarse for checking a 2% budget
+    timespec ts {};
+    if (::clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts) != 0) return;
+    const double ownSec = static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
+    // Busy jiffies of the whole system: the first line of /proc/stat
+    static const long ticksPerSec = ::sysconf(_SC_CLK_TCK);
+    char stat[256];
+    sensor_math::CpuTicks ticks;
+    const bool haveSys = readRaw(procStat_, stat, sizeof(stat)) > 0 && sensor_math::parseProcStat(stat, ticks);
+    const uint64_t sysBusy = haveSys ? ticks.busy[0] : 0;
+    // CPU rails right now (they update every 1.5-2 s, about the read interval)
+    double railsW = cpuRailIdx_.size() == 3 ? 0.0 : kNoValue;
+    long long v = 0;
+    for (size_t idx : cpuRailIdx_) {
+        if (!readLong(powers_[idx], v)) {
+            railsW = kNoValue;
+            break;
+        }
+        railsW += static_cast<double>(v) / 1e6;
+    }
+    if (haveSelfPrev_ && now > prevSelfAt_) {
+        const double ownDelta = ownSec - prevSelfCpuSec_;
+        sample.selfCpuPct = 100.0 * ownDelta / (now - prevSelfAt_);
+        if (haveSys && ticksPerSec > 0 && sysBusy >= prevSysBusy_) {
+            const double sysDelta = static_cast<double>(sysBusy - prevSysBusy_) / static_cast<double>(ticksPerSec);
+            sample.selfPowerW = sensor_math::selfWatts(ownDelta, sysDelta, railsW);
+        }
+    }
+    haveSelfPrev_ = true;
+    prevSelfCpuSec_ = ownSec;
+    prevSelfAt_ = now;
+    prevSysBusy_ = haveSys ? sysBusy : UINT64_MAX;  // no system baseline: the next W is N/A
 }
 
 bool Sensors::anyCooling(const std::vector<Source>& sources) {
@@ -383,16 +513,21 @@ bool Sensors::anyCooling(const std::vector<Source>& sources) {
     return false;
 }
 
-// The intervals upstream's read() used to keep internally (power and wifi 2 s, battery and iio 5 s,
-// GPU busy 2 s because one fdinfo pass costs ~1.6 ms in-game) now live in the metric registry.
+// Read intervals live in the metric registry (core/metric_registry.cpp), from the tech plan's source table.
 
 void Sensors::readCpuClocks(SensorSample& sample) {
     long long v = 0;
     sample.cpuFreqMHz = kNoValue;
-    for (const auto& s : cpuFreqs_) {
-        if (!readLong(s, v)) continue;
-        const double mhz = static_cast<double>(v) / 1000.0;  // kHz → MHz
-        if (std::isnan(sample.cpuFreqMHz) || mhz > sample.cpuFreqMHz) sample.cpuFreqMHz = mhz;
+    sample.clusters.clear();
+    for (size_t i = 0; i < cpuFreqs_.size(); ++i) {
+        ClusterClock cluster;
+        cluster.policy = cpuFreqs_[i].name;
+        if (readLong(cpuFreqs_[i], v)) cluster.curMHz = static_cast<double>(v) / 1000.0;  // kHz → MHz
+        if (i < cpuMaxFreqs_.size() && readLong(cpuMaxFreqs_[i], v)) cluster.maxMHz = static_cast<double>(v) / 1000.0;
+        if (!std::isnan(cluster.curMHz) && (std::isnan(sample.cpuFreqMHz) || cluster.curMHz > sample.cpuFreqMHz)) {
+            sample.cpuFreqMHz = cluster.curMHz;
+        }
+        sample.clusters.push_back(cluster);
     }
     sample.cpuBigFreqMHz = readLong(cpuBigFreq_, v) ? static_cast<double>(v) / 1000.0 : kNoValue;
 }
@@ -412,6 +547,9 @@ void Sensors::readThermal(SensorSample& sample) {
     sample.cpuTempC = maxTempC(cpuTemps_);
     sample.gpuTempC = maxTempC(gpuTemps_);
     sample.ddrTempC = readLong(ddrTemp_, v) ? static_cast<double>(v) / 1000.0 : kNoValue;
+    sample.npuTempC = maxTempC(npuTemps_);
+    sample.cameraTempC = maxTempC(cameraTemps_);
+    sample.videoTempC = maxTempC(videoTemps_);
 }
 
 void Sensors::readThrottle(SensorSample& sample) {
@@ -438,15 +576,26 @@ std::string Sensors::describe() const {
     out << "\nGPU temps: " << gpuTemps_.size() << " zones";
     for (const auto& s : gpuTemps_) out << " " << s.name;
     out << "\nDDR temp: " << state(ddrTemp_);
-    out << "\nCPU clocks: " << cpuFreqs_.size() << " policies / big core " << state(cpuBigFreq_);
+    out << "\nNPU / camera / video temps: " << npuTemps_.size() << " / " << cameraTemps_.size() << " / "
+        << videoTemps_.size() << " zones";
+    out << "\nCPU clocks: " << cpuFreqs_.size() << " policies (clusters 0, 1, ... =";
+    for (const auto& s : cpuFreqs_) out << " " << s.name;
+    out << ") / big core " << state(cpuBigFreq_);
     out << "\nGPU clock: " << state(gpuFreq_);
     out << "\nPower: " << powers_.size() << " ch";
-    for (const auto& s : powers_) out << "\n  " << s.name << " -> " << s.path;
+    for (size_t i = 0; i < powers_.size(); ++i) {
+        out << "\n  " << powers_[i].name << " -> " << powers_[i].path << " + "
+            << (i < powerVolts_.size() ? state(powerVolts_[i]) : std::string("(not found)"));
+    }
     out << "\nFan: " << state(fan_);
     out << "\nBattery: " << state(batCapacity_);
     out << "\nCharger: " << state(chargerOnline_);
+    out << "\nUSB-C source: " << state(srcOnline_);
+    out << "\nUSB input (vadc): " << state(usbInV_) << " / " << state(usbInA_);
     out << "\nBoard temps (iio): " << state(displayTemp_) << " / " << state(exhaustTemp_) << " / "
-        << state(heatsinkTemp_);
+        << state(heatsinkTemp_) << " / " << state(wifiTemp_) << " / " << state(flashTemp_) << " / "
+        << state(nrfTemp_) << " / " << state(connectorTemp_);
+    out << "\nUptime: " << state(uptime_) << "  self: " << state(selfStatm_);
     out << "\nThermal limits: CPU " << cpuCooling_.size() << " devices";
     for (const auto& s : cpuCooling_) out << " " << s.name;
     out << " / GPU " << gpuCooling_.size() << " devices";

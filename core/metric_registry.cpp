@@ -11,9 +11,17 @@ using W = WidgetType;
 using S = SourceId;
 using T = WireType;
 
-// Read intervals for ticket 01 are upstream's effective ones, so the upstream panel looks the same.
-// Ticket 02 retunes them to the tech plan's source table.
 constexpr uint32_t kTick = 500;  // the 2 Hz metrics deadline
+
+// T02: system sensor intervals, from the tech plan's source table (headset agent › sources)
+constexpr uint32_t kCpuMs = 500;      // /proc/stat, cpufreq
+constexpr uint32_t kGpuMs = 1000;     // devfreq clock, DRM fdinfo busy
+constexpr uint32_t kRamMs = 2000;
+constexpr uint32_t kThermalMs = 2000;  // thermal zones, vadc board temps, throttle, fan
+constexpr uint32_t kPowerMs = 2000;    // max34417 updates every 1.5-2 s
+constexpr uint32_t kChargeMs = 2000;   // battery, charger, USB-PD
+constexpr uint32_t kUptimeMs = 1000;
+constexpr uint32_t kSelfMs = 2000;
 
 const std::vector<MetricDef> kRegistry = {
     // Frame
@@ -28,46 +36,101 @@ const std::vector<MetricDef> kRegistry = {
     {metric::kFrameThrottled, "frame.throttled", "", W::Frame, S::FrameTiming, kTick, T::Enum},
     {metric::kFrameCount, "frame.frames", "", W::Frame, S::FrameTiming, kTick, T::I32},
     // CPU
-    {metric::kCpuUsagePct, "cpu.usage_pct", "%", W::Cpu, S::CpuLoad, kTick, T::F32},
-    {metric::kCpuMaxCorePct, "cpu.max_core_pct", "%", W::Cpu, S::CpuLoad, kTick, T::F32},
-    {metric::kCpuFastestClockMhz, "cpu.fastest_clock_mhz", "MHz", W::Cpu, S::CpuClock, kTick, T::F32},
-    {metric::kCpuBigCoreClockMhz, "cpu.big_core_clock_mhz", "MHz", W::Cpu, S::CpuClock, kTick, T::F32},
+    {metric::kCpuUsagePct, "cpu.usage_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuMaxCorePct, "cpu.max_core_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuFastestClockMhz, "cpu.fastest_clock_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuBigCoreClockMhz, "cpu.big_core_clock_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCore0Pct + 0, "cpu.core0_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuCore0Pct + 1, "cpu.core1_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuCore0Pct + 2, "cpu.core2_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuCore0Pct + 3, "cpu.core3_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuCore0Pct + 4, "cpu.core4_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuCore0Pct + 5, "cpu.core5_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuCore0Pct + 6, "cpu.core6_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuCore0Pct + 7, "cpu.core7_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
+    {metric::kCpuCluster0Mhz + 0, "cpu.cluster0_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0Mhz + 1, "cpu.cluster1_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0Mhz + 2, "cpu.cluster2_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0Mhz + 3, "cpu.cluster3_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0MaxMhz + 0, "cpu.cluster0_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0MaxMhz + 1, "cpu.cluster1_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0MaxMhz + 2, "cpu.cluster2_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
+    {metric::kCpuCluster0MaxMhz + 3, "cpu.cluster3_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
     // GPU & RAM
-    {metric::kGpuBusyPct, "gpu.busy_pct", "%", W::GpuRam, S::GpuBusy, 2000, T::F32},
-    {metric::kGpuClockMhz, "gpu.clock_mhz", "MHz", W::GpuRam, S::GpuClock, kTick, T::F32},
-    {metric::kGpuMaxClockMhz, "gpu.max_clock_mhz", "MHz", W::GpuRam, S::GpuClock, kTick, T::F32},
-    {metric::kRamUsedGib, "ram.used_gib", "GiB", W::GpuRam, S::Ram, kTick, T::F32},
-    {metric::kRamTotalGib, "ram.total_gib", "GiB", W::GpuRam, S::Ram, kTick, T::F32},
-    // Power
-    {metric::kPowerVphW, "power.vph_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerAllChannelsW, "power.all_channels_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerApc0W, "power.apc0_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerApc1W, "power.apc1_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerApc2W, "power.apc2_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerGfxW, "power.gfx_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerNsp1W, "power.nsp1_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerNsp2W, "power.nsp2_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerS1cW, "power.s1c_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerS3cW, "power.s3c_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerS6cW, "power.s6c_w", "W", W::Power, S::Power, 2000, T::F32},
-    {metric::kPowerBobW, "power.bob_w", "W", W::Power, S::Power, 2000, T::F32},
+    {metric::kGpuBusyPct, "gpu.busy_pct", "%", W::GpuRam, S::GpuBusy, kGpuMs, T::F32},
+    {metric::kGpuClockMhz, "gpu.clock_mhz", "MHz", W::GpuRam, S::GpuClock, kGpuMs, T::F32},
+    {metric::kGpuMaxClockMhz, "gpu.max_clock_mhz", "MHz", W::GpuRam, S::GpuClock, kGpuMs, T::F32},
+    {metric::kRamUsedGib, "ram.used_gib", "GiB", W::GpuRam, S::Ram, kRamMs, T::F32},
+    {metric::kRamTotalGib, "ram.total_gib", "GiB", W::GpuRam, S::Ram, kRamMs, T::F32},
+    // Power. 401 (power.all_channels_w) is retired
+    {metric::kPowerVphW, "power.vph_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerRailsW, "power.rails_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerUnmeasuredW, "power.unmeasured_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerApc0W, "power.apc0_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerApc1W, "power.apc1_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerApc2W, "power.apc2_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerGfxW, "power.gfx_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerNsp1W, "power.nsp1_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerNsp2W, "power.nsp2_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerS1cW, "power.s1c_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerS3cW, "power.s3c_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerS6cW, "power.s6c_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerBobW, "power.bob_w", "W", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerVphV, "power.vph_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerApc0W + metric::kPowerRailVoltsOffset, "power.apc0_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerApc1W + metric::kPowerRailVoltsOffset, "power.apc1_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerApc2W + metric::kPowerRailVoltsOffset, "power.apc2_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerGfxW + metric::kPowerRailVoltsOffset, "power.gfx_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerNsp1W + metric::kPowerRailVoltsOffset, "power.nsp1_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerNsp2W + metric::kPowerRailVoltsOffset, "power.nsp2_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerS1cW + metric::kPowerRailVoltsOffset, "power.s1c_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerS3cW + metric::kPowerRailVoltsOffset, "power.s3c_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerS6cW + metric::kPowerRailVoltsOffset, "power.s6c_v", "V", W::Power, S::Power, kPowerMs, T::F32},
+    {metric::kPowerBobW + metric::kPowerRailVoltsOffset, "power.bob_v", "V", W::Power, S::Power, kPowerMs, T::F32},
     // Battery
-    {metric::kBatteryPct, "battery.pct", "%", W::Battery, S::Battery, 5000, T::F32},
-    {metric::kBatteryVoltageV, "battery.voltage_v", "V", W::Battery, S::Battery, 5000, T::F32},
-    {metric::kBatteryCurrentMa, "battery.current_ma", "mA", W::Battery, S::Battery, 5000, T::F32},
-    {metric::kBatteryStatus, "battery.status", "", W::Battery, S::Battery, 5000, T::Enum},
-    {metric::kBatteryChargerOnline, "battery.charger_online", "", W::Battery, S::Battery, 5000, T::Enum},
+    {metric::kBatteryPct, "battery.pct", "%", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryVoltageV, "battery.voltage_v", "V", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryCurrentMa, "battery.current_ma", "mA", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryStatus, "battery.status", "", W::Battery, S::Battery, kChargeMs, T::Enum},
+    {metric::kBatteryChargerOnline, "battery.charger_online", "", W::Battery, S::Battery, kChargeMs, T::Enum},
+    {metric::kBatteryChargeNowMah, "battery.charge_now_mah", "mAh", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryChargeFullMah, "battery.charge_full_mah", "mAh", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryChargeDesignMah, "battery.charge_design_mah", "mAh", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryPowerW, "battery.power_w", "W", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryTimeToFullS, "battery.time_to_full_s", "s", W::Battery, S::Battery, kChargeMs, T::I32},
+    {metric::kBatteryTimeToEmptyS, "battery.time_to_empty_s", "s", W::Battery, S::Battery, kChargeMs, T::I32},
+    {metric::kBatteryHealth, "battery.health", "", W::Battery, S::Battery, kChargeMs, T::ShortString},
+    {metric::kBatteryCycles, "battery.cycles", "", W::Battery, S::Battery, kChargeMs, T::I32},
+    {metric::kBatteryChargerMode, "battery.charger_mode", "", W::Battery, S::Battery, kChargeMs, T::ShortString},
+    {metric::kBatterySetCurrentA, "battery.set_current_a", "A", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatterySetCurrentMaxA, "battery.set_current_max_a", "A", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryUsbType, "battery.usb_type", "", W::Battery, S::Battery, kChargeMs, T::ShortString},
+    {metric::kBatteryPlugged, "battery.plugged", "", W::Battery, S::Battery, kChargeMs, T::Enum},
+    {metric::kBatteryPdOfferedV, "battery.pd_offered_v", "V", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryPdOfferedA, "battery.pd_offered_a", "A", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryPdOfferedW, "battery.pd_offered_w", "W", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryInputV, "battery.input_v", "V", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryInputA, "battery.input_a", "A", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatteryInputW, "battery.input_w", "W", W::Battery, S::Battery, kChargeMs, T::F32},
+    {metric::kBatterySagV, "battery.sag_v", "V", W::Battery, S::Battery, kChargeMs, T::F32},
     // Temp
-    {metric::kTempCpuC, "temp.cpu_c", "°C", W::Temp, S::Temps, kTick, T::F32},
-    {metric::kTempGpuC, "temp.gpu_c", "°C", W::Temp, S::Temps, kTick, T::F32},
-    {metric::kTempDdrC, "temp.ddr_c", "°C", W::Temp, S::Temps, kTick, T::F32},
-    {metric::kTempBatteryC, "temp.battery_c", "°C", W::Temp, S::Battery, 5000, T::F32},
-    {metric::kTempDisplayC, "temp.display_c", "°C", W::Temp, S::BoardTemps, 5000, T::F32},
-    {metric::kTempExhaustC, "temp.exhaust_c", "°C", W::Temp, S::BoardTemps, 5000, T::F32},
-    {metric::kTempHeatsinkC, "temp.heatsink_c", "°C", W::Temp, S::BoardTemps, 5000, T::F32},
-    {metric::kThrottleCpu, "temp.throttle_cpu", "", W::Temp, S::Throttle, kTick, T::Enum},
-    {metric::kThrottleGpu, "temp.throttle_gpu", "", W::Temp, S::Throttle, kTick, T::Enum},
-    {metric::kFanRpm, "temp.fan_rpm", "rpm", W::Temp, S::Fan, kTick, T::F32},
+    {metric::kTempCpuC, "temp.cpu_c", "°C", W::Temp, S::Temps, kThermalMs, T::F32},
+    {metric::kTempGpuC, "temp.gpu_c", "°C", W::Temp, S::Temps, kThermalMs, T::F32},
+    {metric::kTempDdrC, "temp.ddr_c", "°C", W::Temp, S::Temps, kThermalMs, T::F32},
+    {metric::kTempBatteryC, "temp.battery_c", "°C", W::Temp, S::Battery, kChargeMs, T::F32},
+    {metric::kTempDisplayC, "temp.display_c", "°C", W::Temp, S::BoardTemps, kThermalMs, T::F32},
+    {metric::kTempExhaustC, "temp.exhaust_c", "°C", W::Temp, S::BoardTemps, kThermalMs, T::F32},
+    {metric::kTempHeatsinkC, "temp.heatsink_c", "°C", W::Temp, S::BoardTemps, kThermalMs, T::F32},
+    {metric::kThrottleCpu, "temp.throttle_cpu", "", W::Temp, S::Throttle, kThermalMs, T::Enum},
+    {metric::kThrottleGpu, "temp.throttle_gpu", "", W::Temp, S::Throttle, kThermalMs, T::Enum},
+    {metric::kFanRpm, "temp.fan_rpm", "rpm", W::Temp, S::Fan, kThermalMs, T::F32},
+    {metric::kTempNpuC, "temp.npu_c", "°C", W::Temp, S::Temps, kThermalMs, T::F32},
+    {metric::kTempCameraC, "temp.camera_c", "°C", W::Temp, S::Temps, kThermalMs, T::F32},
+    {metric::kTempVideoC, "temp.video_c", "°C", W::Temp, S::Temps, kThermalMs, T::F32},
+    {metric::kTempWifiC, "temp.wifi_c", "°C", W::Temp, S::BoardTemps, kThermalMs, T::F32},
+    {metric::kTempFlashC, "temp.flash_c", "°C", W::Temp, S::BoardTemps, kThermalMs, T::F32},
+    {metric::kTempNrfC, "temp.nrf_c", "°C", W::Temp, S::BoardTemps, kThermalMs, T::F32},
+    {metric::kTempConnectorC, "temp.connector_c", "°C", W::Temp, S::BoardTemps, kThermalMs, T::F32},
     // Network
     {metric::kNetInterfaceUp, "net.interface_up", "", W::Network, S::Network, 2000, T::Enum},
     {metric::kNetConnected, "net.connected", "", W::Network, S::Network, 2000, T::Enum},
@@ -75,14 +138,73 @@ const std::vector<MetricDef> kRegistry = {
     {metric::kNetSignalDbm, "net.signal_dbm", "dBm", W::Network, S::Network, 2000, T::F32},
     {metric::kNetTxLinkMbps, "net.tx_link_mbps", "Mbps", W::Network, S::Network, 2000, T::F32},
     {metric::kNetRxLinkMbps, "net.rx_link_mbps", "Mbps", W::Network, S::Network, 2000, T::F32},
-    {metric::kNetRxMbps, "net.rx_mbps", "Mbps", W::Network, S::Network, 2000, T::F32},
-    {metric::kNetTxMbps, "net.tx_mbps", "Mbps", W::Network, S::Network, 2000, T::F32},
+    // T03: byte counters every 1 s, the radio (nl80211, IP) every 2 s inside the same read
+    {metric::kNetRxMbps, "net.rx_mbps", "Mbps", W::Network, S::Network, 1000, T::F32},
+    {metric::kNetTxMbps, "net.tx_mbps", "Mbps", W::Network, S::Network, 1000, T::F32},
+    // T03: Network per adapter (one block each, see kNetAdapter* offsets)
+    {metric::kNetDongleBase + metric::kNetAdapterPresent, "net.dongle.present", "", W::Network, S::Network, 2000, T::Enum},
+    {metric::kNetDongleBase + metric::kNetAdapterConnected, "net.dongle.connected", "", W::Network, S::Network, 2000, T::Enum},
+    {metric::kNetDongleBase + metric::kNetAdapterRxMbps, "net.dongle.rx_mbps", "Mbps", W::Network, S::Network, 1000, T::F32},
+    {metric::kNetDongleBase + metric::kNetAdapterTxMbps, "net.dongle.tx_mbps", "Mbps", W::Network, S::Network, 1000, T::F32},
+    {metric::kNetDongleBase + metric::kNetAdapterTxLinkMbps, "net.dongle.tx_link_mbps", "Mbps", W::Network, S::Network, 2000, T::F32},
+    {metric::kNetDongleBase + metric::kNetAdapterRxLinkMbps, "net.dongle.rx_link_mbps", "Mbps", W::Network, S::Network, 2000, T::F32},
+    {metric::kNetDongleBase + metric::kNetAdapterSignalDbm, "net.dongle.signal_dbm", "dBm", W::Network, S::Network, 2000, T::F32},
+    {metric::kNetDongleBase + metric::kNetAdapterIp, "net.dongle.ip", "", W::Network, S::Network, 2000, T::ShortString},
+    {metric::kNetDongleBase + metric::kNetAdapterFreqMhz, "net.dongle.freq_mhz", "MHz", W::Network, S::Network, 2000, T::I32},
+    {metric::kNetDongleBase + metric::kNetAdapterChannel, "net.dongle.channel", "", W::Network, S::Network, 2000, T::I32},
+    {metric::kNetDongleBase + metric::kNetAdapterWidthMhz, "net.dongle.width_mhz", "MHz", W::Network, S::Network, 2000, T::I32},
+    {metric::kNetDongleBase + metric::kNetAdapterBand, "net.dongle.band", "", W::Network, S::Network, 2000, T::Enum},
+    {metric::kNetDongleBase + metric::kNetAdapterIfName, "net.dongle.ifname", "", W::Network, S::Network, 2000, T::ShortString},
+    {metric::kNetHomeBase + metric::kNetAdapterPresent, "net.home.present", "", W::Network, S::Network, 2000, T::Enum},
+    {metric::kNetHomeBase + metric::kNetAdapterConnected, "net.home.connected", "", W::Network, S::Network, 2000, T::Enum},
+    {metric::kNetHomeBase + metric::kNetAdapterRxMbps, "net.home.rx_mbps", "Mbps", W::Network, S::Network, 1000, T::F32},
+    {metric::kNetHomeBase + metric::kNetAdapterTxMbps, "net.home.tx_mbps", "Mbps", W::Network, S::Network, 1000, T::F32},
+    {metric::kNetHomeBase + metric::kNetAdapterTxLinkMbps, "net.home.tx_link_mbps", "Mbps", W::Network, S::Network, 2000, T::F32},
+    {metric::kNetHomeBase + metric::kNetAdapterRxLinkMbps, "net.home.rx_link_mbps", "Mbps", W::Network, S::Network, 2000, T::F32},
+    {metric::kNetHomeBase + metric::kNetAdapterSignalDbm, "net.home.signal_dbm", "dBm", W::Network, S::Network, 2000, T::F32},
+    {metric::kNetHomeBase + metric::kNetAdapterIp, "net.home.ip", "", W::Network, S::Network, 2000, T::ShortString},
+    {metric::kNetHomeBase + metric::kNetAdapterFreqMhz, "net.home.freq_mhz", "MHz", W::Network, S::Network, 2000, T::I32},
+    {metric::kNetHomeBase + metric::kNetAdapterChannel, "net.home.channel", "", W::Network, S::Network, 2000, T::I32},
+    {metric::kNetHomeBase + metric::kNetAdapterWidthMhz, "net.home.width_mhz", "MHz", W::Network, S::Network, 2000, T::I32},
+    {metric::kNetHomeBase + metric::kNetAdapterBand, "net.home.band", "", W::Network, S::Network, 2000, T::Enum},
+    {metric::kNetHomeBase + metric::kNetAdapterIfName, "net.home.ifname", "", W::Network, S::Network, 2000, T::ShortString},
+    // T03: CPU / RAM usage items (one /proc scan feeds both)
+    {metric::kProcScanned, "cpu_items.scanned", "", W::CpuItems, S::Processes, 1000, T::I32},
+    {metric::kProcVanished, "cpu_items.vanished", "", W::CpuItems, S::Processes, 1000, T::I32},
+    {metric::kProcScanMs, "cpu_items.scan_ms", "ms", W::CpuItems, S::Processes, 1000, T::F32},
+    {metric::kCpuItemsRows, "cpu_items.rows", "", W::CpuItems, S::Processes, 1000, T::I32},
+    {metric::kRamItemsRows, "ram_items.rows", "", W::RamItems, S::Processes, 1000, T::I32},
+    // T03: Streaming, headset side
+    {metric::kStreamLinkMode, "streaming.link_mode", "", W::Streaming, S::StreamLink, 1000, T::Enum},
+    {metric::kStreamVrlinkRunning, "streaming.vrlink_running", "", W::Streaming, S::StreamLink, 1000, T::Enum},
+    {metric::kStreamDongleSharePct, "streaming.dongle_share_pct", "%", W::Streaming, S::StreamLink, 1000, T::F32},
+    {metric::kStreamFecRetries, "streaming.fec_retries", "", W::Streaming, S::StreamEvents, 1000, T::I32},
+    {metric::kStreamFecRetryPackets, "streaming.fec_retry_packets", "", W::Streaming, S::StreamEvents, 1000, T::I32},
+    {metric::kStreamFramesDropped, "streaming.frames_dropped", "", W::Streaming, S::StreamEvents, 1000, T::I32},
+    {metric::kStreamLateMetadata, "streaming.late_metadata", "", W::Streaming, S::StreamEvents, 1000, T::I32},
+    {metric::kStreamAborts, "streaming.stream_aborts", "", W::Streaming, S::StreamEvents, 1000, T::I32},
+    {metric::kStreamUnrecoverable, "streaming.unrecoverable", "", W::Streaming, S::StreamEvents, 1000, T::I32},
+    {metric::kStreamLogOmitted, "streaming.log_omitted", "", W::Streaming, S::StreamEvents, 1000, T::I32},
     // General
     {metric::kCtrlLeftPct, "general.controller_left_pct", "%", W::General, S::Controllers, 10000, T::F32},
     {metric::kCtrlLeftCharging, "general.controller_left_charging", "", W::General, S::Controllers, 10000, T::Enum},
     {metric::kCtrlRightPct, "general.controller_right_pct", "%", W::General, S::Controllers, 10000, T::F32},
     {metric::kCtrlRightCharging, "general.controller_right_charging", "", W::General, S::Controllers, 10000,
      T::Enum},
+    // T03: current game / session. The scheduler re-queries every 5 s as a safety net; connect and
+    // VREvent_SceneApplicationChanged update them at once, whatever the demand
+    {metric::kSceneAppKey, "general.app_key", "", W::General, S::SceneApp, 5000, T::ShortString},
+    {metric::kSceneAppName, "general.app_name", "", W::General, S::SceneApp, 5000, T::ShortString},
+    {metric::kScenePid, "general.scene_pid", "", W::General, S::SceneApp, 5000, T::I32},
+    {metric::kSessionId, "general.session_id", "", W::General, S::SceneApp, 5000, T::I32},
+    {metric::kSessionStartUnix, "general.session_start_unix", "s", W::General, S::SceneApp, 5000, T::I32},
+    {metric::kStreamAppHint, "general.stream_app_hint", "", W::General, S::SceneApp, 5000, T::ShortString},
+    // T02: uptime, clock, own cost
+    {metric::kUptimeS, "general.uptime_s", "s", W::General, S::Uptime, kUptimeMs, T::I32},
+    {metric::kClock, "general.clock", "", W::General, S::Uptime, kUptimeMs, T::ShortString},
+    {metric::kSelfCpuPct, "general.self_cpu_pct", "%", W::General, S::SelfCost, kSelfMs, T::F32},
+    {metric::kSelfRssMib, "general.self_rss_mib", "MiB", W::General, S::SelfCost, kSelfMs, T::F32},
+    {metric::kSelfPowerW, "general.self_power_est_w", "W", W::General, S::SelfCost, kSelfMs, T::F32},
 };
 
 }  // namespace
@@ -171,6 +293,12 @@ const char* sourceName(SourceId source) {
         case SourceId::Network: return "network";
         case SourceId::FrameTiming: return "frame_timing";
         case SourceId::Controllers: return "controllers";
+        case SourceId::Processes: return "processes";
+        case SourceId::SceneApp: return "scene_app";
+        case SourceId::StreamLink: return "stream_link";
+        case SourceId::StreamEvents: return "stream_events";
+        case SourceId::Uptime: return "uptime";
+        case SourceId::SelfCost: return "self_cost";
         case SourceId::Count: break;
     }
     return "unknown";

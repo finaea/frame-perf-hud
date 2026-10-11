@@ -7,9 +7,14 @@
 
 #include "history.h"
 #include "metric_store.h"
+#include "process_scan.h"   // T03
 #include "scheduler.h"
 #include "sensors.h"
+#include "session_tracker.h"  // T03
+#include "stream_link.h"    // T03
+#include "wifi_link.h"      // T03
 
+#include <string>
 #include <vector>
 
 class VrOverlay;
@@ -36,6 +41,27 @@ public:
     /** The widgets the upstream panel shows. Ticket 04 replaces this with the saved layout. */
     static std::vector<fph::WidgetType> upstreamPanelWidgets();
 
+    // ---- T03 ----
+
+    /**
+     * Re-queries the scene app and updates the session metrics (1104-1108). Call on (re)connect and on
+     * VREvent_SceneApplicationChanged: it runs whatever the demand, since the session identity is
+     * bookkeeping for the link and the logs (2 IPCs), not a widget read.
+     * @param now monotonic seconds
+     */
+    void refreshSceneApp(double now);
+
+    /** @return the process lists from the last scan (widgets 7 / 8; BLOBs on the link in ticket 06) */
+    const ProcessLists& processLists() const { return processes_.lists(); }
+    /** Sets list sizes and "sum same name" (ticket 04 wires the widget settings); used from the next scan. */
+    void setProcessListOptions(const ProcessListOptions& options) { processOptions_ = options; }
+
+    /** @return the current headset session */
+    const fph::SessionInfo& session() const { return session_.current(); }
+
+    /** @return the process lists and the session, for the debug dump */
+    std::string debugText() const;
+
 private:
     Sensors& sensors_;
     VrOverlay* vr_;
@@ -43,4 +69,21 @@ private:
 
     void readFrameTiming(double now);
     void readControllers(double now);
+
+    // T03
+    WifiLink wifi_;
+    ProcessScanner processes_;
+    ProcessListOptions processOptions_;
+    InterfaceCounters streamDongle_;  ///< own baselines: Network's would be reset by the same tick
+    InterfaceCounters streamHome_;
+    VrlinkWatch vrlink_;
+    VrlinkJournal journal_;
+    std::string journalError_;  ///< last journal error logged (logged once per change)
+    fph::SessionTracker session_;
+    std::string streamHint_;  ///< vrlink's -A as "steam.app.<id>" while PC-streaming
+
+    void readNetwork(double now, bool resumed);
+    void readProcesses(double now, bool resumed);
+    void readStreamLink(double now, bool resumed);
+    void readStreamEvents(double now);
 };

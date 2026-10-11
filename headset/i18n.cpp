@@ -10,7 +10,7 @@ namespace {
 const UiText kEnglish = {
     // Performance panel
     "Frame", "Measuring", "No SteamVR", "Reproj ", "Drop ",
-    "Power", "All ch ", "Fan ",
+    "Power", "Unmeasured ", "Fan ",
     "Temp", "°C CPU", "°C", "Batt ", "Disp ", "Exh ", "Sink ",
     " (max core ", ")",
     "Link", "Wi-Fi", "Not connected", "Rate ",

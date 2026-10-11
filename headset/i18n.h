@@ -24,7 +24,7 @@ struct UiText {
     const char* reproj;         ///< 再投影（後ろに % が続く）
     const char* dropped;        ///< 落ちたフレーム（後ろに数が続く）
     const char* power;          ///< 電力の段の見出し
-    const char* allChannels;    ///< 全チャンネルの合計（後ろに W が続く）
+    const char* unmeasured;     ///< vph minus the measured rails (followed by W). Never the all-channels sum
     const char* fan;            ///< ファン
     const char* temp;           ///< 温度の段の見出し
     const char* cpuTempUnit;    ///< 大きい CPU 温度の単位（℃ CPU）

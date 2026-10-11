@@ -39,6 +39,14 @@ struct VrEvents {
     bool quit = false;                  ///< SteamVR から終了を求められた（VREvent_Quit。SteamVR 自体が終わる）
     bool closeRequested = false;        ///< ダッシュボードのアイコンの「閉じる」が押された（VREvent_OverlayClosed）
     std::vector<PointerInput> pointer;  ///< 設定パネルへの操作（届いた順）
+    bool sceneAppChanged = false;       ///< VREvent_SceneApplicationChanged arrived: re-query the scene app
+};
+
+/** The app drawing the scene (IVRApplications). */
+struct SceneApp {
+    uint32_t pid = 0;     ///< 0 = none (the compositor is showing)
+    std::string key;      ///< GetApplicationKeyByProcessId, or "process.<comm>" for a process with no app key
+    std::string name;     ///< VRApplicationProperty_Name_String, may be empty
 };
 
 /**
@@ -182,6 +190,14 @@ public:
      * @return 左右の電池。つながっていない側は present = false
      */
     ControllerStatus readControllers();
+
+    /**
+     * Reads the current scene app (GetCurrentSceneProcessId, then GetApplicationKeyByProcessId and the name).
+     * Works in the read-only (Background) connection too.
+     * @param app the result
+     * @return false when not connected
+     */
+    bool readSceneApp(SceneApp& app) const;
 
     /**
      * 診断用: 新しく届いたフレームの生のタイミング（フレーム番号・表示回数・再投影の印など）を

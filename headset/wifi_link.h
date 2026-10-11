@@ -1,6 +1,7 @@
-// 無線の状態: Steam Link の直通回線（Frame が AP になるインターフェース）と、家の Wi-Fi（Frame が子機になる
-// インターフェース）。nl80211 を libnl で直接読む（iw は起動しない）。インターフェースは名前ではなく
-// nl80211 の種類（AP / 子機）で見分ける。MAC アドレスと SSID は取り出さない。
+// Wireless state of both links: the Steam Link dongle (the interface where the Frame is an AP, `wlanap`) and
+// home Wi-Fi (the interface where the Frame is a station, `wlan0`). nl80211 is read directly with libnl
+// (no `iw` process). Interfaces are told apart by nl80211 type (AP / station), not by name. MAC addresses
+// and SSIDs are never read out.
 #pragma once
 
 #include <string>
@@ -8,24 +9,123 @@
 struct nl_sock;
 
 /**
- * 無線の読み取り結果。値が取れないときは NaN。
- * 直通回線に相手がいればそちら、いなければ家の Wi-Fi の接続先（AP）の値を入れる。
+ * Upstream's single combined link (the upstream panel's Wi-Fi line). NaN where there's no value.
+ * The dongle if it has a peer, otherwise the home Wi-Fi access point.
  */
 struct WifiInfo {
-    bool interfaceUp = false;   ///< 直通回線か家の Wi-Fi のインターフェースがある
-    bool connected = false;     ///< どちらかでつながっている
-    bool homeWifi = false;      ///< true なら家の Wi-Fi（子機として AP につながっている）、false なら直通回線
-    double signalDbm;           ///< 電波の強さ（dBm。直通は avg ack signal、家の Wi-Fi は signal）
-    double txLinkMbps;          ///< Frame → 相手（PC / AP）のリンク速度
-    double rxLinkMbps;          ///< 相手 → Frame のリンク速度
-    double rxMbps;              ///< 実際に受け取っている量（相手 → Frame、映像はこちら）
-    double txMbps;              ///< 実際に送っている量（Frame → 相手）
+    bool interfaceUp = false;   ///< the dongle AP or a home Wi-Fi station interface exists
+    bool connected = false;     ///< one of them has a peer
+    bool homeWifi = false;      ///< true = home Wi-Fi, false = dongle
+    double signalDbm;           ///< dBm (dongle: ack signal; home Wi-Fi: signal)
+    double txLinkMbps;          ///< PHY rate Frame → peer (PC / AP)
+    double rxLinkMbps;          ///< PHY rate peer → Frame
+    double rxMbps;              ///< actually received (peer → Frame; the video goes this way)
+    double txMbps;              ///< actually sent
 
     WifiInfo();
 };
 
+/** One interface (widget 9 instance). NaN / 0 / empty where there's no value. */
+struct AdapterInfo {
+    bool present = false;    ///< the interface exists
+    bool connected = false;  ///< it has a peer (a station on the AP, or the access point we're on)
+    std::string ifName;
+    std::string ip;          ///< first IPv4 address, empty if none
+    double rxMbps;           ///< from /sys/class/net/<if>/statistics, NaN on the first read
+    double txMbps;
+    double txLinkMbps;
+    double rxLinkMbps;
+    double signalDbm;
+    int freqMhz = 0;   ///< control channel; 0 = unknown
+    int widthMhz = 0;  ///< 0 = unknown
+
+    AdapterInfo();
+};
+
+/** Both interfaces from one read. */
+struct WifiAdapters {
+    AdapterInfo dongle;  ///< nl80211 type AP
+    AdapterInfo home;    ///< nl80211 type station
+};
+
+/** Signal readings of one station, NaN where nl80211 didn't send the attribute. */
+struct SignalReadings {
+    double signal;           ///< NL80211_STA_INFO_SIGNAL (iw "signal")
+    double signalAvg;        ///< NL80211_STA_INFO_SIGNAL_AVG ("signal avg")
+    double beaconSignalAvg;  ///< NL80211_STA_INFO_BEACON_SIGNAL_AVG ("beacon signal avg")
+    double ackSignal;        ///< NL80211_STA_INFO_ACK_SIGNAL ("last ack signal")
+    double ackSignalAvg;     ///< NL80211_STA_INFO_ACK_SIGNAL_AVG ("avg ack signal")
+
+    SignalReadings();
+};
+
 /**
- * nl80211 のソケットを 1 本持ち続けて、インターフェースとステーションの情報を問い合わせる。書き込み（設定変更）はしない。
+ * Picks one signal value. 0 dBm counts as "not measured" and is skipped.
+ * - AP side (dongle): `signal` reads 0 dBm on the Frame, so avg ack signal, then last ack signal, then the rest.
+ * - Station side (home Wi-Fi): `signal`, like the OS shows it, then beacon avg, signal avg, avg ack signal.
+ *   On the Frame: signal −49, beacon avg −48, avg ack −59, signal avg 0.
+ * @param r the readings
+ * @param managed true for the station side
+ * @return dBm, NaN if none is usable
+ */
+double chooseSignalDbm(const SignalReadings& r, bool managed);
+
+/** @return the channel number for a frequency (2.4 / 5 / 6 / 60 GHz), 0 if unknown */
+int channelFromFreq(int freqMhz);
+
+/**
+ * @return the band for a frequency, as an fph::WifiBand value (core/metric_registry.h): 0 unknown, 1 2.4 GHz,
+ *         2 5 GHz, 3 6 GHz, 4 60 GHz. A plain number so this file needs nothing from core/.
+ */
+unsigned bandFromFreq(int freqMhz);
+
+/**
+ * @param nl80211Width an enum nl80211_chan_width value
+ * @return the width in MHz, 0 if unknown
+ */
+int widthMhzFromNl80211(unsigned nl80211Width);
+
+/** @return upstream's combined link: the dongle if it has a peer, else home Wi-Fi */
+WifiInfo combineAdapters(const WifiAdapters& adapters);
+
+/**
+ * Byte counters of one interface → Mbps since the previous call. Keeps its files open.
+ */
+class InterfaceCounters {
+public:
+    InterfaceCounters();
+    ~InterfaceCounters();
+    InterfaceCounters(const InterfaceCounters&) = delete;
+    InterfaceCounters& operator=(const InterfaceCounters&) = delete;
+
+    /**
+     * Reads rx_bytes / tx_bytes. A changed name reopens the files and restarts the delta.
+     * @param name interface name (empty: nothing to read, rates go NaN)
+     * @param now monotonic seconds
+     */
+    void update(const std::string& name, double now);
+
+    /** Starts a fresh delta (after a pause): the next update gives NaN. */
+    void reset();
+
+    double rxMbps() const { return rxMbps_; }
+    double txMbps() const { return txMbps_; }
+
+private:
+    std::string name_;
+    int rxFd_ = -1;
+    int txFd_ = -1;
+    double lastTime_ = -1.0;
+    unsigned long long lastRx_ = 0;
+    unsigned long long lastTx_ = 0;
+    double rxMbps_;
+    double txMbps_;
+
+    void close();
+};
+
+/**
+ * Holds one nl80211 socket and queries interfaces and stations. Never writes (no settings changes).
  */
 class WifiLink {
 public:
@@ -35,81 +135,40 @@ public:
     WifiLink& operator=(const WifiLink&) = delete;
 
     /**
-     * 直通回線、なければ家の Wi-Fi のステーションの情報と、流れている量（前回からの差分）を読む。
-     * @param now 現在時刻（秒、単調増加）
-     * @return 読み取り結果
+     * Reads both interfaces. Byte counters every call; the radio side (nl80211 interfaces + stations,
+     * IP addresses) at most every kRadioIntervalSec, cached in between, or at once if an interface vanished.
+     * @param now monotonic seconds
+     * @return both adapters
      */
-    WifiInfo read(double now);
+    WifiAdapters readAdapters(double now);
+
+    /** Starts fresh byte-counter deltas (after a pause). */
+    void resetCounters();
+
+    /** @return the dongle / home interface name found by the last radio read ("" before the first, or if none) */
+    const std::string& dongleName() const { return radio_.dongle.ifName; }
+    const std::string& homeName() const { return radio_.home.ifName; }
+
+    /**
+     * Upstream's combined read (kept for Sensors::readWifi).
+     * @param now monotonic seconds
+     */
+    WifiInfo read(double now) { return combineAdapters(readAdapters(now)); }
+
+    /** The radio side is re-read at most this often (seconds). Just under 2 s, so a 2 s cadence never skips. */
+    static constexpr double kRadioIntervalSec = 1.9;
 
 private:
-    /** 1 つのインターフェースの statistics の読み取りと、前回の値。 */
-    struct Counters {
-        std::string name;  ///< インターフェース名（変わったら開き直す）
-        int rxFd = -1;
-        int txFd = -1;
-        double lastTime = -1.0;
-        unsigned long long lastRx = 0;
-        unsigned long long lastTx = 0;
-        double rxMbps;
-        double txMbps;
-
-        Counters();
-    };
-
-    /** nl80211 の種類で見つけたインターフェース。 */
-    struct Interface {
-        unsigned ifindex = 0;  ///< 0 なら無い
-        std::string name;
-    };
-
     nl_sock* socket_ = nullptr;
     int family_ = -1;
-    double lastDiscover_ = -1.0;  ///< 最後にインターフェースを探した時刻
-    Interface ap_;                ///< 直通回線（AP）
-    Interface station_;           ///< 家の Wi-Fi（子機）
-    Counters apCounters_;
-    Counters stationCounters_;
+    double lastRadio_ = -1.0;
+    unsigned apIndex_ = 0;       ///< 0 = none
+    unsigned stationIndex_ = 0;  ///< 0 = none
+    WifiAdapters radio_;         ///< last radio read (rates not filled in)
+    InterfaceCounters apCounters_;
+    InterfaceCounters stationCounters_;
 
-    /**
-     * nl80211 のソケットを用意する（失敗したら次の read で作り直す）。
-     * @return 使えるなら true
-     */
     bool ensureSocket();
-
-    /**
-     * nl80211 のインターフェースの一覧（GET_INTERFACE のダンプ）から、AP と子機を 1 つずつ探す。
-     */
-    void discoverInterfaces();
-
-    /**
-     * nl80211 のメッセージを送って、返事を callback で受け取る。失敗したらソケットを作り直す印を付ける。
-     * @param command NL80211_CMD_*
-     * @param ifindex 0 でなければ NL80211_ATTR_IFINDEX に入れる
-     * @param callback 1 件ごとに呼ばれる
-     * @param arg callback に渡す
-     * @return 送って受け取れたら true
-     */
     bool dump(int command, unsigned ifindex, int (*callback)(struct nl_msg*, void*), void* arg);
-
-    /**
-     * statistics のバイト数を読んで、前回からの流量を計算する。
-     * @param counters 書き換える読み取りの状態
-     * @param name インターフェース名（空なら何もしない）
-     * @param now 現在時刻（秒）
-     */
-    static void updateCounters(Counters& counters, const std::string& name, double now);
-
-    /**
-     * statistics の数値ファイルを先頭から読み直す。
-     * @param fd 開いてあるファイル
-     * @param value 書き込み先
-     * @return 読めたら true
-     */
-    static bool readCounter(int fd, unsigned long long& value);
-
-    /**
-     * statistics のファイルを閉じて、流量の計算をやり直しにする。
-     * @param counters 書き換える読み取りの状態
-     */
-    static void closeCounters(Counters& counters);
+    void readRadio();
 };

@@ -14,6 +14,7 @@ add_library(fph-core STATIC
   core/metric_registry.cpp
   core/metric_store.cpp
   core/scheduler.cpp
+  core/session_tracker.cpp  # T03
 )
 target_include_directories(fph-core PUBLIC core)
 target_compile_options(fph-core PRIVATE -Wall -Wextra)
@@ -30,6 +31,7 @@ if(FPH_BUILD_HEADSET)
   pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
   pkg_check_modules(VULKAN REQUIRED IMPORTED_TARGET vulkan)
   pkg_check_modules(LIBNL REQUIRED IMPORTED_TARGET libnl-genl-3.0)
+  pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)  # T03: sd_journal for vrlink's events
 
   add_executable(frame-perf-hud
     headset/main.cpp
@@ -39,6 +41,8 @@ if(FPH_BUILD_HEADSET)
     headset/config.cpp
     headset/json.cpp
     headset/sensors.cpp
+    headset/sensor_math.cpp     # T02
+    headset/system_metrics.cpp  # T02
     headset/panel.cpp
     headset/vr_overlay.cpp
     headset/vk_texture.cpp
@@ -46,6 +50,9 @@ if(FPH_BUILD_HEADSET)
     headset/settings_panel.cpp
     headset/gpu_usage.cpp
     headset/wifi_link.cpp
+    headset/process_scan.cpp  # T03
+    headset/stream_link.cpp   # T03
+    headset/dump_metrics.cpp  # T03
     headset/i18n.cpp
     headset/autostart.cpp
     headset/theme.cpp
@@ -62,6 +69,7 @@ if(FPH_BUILD_HEADSET)
     PkgConfig::FREETYPE
     PkgConfig::VULKAN
     PkgConfig::LIBNL
+    PkgConfig::SYSTEMD
     "${OPENVR_LIB_DIR}/libopenvr_api.so"
   )
   # Use SteamVR's library at run time too. Only INSTALL_RPATH, from the build on: a build RPATH ends in an
@@ -88,6 +96,16 @@ if(BUILD_TESTING)
   target_compile_options(core-scheduler-test PRIVATE -Wall -Wextra)
   add_test(NAME core-scheduler COMMAND core-scheduler-test)
 
+  add_executable(core-session-test tests/core_session_test.cpp)
+  target_link_libraries(core-session-test PRIVATE fph-core)
+  target_compile_options(core-session-test PRIVATE -Wall -Wextra)
+  add_test(NAME core-session COMMAND core-session-test)
+
+  add_executable(core-processes-demand-test tests/core_processes_demand_test.cpp)
+  target_link_libraries(core-processes-demand-test PRIVATE fph-core)
+  target_compile_options(core-processes-demand-test PRIVATE -Wall -Wextra)
+  add_test(NAME core-processes-demand COMMAND core-processes-demand-test)
+
   if(FPH_BUILD_HEADSET)
     # Upstream's tests: wrist placement maths, clock, config file, panel height, settings panel hit-testing
     add_executable(wrist-clock-test
@@ -108,5 +126,37 @@ if(BUILD_TESTING)
     target_compile_options(wrist-clock-test PRIVATE -Wall -Wextra)
     target_link_libraries(wrist-clock-test PRIVATE PkgConfig::CAIRO PkgConfig::FREETYPE PkgConfig::LIBNL)
     add_test(NAME wrist-clock COMMAND wrist-clock-test)
+
+    # System sensor parsing/derivations: pure, fed from tests/fixtures/sensors
+    add_executable(sensor-math-test tests/sensor_math_test.cpp headset/sensor_math.cpp)
+    target_include_directories(sensor-math-test PRIVATE headset)
+    target_compile_options(sensor-math-test PRIVATE -Wall -Wextra)
+    add_test(NAME sensor-math COMMAND sensor-math-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sensors)
+
+    # System sensors end to end: fake /sys + /proc tree built at run time, Sensors + scheduler + metric store
+    add_executable(system-sources-test
+      tests/system_sources_test.cpp
+      headset/sensors.cpp
+      headset/sensor_math.cpp
+      headset/system_metrics.cpp
+      headset/gpu_usage.cpp
+      headset/wifi_link.cpp
+    )
+    target_include_directories(system-sources-test PRIVATE headset core)
+    target_compile_options(system-sources-test PRIVATE -Wall -Wextra)
+    target_link_libraries(system-sources-test PRIVATE fph-core PkgConfig::LIBNL)
+    add_test(NAME system-sources COMMAND system-sources-test)
+
+    # T03 sources: /proc scan (fixture trees), Wi-Fi helpers, stream link + vrlink lines
+    add_executable(t03-sources-test
+      tests/t03_sources_test.cpp
+      headset/process_scan.cpp
+      headset/stream_link.cpp
+      headset/wifi_link.cpp
+    )
+    target_include_directories(t03-sources-test PRIVATE headset)
+    target_compile_options(t03-sources-test PRIVATE -Wall -Wextra)
+    target_link_libraries(t03-sources-test PRIVATE PkgConfig::LIBNL PkgConfig::SYSTEMD)
+    add_test(NAME t03-sources COMMAND t03-sources-test)
   endif()
 endif()
