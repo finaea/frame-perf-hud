@@ -175,6 +175,14 @@ if(BUILD_TESTING)
       FPH_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts")
     target_compile_options(render-grid-test PRIVATE -Wall -Wextra)
     add_test(NAME render-grid COMMAND render-grid-test)
+
+    # T07: the Network widget's kbps / Mbps text
+    add_executable(render-rate-text-test tests/render_rate_text_test.cpp)
+    target_link_libraries(render-rate-text-test PRIVATE fph-render)
+    if(NOT MSVC)
+      target_compile_options(render-rate-text-test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME render-rate-text COMMAND render-rate-text-test)
   endif()
 
   if(FPH_BUILD_HEADSET)
@@ -291,4 +299,10 @@ if(BUILD_TESTING)
     target_link_libraries(link-server-test PRIVATE fph-core)
     add_test(NAME link-server COMMAND link-server-test)
   endif()
+endif()
+
+# T07: the Windows app (pc/). Build it with pc\build.cmd (MSVC + the vcpkg manifest in pc/, x64-windows-static).
+option(FPH_BUILD_PC "Build the Windows app in pc/ (needs vcpkg's cairo + freetype; see pc\\build.cmd)" OFF)
+if(WIN32 AND FPH_BUILD_PC)
+  add_subdirectory(pc)
 endif()

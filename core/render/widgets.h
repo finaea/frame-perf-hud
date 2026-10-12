@@ -50,6 +50,19 @@ struct WidgetHistory {
     History b;  ///< second series (GPU °C)
 };
 
+/** A throughput as text, value and unit apart so they can be styled differently. */
+struct RateText {
+    std::string value;  ///< "24", "4.6", "123", "--"
+    std::string unit;   ///< " kbps" / " Mbps" (leading space)
+};
+
+/**
+ * Network ↓/↑ text: below 1 Mbps whole kbps ("24 kbps", "0 kbps"), else Mbps with one decimal ("1.0", "4.6"),
+ * whole from 100 Mbps. NaN (N/A) gives "--". Anything that rounds to 1000 kbps already reads "1.0 Mbps".
+ * @param mbps megabits per second
+ */
+RateText formatRate(double mbps);
+
 /**
  * Natural height of a widget's card (px). Fixed per type + settings, so the grid only moves on layout changes.
  * @param w the instance

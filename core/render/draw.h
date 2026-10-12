@@ -31,6 +31,13 @@ public:
      */
     void load(const std::string& regularPath, const std::string& boldPath);
 
+    /**
+     * T07: loads both fonts from memory (the PC app's embedded TTFs; FreeType's path loader can't open non-ASCII
+     * Windows paths). The bytes must outlive this FontSet. Falls back like load().
+     * @return true if both came from the given bytes
+     */
+    bool loadFromMemory(const unsigned char* regular, size_t regularSize, const unsigned char* bold, size_t boldSize);
+
     /** @return 本文用フォント */
     cairo_font_face_t* regular() const { return regular_; }
     /** @return 太字用フォント */

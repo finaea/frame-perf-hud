@@ -49,6 +49,33 @@ cairo_font_face_t* FontSet::createFace(const std::string& path, bool bold) {
                                       bold ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
 }
 
+bool FontSet::loadFromMemory(const unsigned char* regular, size_t regularSize, const unsigned char* bold,
+                             size_t boldSize) {
+    release();
+    regularPath_.clear();
+    boldPath_.clear();
+    bool ok = true;
+    const auto make = [&](const unsigned char* data, size_t size, bool isBold) -> cairo_font_face_t* {
+        FT_Face face = nullptr;
+        if (ftLibrary_ != nullptr && data != nullptr &&
+            FT_New_Memory_Face(static_cast<FT_Library>(ftLibrary_), data, static_cast<FT_Long>(size), 0, &face) == 0) {
+            cairo_font_face_t* cairoFace = cairo_ft_font_face_create_for_ft_face(face, 0);
+            if (cairo_font_face_set_user_data(cairoFace, &kFtFaceKey, face, destroyFtFace) == CAIRO_STATUS_SUCCESS) {
+                return cairoFace;
+            }
+            cairo_font_face_destroy(cairoFace);
+            FT_Done_Face(face);
+        }
+        ok = false;
+        std::fprintf(stderr, "[draw] can't load an embedded font, falling back to a system font\n");
+        return cairo_toy_font_face_create("Segoe UI", CAIRO_FONT_SLANT_NORMAL,
+                                          isBold ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
+    };
+    regular_ = make(regular, regularSize, false);
+    bold_ = make(bold, boldSize, true);
+    return ok;
+}
+
 void FontSet::release() {
     // cairo_t が参照を持っていれば、そちらが手放すまでフォントは生きている
     if (regular_ != nullptr) cairo_font_face_destroy(regular_);

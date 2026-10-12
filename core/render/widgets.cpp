@@ -68,6 +68,17 @@ std::string num(double value, int decimals) {
     return buffer;
 }
 
+}  // namespace
+
+RateText formatRate(double mbps) {
+    if (std::isnan(mbps)) return {"--", " Mbps"};
+    const long kbps = std::lround(std::max(0.0, mbps) * 1000.0 + 1e-6);  // + 1e-6: 0.9995 is stored as 0.99949999…
+    if (kbps < 1000) return {std::to_string(kbps), " kbps"};  // 0.024 Mbps reads "24 kbps", not "0.0"
+    return {num(mbps, mbps >= 100 ? 0 : 1), " Mbps"};
+}
+
+namespace {
+
 /** @return the value rounded with thousands separators, "--" for NaN */
 std::string grouped(double value) {
     if (std::isnan(value)) return "--";
@@ -834,13 +845,16 @@ void drawNetwork(const Pen& pen, double x, double y, const WidgetInstance& w, co
     if (!connected) {
         pen.text(lx, ry, t.notConnected, 16, kTextMuted);
     } else {
-        const double down = f(ctx, base + kNetAdapterRxMbps);
+        // Each value carries its unit: one side can be kbps while the other is Mbps
+        const RateText down = formatRate(f(ctx, base + kNetAdapterRxMbps));
+        const RateText up = formatRate(f(ctx, base + kNetAdapterTxMbps));
         lx += drawArrow(pen, lx, ry, false, kTextMuted);
-        lx += pen.text(lx, ry, num(down, std::isnan(down) || down >= 100 ? 0 : 1), 17, kText, true);
-        lx += 6;
+        lx += pen.text(lx, ry, down.value, 17, kText, true);
+        lx += pen.text(lx, ry, down.unit, 14, kTextMuted);
+        lx += 8;
         lx += drawArrow(pen, lx, ry, true, kTextMuted);
-        lx += pen.text(lx, ry, num(f(ctx, base + kNetAdapterTxMbps), 1), 15, kText);
-        pen.text(lx, ry, " Mbps", 14, kTextMuted);
+        lx += pen.text(lx, ry, up.value, 15, kText);
+        pen.text(lx, ry, up.unit, 14, kTextMuted);
     }
     // Link rate, band, channel
     std::string radio = std::string(t.link) + num(f(ctx, base + kNetAdapterTxLinkMbps), 0) + "/" +

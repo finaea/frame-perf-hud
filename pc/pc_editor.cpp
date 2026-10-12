@@ -1,0 +1,586 @@
+#include "pc_editor.h"
+
+#include "editor_model.h"
+#include "i18n.h"
+#include "theme.h"
+#include "widgets.h"
+
+#include <cairo.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+namespace fph {
+namespace pc {
+
+namespace {
+
+// Sizes are the headset editor's (layout_editor.cpp), in DIPs × the window's DPI scale
+constexpr double kPad = 16;
+constexpr double kHeaderH = 48;
+constexpr double kLaneInsetPanel = 3;  // lane edge inside its 512 px column (the cards sit 8 px in)
+constexpr int kChipColumns = 2;
+constexpr double kChipH = 32;
+constexpr double kChipGap = 8;
+constexpr double kRowH = 34;
+constexpr double kRowGap = 8;
+constexpr double kDragStart = 6;  // px the pointer moves before a press counts as a drag (headset: 14 for a laser)
+
+const UiText& text() {
+    return uiText(Language::En);
+}
+
+bool isList(WidgetType t) {
+    return t == WidgetType::CpuItems || t == WidgetType::RamItems;
+}
+
+// Rows − / + steps: the headset's (layout_editor.cpp rowsDown / rowsUp)
+uint32_t rowsDown(uint32_t v) {
+    if (v <= 5) return std::max(1u, v - 1);
+    return v % 5 == 0 ? v - 5 : v - v % 5;
+}
+
+uint32_t rowsUp(uint32_t v) {
+    if (v < 5) return v + 1;
+    return std::min(kMaxListItems, (v / 5 + 1) * 5);
+}
+
+std::string chipLabel(WidgetType type) {
+    if (type == WidgetType::Network) return text().paletteNetwork;
+    WidgetInstance w;
+    w.type = type;
+    return widgetTitle(w);
+}
+
+}  // namespace
+
+double PcEditor::headerHeight(double ui) {
+    return kHeaderH * ui;
+}
+
+double PcEditor::paletteWidth(double ui) {
+    return 340 * ui;
+}
+
+bool PcEditor::sync(const Layout& layout, const GridGeometry& geometry) {
+    if (layout.version == layout_.version && layout.sameWidgets(layout_) && geometry.width == geometry_.width &&
+        geometry.height == geometry_.height) {
+        return false;
+    }
+    const bool versionMoved = layout.version != layout_.version;
+    layout_ = layout;
+    geometry_ = geometry;
+    // A press made on another version would apply its indices to the wrong layout: drop it (like the headset), and
+    // tell the window, which says so (never a silent loss)
+    if (versionMoved && press_ != Press::None) {
+        cancel();
+        pressCancelled_ = true;
+    }
+    revalidateSelection();
+    relayout();
+    return true;
+}
+
+void PcEditor::revalidateSelection() {
+    if (!selected_.valid()) return;
+    const WidgetInstance* w = widgetAt(layout_, selected_);
+    if (w != nullptr && *w == selectedInstance_) return;
+    // Moved (or something else moved into its slot): follow the exact instance; drop it if it's gone or ambiguous
+    WidgetRef found;
+    int matches = 0;
+    for (size_t c = 0; c < layout_.columns.size(); ++c) {
+        for (size_t k = 0; k < layout_.columns[c].widgets.size(); ++k) {
+            if (layout_.columns[c].widgets[k] == selectedInstance_) {
+                found = {static_cast<int>(c), static_cast<int>(k)};
+                ++matches;
+            }
+        }
+    }
+    selected_ = matches == 1 ? found : WidgetRef();
+}
+
+bool PcEditor::takePressCancelled() {
+    const bool was = pressCancelled_;
+    pressCancelled_ = false;
+    return was;
+}
+
+void PcEditor::setView(const View& view) {
+    view_ = view;
+    relayout();
+}
+
+void PcEditor::select(WidgetRef ref) {
+    const WidgetInstance* w = widgetAt(layout_, ref);
+    selected_ = w != nullptr ? ref : WidgetRef();
+    selectedInstance_ = w != nullptr ? *w : WidgetInstance();
+    relayout();
+}
+
+void PcEditor::relayout() {
+    const double u = view_.ui;
+    lanes_.clear();
+    const int columns = static_cast<int>(layout_.columns.size());
+    const int n = columns + (layout_.columns.size() < kMaxColumns ? 1 : 0);
+    for (int i = 0; i < n; ++i) {
+        lanes_.push_back({view_.originX + (i * kColumnWidth + kLaneInsetPanel) * view_.scale, view_.viewport.y,
+                          (kColumnWidth - 2 * kLaneInsetPanel) * view_.scale, view_.viewport.h});
+    }
+    // Palette: one chip per type, WidgetType order (the headset's order and labels)
+    chips_.clear();
+    const Box& card = view_.paletteCard;
+    const double chipX = card.x + kPad * u;
+    const double chipW = (card.w - 2 * kPad * u - (kChipColumns - 1) * kChipGap * u) / kChipColumns;
+    const double chipY = card.y + kHeaderH * u;
+    for (int t = 1; t < static_cast<int>(kWidgetTypeCount); ++t) {
+        const int i = t - 1;
+        chips_.push_back({static_cast<WidgetType>(t),
+                          {chipX + (i % kChipColumns) * (chipW + kChipGap * u),
+                           chipY + (i / kChipColumns) * (kChipH + kChipGap) * u, chipW, kChipH * u}});
+    }
+    // The selected widget's settings: [title ...... Remove] / row A / row B
+    settings_.clear();
+    const WidgetInstance* w = widgetAt(layout_, selected_);
+    if (w == nullptr) return;
+    const double sx = card.x + kPad * u;
+    const double sw = card.w - 2 * kPad * u;
+    const double sy = chips_.back().second.y + chips_.back().second.h + 20 * u;
+    const double removeW = 96 * u;
+    settings_.push_back({Setting::Remove, {sx + sw - removeW, sy, removeW, kRowH * u}});
+    const double rowA = sy + (kRowH + kRowGap) * u;
+    const double rowB = rowA + (kRowH + kRowGap) * u;
+    const double controlW = 170 * u;
+    const double controlX = sx + sw - controlW;
+    if (isList(w->type)) {
+        const double step = 44 * u;
+        settings_.push_back({Setting::RowsDown, {controlX, rowA, step, kRowH * u}});
+        settings_.push_back({Setting::RowsUp, {controlX + controlW - step, rowA, step, kRowH * u}});
+        settings_.push_back({Setting::SameNameOn, {controlX, rowB, controlW / 2, kRowH * u}});
+        settings_.push_back({Setting::SameNameOff, {controlX + controlW / 2, rowB, controlW / 2, kRowH * u}});
+    } else if (w->type == WidgetType::Network) {
+        settings_.push_back({Setting::AdapterDongle, {controlX, rowA, controlW / 2, kRowH * u}});
+        settings_.push_back({Setting::AdapterHome, {controlX + controlW / 2, rowA, controlW / 2, kRowH * u}});
+    }
+}
+
+Box PcEditor::slotBox(const WidgetSlot& s) const {
+    return {view_.originX + s.x * view_.scale, view_.originY + s.y * view_.scale, s.w * view_.scale,
+            s.h * view_.scale};
+}
+
+Box PcEditor::cardBox(WidgetRef ref) const {
+    for (size_t i = 0; i < geometry_.slots.size(); ++i) {
+        if (refOfSlot(layout_, geometry_, static_cast<int>(i)) == ref) return slotBox(geometry_.slots[i]);
+    }
+    return {};
+}
+
+int PcEditor::cardAt(double x, double y) const {
+    if (!view_.viewport.contains(x, y)) return -1;
+    for (size_t i = 0; i < geometry_.slots.size(); ++i) {
+        if (slotBox(geometry_.slots[i]).contains(x, y)) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+int PcEditor::chipAt(double x, double y) const {
+    for (size_t i = 0; i < chips_.size(); ++i) {
+        if (chips_[i].second.contains(x, y)) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+int PcEditor::settingAt(double x, double y) const {
+    for (size_t i = 0; i < settings_.size(); ++i) {
+        if (settings_[i].second.contains(x, y)) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+void PcEditor::updateDrop(double x, double y) {
+    dropColumn_ = -1;
+    overPalette_ = press_ == Press::Card && view_.paletteCard.contains(x, y);
+    if (overPalette_ || !view_.viewport.contains(x, y)) return;
+    DragSource source;
+    if (press_ == Press::Card) {
+        source.kind = DragSource::Kind::Card;
+        source.from = pressedCard_;
+    } else {
+        source.kind = DragSource::Kind::Palette;
+        source.type = pressedChip_;
+    }
+    const double px = (x - view_.originX) / view_.scale;
+    const double py = (y - view_.originY) / view_.scale;
+    const DropTarget t = dropTargetAt(layout_, geometry_, px, py, false, source);
+    if (t.kind != DropTarget::Kind::Grid) return;
+    // Only show a marker where the drop would change something (the headset's rule)
+    Layout trial = layout_;
+    if (!applyDrop(trial, source, t)) return;
+    dropColumn_ = t.column;
+    dropSlot_ = t.index;
+}
+
+void PcEditor::queueCommit(const Layout& edited, WidgetRef selectAfter) {
+    commitQueued_ = true;
+    commitBase_ = pressVersion_;
+    commitLayout_ = edited;
+    // The window shows the edit right away (LinkClient::submitEdit); select where it landed. A reject restores the
+    // old layout and sync() drops a selection that no longer fits.
+    const WidgetInstance* w = widgetAt(edited, selectAfter);
+    selected_ = w != nullptr ? selectAfter : WidgetRef();
+    selectedInstance_ = w != nullptr ? *w : WidgetInstance();
+}
+
+bool PcEditor::takeCommit(uint32_t& baseVersion, Layout& layout) {
+    if (!commitQueued_) return false;
+    commitQueued_ = false;
+    baseVersion = commitBase_;
+    layout = commitLayout_;
+    return true;
+}
+
+void PcEditor::commitResult(CommitOutcome outcome) {
+    status_ = static_cast<int>(outcome);
+}
+
+void PcEditor::applySetting(Setting setting) {
+    const WidgetInstance* w = widgetAt(layout_, selected_);
+    if (w == nullptr) return;
+    Layout edited = layout_;
+    if (setting == Setting::Remove) {
+        removeWidget(edited, selected_);
+        queueCommit(edited, {});
+        return;
+    }
+    WidgetInstance& e =
+        edited.columns[static_cast<size_t>(selected_.column)].widgets[static_cast<size_t>(selected_.index)];
+    switch (setting) {
+        case Setting::RowsDown: e.maxItems = rowsDown(e.maxItems); break;
+        case Setting::RowsUp: e.maxItems = rowsUp(e.maxItems); break;
+        case Setting::SameNameOn: e.sumSameName = true; break;
+        case Setting::SameNameOff: e.sumSameName = false; break;
+        case Setting::AdapterDongle: e.adapter = NetAdapter::Dongle; break;
+        case Setting::AdapterHome: e.adapter = NetAdapter::Home; break;
+        case Setting::Remove: break;
+    }
+    if (e != *w) queueCommit(edited, selected_);
+}
+
+bool PcEditor::cancel() {
+    const bool was = press_ != Press::None;
+    press_ = Press::None;
+    dragging_ = false;
+    dropColumn_ = -1;
+    overPalette_ = false;
+    return was;
+}
+
+bool PcEditor::pointerDown(double x, double y) {
+    if (press_ != Press::None) cancel();
+    pointerX_ = pressX_ = x;
+    pointerY_ = pressY_ = y;
+    pressVersion_ = layout_.version;
+    status_ = -1;
+    const int s = settingAt(x, y);
+    if (s >= 0) {
+        applySetting(settings_[static_cast<size_t>(s)].first);  // like the headset's buttons: acts on press
+        return true;
+    }
+    const int c = chipAt(x, y);
+    if (c >= 0) {
+        const WidgetType type = chips_[static_cast<size_t>(c)].first;
+        if (!isOfferedInPalette(type)) return false;
+        press_ = Press::Chip;
+        pressedChip_ = type;
+        return true;
+    }
+    const int slot = cardAt(x, y);
+    if (slot >= 0) {
+        press_ = Press::Card;
+        pressedCard_ = refOfSlot(layout_, geometry_, slot);
+        return true;
+    }
+    if (view_.viewport.contains(x, y)) press_ = Press::Lanes;
+    return false;
+}
+
+bool PcEditor::pointerMove(double x, double y) {
+    pointerX_ = x;
+    pointerY_ = y;
+    if (press_ != Press::Card && press_ != Press::Chip) return false;
+    if (!dragging_) {
+        if (std::hypot(x - pressX_, y - pressY_) < kDragStart * view_.ui) return false;
+        if (press_ == Press::Chip && !canAdd(layout_, pressedChip_)) return false;
+        dragging_ = true;
+    }
+    updateDrop(x, y);
+    return true;
+}
+
+bool PcEditor::pointerUp(double x, double y) {
+    if (press_ == Press::None) return false;
+    pointerX_ = x;
+    pointerY_ = y;
+    const Press press = press_;
+    const bool dragged = dragging_;
+    if (dragged) updateDrop(x, y);
+    const int column = dropColumn_;
+    const int slot = dropSlot_;
+    const bool toPalette = overPalette_;
+    cancel();
+
+    if (press == Press::Card) {
+        if (!dragged) {
+            // Click: select (again = deselect)
+            if (selected_ == pressedCard_) select({});
+            else select(pressedCard_);
+            return true;
+        }
+        Layout edited = layout_;
+        if (toPalette) {
+            if (removeWidget(edited, pressedCard_)) queueCommit(edited, {});
+            return true;
+        }
+        if (column < 0 || !moveWidget(edited, pressedCard_, column, slot)) return true;
+        // Where it landed: its source column may have been removed (it was alone there) before the target
+        const int columns = static_cast<int>(layout_.columns.size());
+        const bool sourceGone =
+            layout_.columns[static_cast<size_t>(pressedCard_.column)].widgets.size() == 1 && column != pressedCard_.column;
+        WidgetRef landed {column, slot};
+        if (column == pressedCard_.column && slot > pressedCard_.index) landed.index = slot - 1;
+        if (column == columns) landed.index = 0;
+        if (sourceGone && pressedCard_.column < column) landed.column -= 1;
+        queueCommit(edited, landed);
+        return true;
+    }
+    if (press == Press::Chip) {
+        Layout edited = layout_;
+        const WidgetInstance widget = newInstance(pressedChip_, layout_);
+        if (dragged) {
+            if (column >= 0 && insertWidget(edited, widget, column, slot)) {
+                const int size = static_cast<int>(edited.columns[static_cast<size_t>(column)].widgets.size());
+                queueCommit(edited, {column, std::min(slot, size - 1)});
+            }
+            return true;
+        }
+        // Click on a type that's there and can't repeat: select it
+        if (!isRepeatable(pressedChip_) && countType(layout_, pressedChip_) > 0) {
+            for (size_t c = 0; c < layout_.columns.size(); ++c) {
+                for (size_t k = 0; k < layout_.columns[c].widgets.size(); ++k) {
+                    if (layout_.columns[c].widgets[k].type == pressedChip_) {
+                        select({static_cast<int>(c), static_cast<int>(k)});
+                        return true;
+                    }
+                }
+            }
+            return true;
+        }
+        if (!canAdd(layout_, pressedChip_)) return true;
+        // Click to add: below the selected widget if its column has room, else at the end of the shortest column
+        int target = -1;
+        int at = 0;
+        if (selected_.valid() &&
+            layout_.columns[static_cast<size_t>(selected_.column)].widgets.size() < kMaxWidgetsPerColumn) {
+            target = selected_.column;
+            at = selected_.index + 1;
+        } else {
+            target = shortestColumn(layout_, [](const WidgetInstance& w) { return widgetHeight(w); });
+            at = target >= 0 && target < static_cast<int>(layout_.columns.size())
+                     ? static_cast<int>(layout_.columns[static_cast<size_t>(target)].widgets.size())
+                     : 0;
+        }
+        if (target >= 0 && insertWidget(edited, widget, target, at)) queueCommit(edited, {target, at});
+        return true;
+    }
+    if (press == Press::Lanes && !dragged && selected_.valid()) select({});  // click on empty space: deselect
+    return true;
+}
+
+// ---- Drawing (headset/layout_editor.cpp's look) ----
+
+void PcEditor::drawUnderPanel(const Pen& pen) const {
+    cairo_t* cr = pen.cr;
+    const double u = view_.ui;
+    const Box& card = view_.layoutCard;
+    drawCard(pen, card.x, card.y, card.w, card.h, 16 * u, kCard, kCard, 0);
+    const double titleW = pen.text(card.x + kPad * u, card.y + 31 * u, text().editorTitle, 19 * u, kText, true);
+    // Status of the last edit, else the hint
+    std::string line = text().editorHint;
+    Color color = kTextMuted;
+    bool bold = false;
+    if (status_ == static_cast<int>(CommitOutcome::Applied)) {
+        line = text().layoutSaved;
+        color = kSuccess;
+        bold = true;
+    } else if (status_ == static_cast<int>(CommitOutcome::Stale)) {
+        line = text().layoutStale;
+        color = kWarn;
+        bold = true;
+    } else if (status_ == static_cast<int>(CommitOutcome::Failed)) {
+        line = text().layoutSaveFailed;
+        color = kDanger;
+        bold = true;
+    }
+    const double size = fitSize(pen, line, 14 * u, 10 * u, card.w - 2 * kPad * u - titleW - 16 * u, bold);
+    pen.text(card.x + card.w - kPad * u, card.y + 30 * u, line, size, color, bold, true);
+
+    cairo_save(cr);
+    cairo_rectangle(cr, view_.viewport.x, view_.viewport.y, view_.viewport.w, view_.viewport.h);
+    cairo_clip(cr);
+    for (size_t i = 0; i < lanes_.size(); ++i) {
+        const Box& lane = lanes_[i];
+        if (!isNewColumnLane(i)) {
+            pen.color(kBg);
+            pen.roundedRect(lane.x, lane.y, lane.w, lane.h, 12 * u);
+            cairo_fill(cr);
+        } else {
+            // The "new column" lane: dashed outline
+            const double dashes[] = {10 * u, 8 * u};
+            cairo_set_dash(cr, dashes, 2, 0);
+            const bool hot = dragging_ && dropColumn_ == static_cast<int>(i);
+            strokeRounded(pen, lane.x + 1, lane.y + 1, lane.w - 2, lane.h - 2, 12 * u, hot ? kAccent : kBorder,
+                          (hot ? 3 : 2) * u);
+            cairo_set_dash(cr, nullptr, 0, 0);
+            const double s = fitSize(pen, text().editorNewColumn, 15 * u, 10 * u, lane.w - 20 * u, false);
+            textCentered(pen, lane.x + lane.w / 2, lane.y + 34 * u, text().editorNewColumn, s,
+                         hot ? kAccent : kTextMuted, false);
+        }
+    }
+    cairo_restore(cr);
+}
+
+void PcEditor::drawOverPanel(const Pen& pen) const {
+    cairo_t* cr = pen.cr;
+    const double u = view_.ui;
+    cairo_save(cr);
+    cairo_rectangle(cr, view_.viewport.x, view_.viewport.y, view_.viewport.w, view_.viewport.h);
+    cairo_clip(cr);
+    // Selected card: pink outline; the lifted card fades in place
+    if (selected_.valid()) {
+        const Box b = cardBox(selected_);
+        if (b.w > 0) strokeRounded(pen, b.x - 2 * u, b.y - 2 * u, b.w + 4 * u, b.h + 4 * u, 12 * u, kAccent, 3 * u);
+    }
+    if (dragging_ && press_ == Press::Card) {
+        const Box b = cardBox(pressedCard_);
+        pen.color(kBg, 0.65);
+        pen.roundedRect(b.x, b.y, b.w, b.h, 10 * u);
+        cairo_fill(cr);
+    }
+    // Drop marker: a pink bar with a dot at each end, between the cards where it lands
+    if (dragging_ && dropColumn_ >= 0 && dropColumn_ < static_cast<int>(lanes_.size())) {
+        const Box& lane = lanes_[static_cast<size_t>(dropColumn_)];
+        double y = lane.y + 6 * u;
+        if (!isNewColumnLane(static_cast<size_t>(dropColumn_))) {
+            DropTarget t;
+            t.kind = DropTarget::Kind::Grid;
+            t.column = dropColumn_;
+            t.index = dropSlot_;
+            y = view_.originY + dropMarkerY(geometry_, t) * view_.scale;
+        }
+        pen.color(kAccent);
+        pen.roundedRect(lane.x + 4 * u, y - 3 * u, lane.w - 8 * u, 6 * u, 3 * u);
+        cairo_fill(cr);
+        drawDisc(cr, lane.x + 6 * u, y, 7 * u, kAccent);
+        drawDisc(cr, lane.x + lane.w - 6 * u, y, 7 * u, kAccent);
+    }
+    cairo_restore(cr);
+
+    // Palette card
+    const Box& card = view_.paletteCard;
+    drawCard(pen, card.x, card.y, card.w, card.h, 16 * u, kCard, overPalette_ ? kDanger : kCard, overPalette_ ? 3 * u : 0);
+    pen.text(card.x + kPad * u, card.y + 31 * u, overPalette_ ? text().editorDropToRemove : text().paletteTitle, 19 * u,
+             overPalette_ ? kDanger : kText, true);
+    for (const auto& [type, r] : chips_) {
+        const bool offered = isOfferedInPalette(type);
+        const int count = countType(layout_, type);
+        const bool present = count > 0 && !isRepeatable(type);
+        const bool pressed = press_ == Press::Chip && pressedChip_ == type;
+        pen.color(present ? (pressed ? kAccentPressed : kAccent) : (pressed ? kControlHover : kControl));
+        pen.roundedRect(r.x, r.y, r.w, r.h, r.h / 2);
+        cairo_fill(cr);
+        if (offered && !present) strokeRounded(pen, r.x, r.y, r.w, r.h, r.h / 2, kBorder, 1.5 * u);
+        std::string label = chipLabel(type);
+        if (!offered) label += std::string(" (") + text().paletteSoon + ")";
+        if (isRepeatable(type) && count > 0) label += " ×" + std::to_string(count);
+        const double checkW = present ? 16 * u : 0;
+        const double size = fitSize(pen, label, 13.5 * u, 9 * u, r.w - 16 * u - checkW, present);
+        const double tw = pen.measure(label, size, present) + checkW;
+        const double tx = r.x + (r.w - tw) / 2;
+        if (present) drawCheck(cr, tx + 5 * u, r.y + r.h / 2, 11 * u, kOnAccent);
+        pen.text(tx + checkW, centerBaseline(r.y, r.h, size), label, size,
+                 present ? kOnAccent : (offered ? kText : kTextDisabled), present);
+    }
+
+    // The selected widget's settings
+    const double sx = card.x + kPad * u;
+    const double sy = chips_.empty() ? card.y + kHeaderH * u : chips_.back().second.y + chips_.back().second.h + 20 * u;
+    const WidgetInstance* w = widgetAt(layout_, selected_);
+    if (w == nullptr) {
+        const double size = fitSize(pen, text().selectedNone, 14 * u, 9 * u, card.w - 2 * kPad * u, false);
+        pen.text(sx, centerBaseline(sy, kRowH * u, size), text().selectedNone, size, kTextMuted);
+    } else {
+        const auto button = [&](Setting s, const std::string& label, bool on) {
+            for (const auto& [id, r] : settings_) {
+                if (id != s) continue;
+                pen.color(on ? kAccent : kControl);
+                pen.roundedRect(r.x, r.y, r.w, r.h, 10 * u);
+                cairo_fill(cr);
+                if (!on) strokeRounded(pen, r.x, r.y, r.w, r.h, 10 * u, s == Setting::Remove ? kDanger : kBorder, 1.5 * u);
+                const double size = fitSize(pen, label, 14 * u, 9 * u, r.w - 12 * u, true);
+                textCentered(pen, r.x + r.w / 2, centerBaseline(r.y, r.h, size), label, size, on ? kOnAccent : kText, true);
+            }
+        };
+        const std::string title = widgetTitle(*w);
+        const double titleSize = fitSize(pen, title, 17 * u, 11 * u, card.w - 2 * kPad * u - 110 * u, true);
+        pen.text(sx, centerBaseline(sy, kRowH * u, titleSize), title, titleSize, kText, true);
+        button(Setting::Remove, text().removeWidget, false);
+        const double rowA = sy + (kRowH + kRowGap) * u;
+        const double rowB = rowA + (kRowH + kRowGap) * u;
+        const double labelSize = 14 * u;
+        if (isList(w->type)) {
+            pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowRows, labelSize, kTextMuted);
+            button(Setting::RowsDown, "−", false);
+            button(Setting::RowsUp, "+", false);
+            for (const auto& [id, r] : settings_) {
+                if (id != Setting::RowsDown) continue;
+                textCentered(pen, r.x + 170 * u / 2, centerBaseline(rowA, kRowH * u, 17 * u), std::to_string(w->maxItems),
+                             17 * u, kText, true);
+            }
+            const double sameSize = fitSize(pen, text().rowSameName, labelSize, 9 * u, card.w - 2 * kPad * u - 178 * u, false);
+            pen.text(sx, centerBaseline(rowB, kRowH * u, sameSize), text().rowSameName, sameSize, kTextMuted);
+            button(Setting::SameNameOn, text().on, w->sumSameName);
+            button(Setting::SameNameOff, text().off, !w->sumSameName);
+        } else if (w->type == WidgetType::Network) {
+            pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowAdapter, labelSize, kTextMuted);
+            button(Setting::AdapterDongle, text().adapterDongle, w->adapter == NetAdapter::Dongle);
+            button(Setting::AdapterHome, text().adapterHome, w->adapter == NetAdapter::Home);
+        } else {
+            pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().noSettings, labelSize, kTextMuted);
+        }
+    }
+
+    // The ghost follows the pointer (drawn last, unclipped, so it can be dragged onto the palette)
+    if (dragging_) {
+        std::string title;
+        double gw = 220 * u;
+        const double gh = 44 * u;
+        if (press_ == Press::Card) {
+            gw = std::max(gw, std::min(cardBox(pressedCard_).w, 360 * u));
+            if (const WidgetInstance* lifted = widgetAt(layout_, pressedCard_)) title = widgetTitle(*lifted);
+        } else {
+            title = chipLabel(pressedChip_);
+        }
+        const double gx = pointerX_ - gw / 2;
+        const double gy = pointerY_ - 16 * u;
+        pen.color(kControlHover, 0.92);
+        pen.roundedRect(gx, gy, gw, gh, 10 * u);
+        cairo_fill(cr);
+        strokeRounded(pen, gx, gy, gw, gh, 10 * u, overPalette_ ? kDanger : kAccent, 3 * u);
+        const double size = fitSize(pen, title, 16 * u, 10 * u, gw - 24 * u, true);
+        pen.text(gx + 12 * u, centerBaseline(gy, gh, size), title, size, kText, true);
+    }
+}
+
+}  // namespace pc
+}  // namespace fph
