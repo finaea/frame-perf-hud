@@ -3,6 +3,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
+#include <mutex>
 
 #ifdef _WIN32
 #include "win_text.h"
@@ -13,9 +14,11 @@ namespace pc {
 
 namespace {
 std::FILE* g_log = nullptr;
+std::mutex g_logMutex;
 }
 
 bool openLog(const std::string& path) {
+    std::lock_guard<std::mutex> lock(g_logMutex);
     if (g_log != nullptr) std::fclose(g_log);
 #ifdef _WIN32
     g_log = _wfopen(widen(path).c_str(), L"wb");
@@ -26,6 +29,7 @@ bool openLog(const std::string& path) {
 }
 
 void logLine(const char* format, ...) {
+    std::lock_guard<std::mutex> lock(g_logMutex);
     std::FILE* out = g_log != nullptr ? g_log : stderr;
     const std::time_t t = std::time(nullptr);
     std::tm tm {};

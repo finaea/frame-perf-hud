@@ -17,7 +17,7 @@ class SensorBridge;
 /** LinkHostEnv backed by the running agent. */
 class AgentLinkEnv : public LinkHostEnv {
 public:
-    AgentLinkEnv(Config& config, ConfigWatcher& watcher, const fph::MetricStore& store, const SensorBridge& bridge,
+    AgentLinkEnv(Config& config, ConfigWatcher& watcher, fph::MetricStore& store, const SensorBridge& bridge,
                  LinkSocket& socket);
 
     void send(const LinkEndpoint& to, const std::vector<uint8_t>& datagram) override;
@@ -27,11 +27,14 @@ public:
     std::vector<fph::link::WireValue> metricValues() override;
     uint64_t processLists(fph::link::ProcessListWire& cpu, fph::link::ProcessListWire& ram) override;
     bool saveConfig(std::string& error) override;
+    void pcMetrics(const fph::PcMetrics& m, double now) override { pcStream_.apply(m, store_, now); }
+    void expirePcMetrics(double now) { pcStream_.expire(store_, now); }
 
 private:
     Config& config_;
     ConfigWatcher& watcher_;
-    const fph::MetricStore& store_;
+    fph::MetricStore& store_;
+    fph::PcStreamReceiver pcStream_;
     const SensorBridge& bridge_;
     LinkSocket& socket_;
 };
@@ -39,7 +42,7 @@ private:
 /** Socket + env + server, for the main loop. */
 class LinkService {
 public:
-    LinkService(Config& config, ConfigWatcher& watcher, LayoutAuthority& layout, const fph::MetricStore& store,
+    LinkService(Config& config, ConfigWatcher& watcher, LayoutAuthority& layout, fph::MetricStore& store,
                 const SensorBridge& bridge);
 
     /** Opens the socket on config.link.port (logs if it can't; tick() retries every 5 s). */

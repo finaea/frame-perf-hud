@@ -11,7 +11,6 @@ bool isRepeatable(WidgetType type) {
 
 bool isOfferedInPalette(WidgetType type) {
     switch (type) {
-        case WidgetType::Streaming:      // ticket 09/10: placeholders until then
         case WidgetType::HeadsetCamera:
         case WidgetType::EyeCamera:
         case WidgetType::None: return false;

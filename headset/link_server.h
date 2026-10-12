@@ -8,6 +8,7 @@
 #include "layout_authority.h"
 #include "link_ui.h"
 #include "link_wire.h"
+#include "stream_metrics.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -51,6 +52,7 @@ public:
     virtual uint64_t processLists(fph::link::ProcessListWire& cpu, fph::link::ProcessListWire& ram) = 0;
     /** Saves the config (allowed_pcs changed). @return false + error if it failed */
     virtual bool saveConfig(std::string& error) = 0;
+    virtual void pcMetrics(const fph::PcMetrics&, double) {}
 };
 
 class LinkServer {
@@ -128,6 +130,8 @@ private:
         uint32_t wants = 0;
         LinkEndpoint leaseAddress;  ///< the last SUBSCRIBE's source: data goes here
         uint64_t sentListGeneration = 0;
+        uint32_t pcSnapshot = 0;
+        bool havePcSnapshot = false;
         std::deque<Answer> answers;  ///< last kLayoutAnswerMemory LAYOUT_SET answers
     };
 

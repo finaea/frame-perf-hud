@@ -10,6 +10,7 @@
 #include "layout.h"
 #include "link_wire.h"
 #include "metric_store.h"
+#include "stream_metrics.h"
 #include "widgets.h"
 
 #include <cstdint>
@@ -94,6 +95,9 @@ public:
 
     /** Sends BYE to the headset (Exit). Safe in any phase. */
     void sayGoodbye();
+
+    /** Sends a full PC snapshot, only while this headset has granted a lease. UI thread, 1 Hz. */
+    void sendPcMetrics(const std::vector<link::WireValue>& values);
 
     /**
      * Starts a compare-and-set edit: shows `edited` right away and resends LAYOUT_SET every 1 s until ACK / REJECT

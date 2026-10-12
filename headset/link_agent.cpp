@@ -52,7 +52,7 @@ fph::link::ProcessListWire toWire(const std::vector<fph::ProcessItem>& rows, uin
 
 // ---- AgentLinkEnv ----
 
-AgentLinkEnv::AgentLinkEnv(Config& config, ConfigWatcher& watcher, const fph::MetricStore& store,
+AgentLinkEnv::AgentLinkEnv(Config& config, ConfigWatcher& watcher, fph::MetricStore& store,
                            const SensorBridge& bridge, LinkSocket& socket)
     : config_(config), watcher_(watcher), store_(store), bridge_(bridge), socket_(socket) {}
 
@@ -109,7 +109,7 @@ bool AgentLinkEnv::saveConfig(std::string& error) {
 // ---- LinkService ----
 
 LinkService::LinkService(Config& config, ConfigWatcher& watcher, LayoutAuthority& layout,
-                         const fph::MetricStore& store, const SensorBridge& bridge)
+                         fph::MetricStore& store, const SensorBridge& bridge)
     : config_(config), env_(config, watcher, store, bridge, socket_), server_(config, layout, env_, headsetName()) {
     if (!server_.headsetIdIsNew()) return;
     // An unreadable config is left alone at startup (T04): the id then lives in memory until the next save
@@ -138,6 +138,7 @@ void LinkService::start(double now) {
 }
 
 void LinkService::tick(double now) {
+    env_.expirePcMetrics(now);
     if (socket_.fd() < 0 && now >= nextBindAttempt_) start(now);
     server_.tick(now);
 }

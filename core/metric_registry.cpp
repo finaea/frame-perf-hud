@@ -1,4 +1,5 @@
 #include "metric_registry.h"
+#include "stream_metrics.h"
 
 #include <map>
 #include <set>
@@ -181,6 +182,10 @@ const std::vector<MetricDef> kRegistry = {
     {metric::kProcScanMs, "cpu_items.scan_ms", "ms", W::CpuItems, S::Processes, kProcessMs, T::F32},
     {metric::kCpuItemsRows, "cpu_items.rows", "", W::CpuItems, S::Processes, kProcessMs, T::I32},
     {metric::kRamItemsRows, "ram_items.rows", "", W::RamItems, S::Processes, kProcessMs, T::I32},
+    // PC streaming values arrive at 1 Hz, independent of the headset sensors.
+#define FPH_STREAM_DEF(n,id,name,unit,type) {id, "streaming.pc." name, unit, W::Streaming, S::PcStreaming, 1000, T::type},
+    FPH_PC_STREAM_METRICS(FPH_STREAM_DEF)
+#undef FPH_STREAM_DEF
     // T03: Streaming, headset side
     {metric::kStreamLinkMode, "streaming.link_mode", "", W::Streaming, S::StreamLink, 1000, T::Enum},
     {metric::kStreamVrlinkRunning, "streaming.vrlink_running", "", W::Streaming, S::StreamLink, 1000, T::Enum},
@@ -306,6 +311,7 @@ const char* sourceName(SourceId source) {
         case SourceId::StreamEvents: return "stream_events";
         case SourceId::Uptime: return "uptime";
         case SourceId::SelfCost: return "self_cost";
+        case SourceId::PcStreaming: return "pc_streaming";
         case SourceId::Count: break;
     }
     return "unknown";

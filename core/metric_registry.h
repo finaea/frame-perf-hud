@@ -63,6 +63,7 @@ enum class SourceId : uint8_t {
     // T02
     Uptime,    ///< /proc/uptime + local time
     SelfCost,  ///< own CPU time, /proc/self/statm, /proc/stat total, CPU rails
+    PcStreaming, ///< received PC_METRICS; the headset never schedules a local reader
     Count,
 };
 

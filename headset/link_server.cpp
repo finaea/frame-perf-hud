@@ -130,8 +130,21 @@ void LinkServer::handlePacket(const uint8_t* data, size_t size, const LinkEndpoi
             if (ok) onBye(m, now);
             break;
         }
-        case PacketType::PcMetrics:
-            break;  // ticket 08
+        case PacketType::PcMetrics: {
+            fph::PcMetrics m;
+            ok = fph::decodePcMetrics(payload, header.length, m);
+            if (!ok) break;
+            const auto it = peers_.find(idToHex(m.pcId));
+            if (it == peers_.end()) break;
+            Peer& peer = it->second;
+            if (!peer.leased || now > peer.leaseUntil || peer.status != PeerStatus::Allowed ||
+                from != peer.leaseAddress) break;
+            if (peer.havePcSnapshot && static_cast<int32_t>(m.snapshotId - peer.pcSnapshot) <= 0) break;
+            peer.pcSnapshot = m.snapshotId;
+            peer.havePcSnapshot = true;
+            env_.pcMetrics(m, now);
+            break;
+        }
         default:
             ok = false;  // headset -> PC types, or unknown
             break;
@@ -166,6 +179,7 @@ void LinkServer::onHello(const Hello& m, const LinkEndpoint& from, double now) {
     blobs_.forgetPeer(from.key());
     const bool isNew = peers_.find(hex) == peers_.end();
     Peer& peer = peers_[hex];
+    peer.havePcSnapshot = false; // a restarted PC begins its packet sequence again
     if (isNew) {
         peer.id = m.pcId;
         peer.firstSeen = now;
@@ -310,6 +324,7 @@ void LinkServer::onBye(const Bye& m, double now) {
 void LinkServer::dropLease(Peer& peer, const char* why) {
     peer.leased = false;
     peer.wants = 0;
+    peer.havePcSnapshot = false;
     std::fprintf(stderr, "[link] PC '%s' (%s) lease ended: %s\n", peer.name.c_str(),
                  shortId(idToHex(peer.id)).c_str(), why);
 }

@@ -6,6 +6,7 @@
 #include "layout_authority.h"
 #include "link_server.h"
 #include "link_wire.h"
+#include "stream_metrics.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -109,6 +110,7 @@ struct FakeEnv : LinkHostEnv {
     int processListCalls = 0;
     int saves = 0;
     bool saveOk = true;
+    std::vector<fph::PcMetrics> pcMetricsCalls;  // ticket 08: what reached the PC_METRICS gate
 
     FakeEnv() {
         state.sessionId = 7;
@@ -154,6 +156,7 @@ struct FakeEnv : LinkHostEnv {
         }
         return true;
     }
+    void pcMetrics(const fph::PcMetrics& m, double) override { pcMetricsCalls.push_back(m); }
 };
 
 fph::Layout modLayout(int n) {
@@ -457,14 +460,85 @@ void testAllowList() {
         CHECK(r.server.malformed() == 2);
         r.send(PacketType::Hello, Bytes(3, 0), ep(otherIp, 1), 0.0);
         CHECK(r.server.malformed() == 3);
-        r.send(PacketType::PcMetrics, Bytes(), ep(otherIp, 1), 0.0);  // ticket 08: ignored, not an error
-        CHECK(r.server.malformed() == 3 && r.take().empty());
+        r.send(PacketType::PcMetrics, Bytes(), ep(otherIp, 1), 0.0);  // ticket 08: too short to decode
+        CHECK(r.server.malformed() == 4 && r.take().empty());
+        // a well-formed PC_METRICS that decodes fine, just from a pc id nobody ever said HELLO to, is
+        // silently ignored rather than malformed (see testPcMetrics for the gate itself)
+        fph::PcMetrics unknownPc;
+        unknownPc.pcId = pcId(250);
+        unknownPc.snapshotId = 1;
+        r.send(PacketType::PcMetrics, fph::encodePcMetrics(unknownPc), ep(otherIp, 1), 0.0);
+        CHECK(r.server.malformed() == 4 && r.take().empty() && r.env.pcMetricsCalls.empty());
         // PCs send only LayoutSet blobs
         const std::vector<Bytes> chunks = splitBlob(1, BlobKind::Camera, 0, Bytes(10, 1));
         r.send(PacketType::Blob, chunks[0], ep(otherIp, 1), 0.0);
-        CHECK(r.server.malformed() == 4 && r.take().empty());
+        CHECK(r.server.malformed() == 5 && r.take().empty());
         CHECK(!r.server.debugText(1.0).empty());
     }
+}
+
+// ---- PC_METRICS (ticket 08): the lease/from-address/ordering gate ----
+
+Bytes pcMetricsBytes(uint8_t seed, uint32_t snapshotId) {
+    fph::PcMetrics m;
+    m.pcId = pcId(seed);
+    m.snapshotId = snapshotId;
+    return fph::encodePcMetrics(m);
+}
+
+void testPcMetrics() {
+    const uint32_t otherIp = ip(192, 168, 1, 99);
+    const uint32_t otherIp2 = ip(192, 168, 1, 100);
+    Rig r;
+    const LinkEndpoint pc = ep(otherIp, 40020);
+    r.allowInConfig(20);
+    CHECK(r.hello(20, pc, 0.0).status == PeerStatus::Allowed);
+    CHECK(r.subscribe(20, pc, 0.0).status == PeerStatus::Allowed);  // leaseUntil = kLeaseSec (6 s)
+
+    // accepted: in order, from the lease address
+    r.send(PacketType::PcMetrics, pcMetricsBytes(20, 1), pc, 0.5);
+    CHECK(r.server.malformed() == 0 && r.env.pcMetricsCalls.size() == 1);
+    CHECK(r.env.pcMetricsCalls[0].snapshotId == 1);
+
+    // a repeated or older snapshot id is a silent reorder drop, not malformed
+    r.send(PacketType::PcMetrics, pcMetricsBytes(20, 1), pc, 0.6);
+    CHECK(r.env.pcMetricsCalls.size() == 1);
+    r.send(PacketType::PcMetrics, pcMetricsBytes(20, 0), pc, 0.7);
+    CHECK(r.env.pcMetricsCalls.size() == 1);
+
+    // a newer snapshot id is accepted
+    r.send(PacketType::PcMetrics, pcMetricsBytes(20, 2), pc, 0.8);
+    CHECK(r.env.pcMetricsCalls.size() == 2 && r.env.pcMetricsCalls[1].snapshotId == 2);
+
+    // from a different address than the lease holds: dropped (the lease is bound to one endpoint)
+    r.send(PacketType::PcMetrics, pcMetricsBytes(20, 5), ep(otherIp2, 40099), 0.9);
+    CHECK(r.env.pcMetricsCalls.size() == 2 && r.server.malformed() == 0);
+
+    // past the lease (SUBSCRIBE was at t=0, kLeaseSec later it's gone): dropped
+    r.send(PacketType::PcMetrics, pcMetricsBytes(20, 5), pc, kLeaseSec + 1.0);
+    CHECK(r.env.pcMetricsCalls.size() == 2 && r.server.malformed() == 0);
+
+    // re-subscribing renews the lease; the snapshot ordering keeps counting from where it left off
+    CHECK(r.subscribe(20, pc, kLeaseSec + 1.0).status == PeerStatus::Allowed);
+    r.send(PacketType::PcMetrics, pcMetricsBytes(20, 5), pc, kLeaseSec + 1.1);
+    CHECK(r.env.pcMetricsCalls.size() == 3 && r.env.pcMetricsCalls[2].snapshotId == 5);
+
+    // a pending (not yet allowed) PC gets no PC_METRICS acceptance even from a consistent address
+    const LinkEndpoint pending = ep(ip(192, 168, 1, 150), 41000);
+    CHECK(r.hello(21, pending, kLeaseSec + 1.2).status == PeerStatus::Pending);
+    r.send(PacketType::PcMetrics, pcMetricsBytes(21, 1), pending, kLeaseSec + 1.3);
+    CHECK(r.env.pcMetricsCalls.size() == 3 && r.server.malformed() == 0);
+
+    // quick restart: the PC says HELLO again (a new process), so its snapshot counter resets; a *lower*
+    // snapshot id than it last sent is accepted again instead of reading as a stale duplicate
+    const double restartAt = kLeaseSec + 2.0;
+    CHECK(r.hello(20, pc, restartAt).status == PeerStatus::Allowed);
+    CHECK(r.subscribe(20, pc, restartAt).status == PeerStatus::Allowed);
+    r.send(PacketType::PcMetrics, pcMetricsBytes(20, 1), pc, restartAt + 0.1);
+    CHECK(r.env.pcMetricsCalls.size() == 4 && r.env.pcMetricsCalls[3].snapshotId == 1);
+    // ... and ordering resumes normally from there (the same id again is a dup)
+    r.send(PacketType::PcMetrics, pcMetricsBytes(20, 1), pc, restartAt + 0.2);
+    CHECK(r.env.pcMetricsCalls.size() == 4);
 }
 
 // ---- vrlink host IPs ----
@@ -1188,6 +1262,7 @@ int main() {
     }
     tempDir = dir;
     testAllowList();
+    testPcMetrics();
     testParseVrlink();
     testReadVrlink();
     testLease();

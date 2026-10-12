@@ -626,7 +626,10 @@ void testNetworkAddedRepeatedly() {
 
 void testUnofferedChips() {
     Rig rig(baseLayout(2));
-    for (const W type : {W::Streaming, W::HeadsetCamera, W::EyeCamera}) {
+    // Streaming (ticket 08) moved out of this group: it's offered in the palette like any other
+    // single-instance widget, see testStreamingChipOffered below. Only the two camera types (repeatable,
+    // but not yet offered) and the implicit None stay unofferable.
+    for (const W type : {W::HeadsetCamera, W::EyeCamera}) {
         const Pt c = rig.chip(type);
         CHECK(!fph::isOfferedInPalette(type));
         CHECK(!fph::canAdd(rig.layout, type));
@@ -648,6 +651,39 @@ void testUnofferedChips() {
     CHECK(fph::insertWidget(withCameras, inst(W::EyeCamera), 1, 0));
     Rig loaded(withCameras);
     CHECK(loaded.ed.cards().size() == 6);
+}
+
+void testStreamingChipOffered() {
+    // Ticket 08: Streaming became a normal, offered, single-instance palette entry (it used to behave like
+    // the cameras above). Tapping its chip adds it (testPaletteTapAdds), and once present it's "ticked":
+    // tapping again selects the existing instance instead of adding a second one (testTickedChipSelectsExisting).
+    Rig rig(baseLayout(2));
+    CHECK(fph::isOfferedInPalette(W::Streaming));
+    CHECK(fph::canAdd(rig.layout, W::Streaming));
+
+    uint32_t base = 0;
+    Layout edited;
+    rig.tap(rig.chip(W::Streaming));
+    CHECK(rig.take(base, edited));
+    CHECK(fph::countType(edited, W::Streaming) == 1);
+    rig.layout = edited;
+    rig.layout.version = 3;
+    rig.ed.commitResult(Outcome::Applied);
+    rig.ed.sync(rig.layout);
+
+    rig.tap(rig.chip(W::Streaming));
+    CHECK(rig.nothingQueued());  // ticked: no second insert queued
+    WidgetRef streamingRef;
+    for (size_t c = 0; c < rig.layout.columns.size() && !streamingRef.valid(); ++c) {
+        for (size_t i = 0; i < rig.layout.columns[c].widgets.size(); ++i) {
+            if (rig.layout.columns[c].widgets[i].type == W::Streaming) {
+                streamingRef = WidgetRef {static_cast<int>(c), static_cast<int>(i)};
+            }
+        }
+    }
+    CHECK(streamingRef.valid());
+    CHECK(rig.ed.selected() == streamingRef);
+    CHECK(fph::countType(rig.layout, W::Streaming) == 1);  // never a second one
 }
 
 void testChipDrag() {
@@ -1051,6 +1087,7 @@ int main() {
     testTickedChipSelectsExisting();
     testNetworkAddedRepeatedly();
     testUnofferedChips();
+    testStreamingChipOffered();
     testChipDrag();
     testLimitsInEditor();
     testSettingsButtons();

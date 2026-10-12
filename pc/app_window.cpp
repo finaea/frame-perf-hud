@@ -16,6 +16,7 @@
 #include "settings.h"
 #include "settings_dialog.h"
 #include "single_instance.h"
+#include "streaming/service.h"
 #include "theme.h"
 #include "udp_socket.h"
 #include "widgets.h"
@@ -102,6 +103,8 @@ private:
     SocketEnv env_;
     OfflineEnv offlineEnv_;
     std::unique_ptr<LinkClient> client_;
+    streaming::Service streaming_;
+    double nextPcMetrics_ = 0;
 
     FontSet fonts_;
     std::unique_ptr<PanelView> panel_;
@@ -416,6 +419,7 @@ void App::hideToTray() {
 void App::exitApp() {
     if (exiting_) return;
     exiting_ = true;
+    streaming_.stop(); // the worker calls VR_Shutdown before returning
     logLine("[app] exit: %s", client_->debugText(nowSec()).c_str());
     cancelDrag();
     if (IsWindowVisible(hwnd_)) rememberPlacement();
@@ -569,6 +573,14 @@ void App::onTick() {
     // In case a FD_READ was coalesced; new packets (METRICS at 2 Hz, layouts) are what repaint the window
     if (socket_.receiveAll(*client_, now) > 0) panelDirty_ = true;
     client_->tick(now);
+    bool streamWanted = false;
+    for (const auto type : enabledWidgets(client_->layout())) streamWanted |= type == WidgetType::Streaming;
+    streaming_.setDemand(streamWanted);
+    if (streaming_.take(client_->store(), now)) panelDirty_ = true;
+    if (streamWanted && now >= nextPcMetrics_) {
+        nextPcMetrics_ = now + 1.0;
+        client_->sendPcMetrics(pcStreamValues(client_->store()));
+    }
     afterLinkEvents();
     if (!notice_.empty() && now > noticeUntil_) {
         notice_.clear();

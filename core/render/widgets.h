@@ -1,6 +1,6 @@
 // The widgets (brief's table, 1-13) drawn in frame-perf-overlay's look. Each widget reads only the metrics it
 // owns (core/metric_registry.h) from the MetricStore, so the headset and the PC app draw the same thing.
-// Placeholders 10, 12 and 13 draw N/A + reason until their tickets land.
+// Camera placeholders 12 and 13 draw N/A + reason until their tickets land.
 #pragma once
 
 #include "draw.h"

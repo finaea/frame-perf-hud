@@ -19,6 +19,7 @@ add_library(fph-core STATIC
   core/layout.cpp           # T04
   core/atomic_file.cpp      # T04: temp + fsync + rename, POSIX and Windows
   core/link_wire.cpp        # T06: the headset <-> PC wire format
+  core/stream_metrics.cpp   # T08: typed PC streaming snapshots and freshness
   core/layout_edit.cpp      # T05: move / insert / remove widgets, drop slots (headset editor, PC editor)
 )
 target_include_directories(fph-core PUBLIC core)

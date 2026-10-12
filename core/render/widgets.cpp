@@ -4,12 +4,14 @@
 
 #include "theme.h"
 #include "widget_text.h"
+#include "stream_metrics.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 
 namespace fph {
 
@@ -675,16 +677,20 @@ void drawBattery(const Pen& pen, double x, double y, const WidgetContext& ctx) {
         drawBigValue(pen, bx, top + 52, "--", "%", kTextMuted);
         pen.text(bx + 70, top + 50, naText(ctx, kBatteryPct), 14, kTextMuted);
     }
-    pen.text(cx + 14, top + 72, t.batteryNote, 13, kTextMuted);
+    const double watts = f(ctx, kBatteryPowerW);
+    std::string flow = watts < 0 ? t.flowOut : t.flowIn;
+    if (!flow.empty()) flow[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(flow[0])));
+    pen.dot(cx + 4, top + 67, kGpu);
+    pen.text(cx + 14, top + 72, std::isnan(watts) ? "--" : num(std::fabs(watts), 2) + " W " + flow, 15, kText);
+    pen.text(cx + 14, top + 88, t.batteryNote, 13, kTextMuted);
 
-    double ry = top + 90;
+    double ry = top + 106;
     const auto row = [&](const std::string& label, const std::string& v, Color c = kText) {
         ry += kRowH;
         labelValue(pen, cx + 8, right, ry, label, v, c, 14);
     };
     row(t.charge, num(f(ctx, kBatteryChargeNowMah), 0) + " / " + num(f(ctx, kBatteryChargeFullMah), 0) +
                       " mAh (design " + num(f(ctx, kBatteryChargeDesignMah), 0) + ")");
-    const double watts = f(ctx, kBatteryPowerW);
     row(!std::isnan(watts) && watts < 0 ? t.flowOut : t.flowIn,
         vawText(f(ctx, kBatteryVoltageV), std::fabs(f(ctx, kBatteryCurrentMa)) / 1000.0, std::fabs(watts)));
     // Time rows only while they mean something (charging / discharging)
@@ -917,6 +923,61 @@ void drawGeneral(const Pen& pen, double x, double y, const WidgetContext& ctx) {
     pen.text(hx, ry, num(f(ctx, kSelfPowerW), 2) + " W", 15, kText);
 }
 
+void drawStreaming(const Pen& pen, double x, double y, const WidgetContext& ctx) {
+    const double left=x+kInX+8, valueX=x+216, right=x+kInR-8;
+    double row=y+kTop+44;
+    const auto line=[&](const char* label,const std::string& v) {
+        pen.text(left,row,label,14,kTextMuted);
+        pen.text(valueX,row,ellipsize(pen,v,14,right-valueX),14,kText);
+        row+=20;
+    };
+    const auto number=[&](uint16_t id,const char* unit="",int precision=1) {
+        return ok(ctx,id)?num(f(ctx,id),precision)+unit:
+            reasonOf(ctx,id)==Reason::NoSteamVr?std::string("N/A: SteamVR not running"):naText(ctx,id);
+    };
+    const auto counter=[&](uint16_t id) {
+        return ok(ctx,id)?grouped(i(ctx,id)):naText(ctx,id);
+    };
+    const char* modes[]={"Not streaming","Dongle","Home Wi-Fi","Multi-link","Idle"};
+    const auto mode=i(ctx,kStreamLinkMode);
+    line("Link",ok(ctx,kStreamLinkMode)&&mode>=0&&mode<5?modes[mode]:naText(ctx,kStreamLinkMode));
+    line("Headset FEC retries",counter(kStreamFecRetries)+" / "+counter(kStreamFecRetryPackets)+" packets");
+    const auto* pc=value(ctx,kPcStreamPing);
+    if(!pc||(!pc->ok&&(pc->reason==Reason::PcAppNotRunning||pc->reason==Reason::NotSampledYet))) {
+        pen.text(left,row,"PC app not running",14,kTextMuted);return;
+    }
+    line("FPS / ping",number(kPcStreamFps," Hz",0)+" / "+number(kPcStreamPing," ms"));
+    line("Wire bitrate",number(kPcStreamWireMbps," Mibit/s"));
+    line("Video / FEC",ok(ctx,kPcStreamVideoMbps)?number(kPcStreamVideoMbps)+" / "+number(kPcStreamFecMbps)+" Mibit/s":number(kPcStreamVideoMbps));
+    line("Audio / retry / logic",ok(ctx,kPcStreamAudioMbps)?number(kPcStreamAudioMbps)+" / "+number(kPcStreamRetryMbps)+" / "+number(kPcStreamLogicMbps)+" Mibit/s":number(kPcStreamAudioMbps));
+    line("Latency","avg / p95 (ms)");
+    const char* stages[]={"Game","Encode","Send","Network","Decode + queue","Slack / display","Total"};
+    for(unsigned j=0;j<7;++j) {
+        const auto id=static_cast<uint16_t>(1040+2*j);
+        line(stages[j],ok(ctx,id)?number(id)+" / "+number(static_cast<uint16_t>(id+1)):number(id));
+    }
+    line("Named encode / send",number(kPcStreamNamedEncode)+" / "+number(kPcStreamNamedSend)+" ms");
+    for(unsigned j=0;j<4;++j) {
+        const auto id=static_cast<uint16_t>(1060+2*j);const std::string label="Link "+std::to_string(j+1)+" max / share";
+        line(label.c_str(),ok(ctx,id)?number(id," ms")+" / "+number(static_cast<uint16_t>(id+1),"%") : number(id));
+    }
+    line("Bandwidth estimate",number(kPcStreamEstimatedBandwidth," Mbit/s"));
+    line("Retransmit req / sent",number(kPcStreamRetransmitRequests,"",0)+" / "+number(kPcStreamRetransmitSent,"",0));
+    line("Skipped/s / late",number(kPcStreamSkipped,"",0)+" / "+number(kPcStreamLate,"",0));
+    line("Encoder / stream resets",number(kPcStreamEncoderResets,"",0)+" / "+counter(kPcStreamStreamResets));
+    line("Bad link / throttle",counter(kPcStreamBadLinks)+" / "+counter(kPcStreamThrottleEvents));
+    line("Encoder reinitializations",counter(kPcStreamEncoderReinits));
+    for(const auto id:{kPcStreamL1Note,kPcStreamL2Note,kPcStreamL3Note}) {
+        const auto note=text(ctx,id);
+        if(!note.empty()) {
+            const std::string label=id==kPcStreamL1Note?"Named stats":id==kPcStreamL2Note?"Links":"Frames";
+            line(label.c_str(),note);
+        } else row+=20;
+    }
+    if(reasonOf(ctx,kPcStreamTotalAvg)==Reason::SteamVrChanged || reasonOf(ctx,kPcStreamNamedEncode)==Reason::SteamVrChanged || reasonOf(ctx,kPcStreamLink0Ping)==Reason::SteamVrChanged)
+        pen.text(left,row,"SteamVR changed: streaming details unavailable (build "+text(ctx,kPcStreamBuild)+")",12,kTextMuted);
+}
+
 void drawPlaceholder(const Pen& pen, double x, double y, const WidgetInstance& w) {
     const Reason reason = w.type == WidgetType::Streaming ? Reason::PcAppNotRunning : Reason::CameraHelperMissing;
     pen.text(x + kInX + 8, y + kTop + 44, std::string(widgetText().naPrefix) + reasonText(reason), 15, kTextMuted);
@@ -963,12 +1024,12 @@ int widgetHeight(const WidgetInstance& w) {
         case WidgetType::Power: return kGraphCardH + static_cast<int>(kRowH) * (kPowerRails + 1) + 10;
         case WidgetType::Temp: return kGraphCardH + 4 * static_cast<int>(kLineH) + 8;
         case WidgetType::Cpu: return 166;
-        case WidgetType::Battery: return static_cast<int>(kTop) + 90 + kBatteryRows * static_cast<int>(kRowH) + 10;
+        case WidgetType::Battery: return static_cast<int>(kTop) + 106 + kBatteryRows * static_cast<int>(kRowH) + 10;
         case WidgetType::CpuItems:
         case WidgetType::RamItems: return static_cast<int>(kTop) + 26 + static_cast<int>(kRowH) * static_cast<int>(w.maxItems) + 10;
         case WidgetType::Network: return 108;
         case WidgetType::General: return static_cast<int>(kTop) + 20 + 5 * static_cast<int>(kLineH) + 12;
-        case WidgetType::Streaming:
+        case WidgetType::Streaming: return 628;
         case WidgetType::HeadsetCamera:
         case WidgetType::EyeCamera: return 64;
         case WidgetType::None: break;
@@ -1013,7 +1074,7 @@ void drawWidgetDynamic(const Pen& pen, double x, double y, const WidgetInstance&
         case WidgetType::RamItems: drawProcessList(pen, x, y, w, ctx); break;
         case WidgetType::Network: drawNetwork(pen, x, y, w, ctx); break;
         case WidgetType::General: drawGeneral(pen, x, y, ctx); break;
-        case WidgetType::Streaming:
+        case WidgetType::Streaming: drawStreaming(pen, x, y, ctx); break;
         case WidgetType::HeadsetCamera:
         case WidgetType::EyeCamera: drawPlaceholder(pen, x, y, w); break;
         case WidgetType::None: break;

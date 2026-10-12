@@ -10,6 +10,8 @@ endif()
 # Everything but WinMain and the window: the tests link this.
 add_library(fph-pc-lib STATIC
   link_client.cpp
+  streaming/reader.cpp
+  streaming/service.cpp
   settings.cpp
   editor_model.cpp
   panel_view.cpp
@@ -24,6 +26,7 @@ add_library(fph-pc-lib STATIC
 )
 target_include_directories(fph-pc-lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(fph-pc-lib PRIVATE ${CMAKE_SOURCE_DIR}/headset)  # i18n.h only
+target_include_directories(fph-pc-lib PRIVATE ${CMAKE_SOURCE_DIR}/third_party/openvr)
 target_link_libraries(fph-pc-lib PUBLIC fph-core fph-render ws2_32 iphlpapi shell32 advapi32 ole32)
 target_compile_definitions(fph-pc-lib PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 
@@ -61,6 +64,12 @@ endif()
 # pc\build.cmd builds this: the exe and the PC tests (core's tests still pass -Wall -Wextra unguarded, which cl rejects)
 add_custom_target(fph-pc-all ALL)
 add_dependencies(fph-pc-all frame-perf-hud-pc)
+add_executable(fph-streaming-probe ${CMAKE_SOURCE_DIR}/tools/streaming_probe.cpp)
+target_link_libraries(fph-streaming-probe PRIVATE fph-pc-lib)
+add_dependencies(fph-pc-all fph-streaming-probe)
+add_executable(fph-streaming-preview ${CMAKE_SOURCE_DIR}/tools/streaming_preview.cpp)
+target_compile_definitions(fph-streaming-preview PRIVATE FPH_FONT_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
+target_link_libraries(fph-streaming-preview PRIVATE fph-pc-lib)
 if(BUILD_TESTING)
   foreach(test_src ${FPH_PC_TESTS})
     get_filename_component(test_name ${test_src} NAME_WE)

@@ -25,7 +25,7 @@ struct WidgetRef {
 bool isRepeatable(WidgetType type);
 
 /**
- * @return true if the type can be added from the palette in this build. Streaming (10) and the cameras (12, 13) are
+ * @return true if the type can be added from the palette in this build. The cameras (12, 13) are
  *         placeholders until their tickets; they still load from a file, they just aren't offered.
  */
 bool isOfferedInPalette(WidgetType type);

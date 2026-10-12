@@ -338,8 +338,15 @@ void LinkClient::noteHeadsetVersion(uint32_t version) {
 }
 
 void LinkClient::onMetrics(const Metrics& m, double now) {
-    for (const WireValue& v : m.values) storeWire(store_, v, now);
+    for (const WireValue& v : m.values) if (!isPcStreamMetric(v.id)) storeWire(store_, v, now);
     if (pending_ == nullptr) noteHeadsetVersion(m.state.layoutVersion);
+}
+
+void LinkClient::sendPcMetrics(const std::vector<link::WireValue>& values) {
+    if (!subscribed()) return;
+    PcMetrics m; m.pcId=pcId_; m.snapshotId=seq_+1; m.values=values;
+    const auto payload=encodePcMetrics(m);
+    if(!payload.empty())sendPacket(headsetEp_,PacketType::PcMetrics,payload);
 }
 
 void LinkClient::onBlob(const Blob& blob, double now) {

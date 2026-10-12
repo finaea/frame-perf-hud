@@ -27,6 +27,7 @@ Packages go to `out\pc\vcpkg_installed`, and vcpkg's binary cache to `..\vcpkg-c
 | `app_window.*`, `main.cpp` | The window, tray icon, menus, drawing and editor input |
 | `settings_dialog.*`, `app.rc.in`, `resource.h` | The Settings dialog, the fonts and the manifest as resources |
 | `single_instance.*`, `platform.*` | Named mutex, data folder, computer name, "Start with Windows" (HKCU Run) |
+| `streaming/` | Background OpenVR ping, read-only vrserver telemetry, and allow-listed vrlink event counts |
 
 ## Run
 
@@ -39,3 +40,31 @@ Packages go to `out\pc\vcpkg_installed`, and vcpkg's binary cache to `..\vcpkg-c
   - `--exit-after N`: Exit after N seconds.
 - **Log:** `%LOCALAPPDATA%\frame-perf-hud\pc.log`, rewritten on each start.
 - **Layout cache:** `layout-cache.json` sits next to the log. It's drawn greyed until the headset answers.
+
+## Streaming
+
+Enable Streaming in the editor to read PC telemetry and send it to the headset at 1 Hz. It uses SteamVR's
+installed OpenVR DLL, so there is nothing extra to install. Quitting SteamVR releases OpenVR immediately;
+the app stays open and reconnects when SteamVR returns. With Streaming off, its worker sleeps and holds no
+SteamVR or vrserver handle.
+
+The detailed streaming values are read from statistics SteamVR already maintains in `vrserver.exe`, with
+query and read access only. The app never writes memory, injects code, enables a debug graph, or changes
+SteamVR files or settings. It checks the loaded build against the DLL, resolves anchors, checks object
+identity and named keys, and compares each detail layer against live named statistics. A changed layout
+shows N/A with a build note and retries; public ping and unaffected layers keep working. No recent frames
+means "no frames". The debug graph can stay off.
+
+The PC log records build/layer status and cache resets. SteamVR log lines never enter packets or the PC
+log: only reset, bad-link, encoder-reinit and throttle counters are extracted. Those counters are since
+the app began watching, including the current log's existing events.
+
+For a read-only diagnostic, run `out\pc\build\pc\fph-streaming-probe.exe --seconds 15`. Its
+`--force-header-mismatch` option changes only the probe's expected header, to exercise L3 failure without
+touching SteamVR. `--anchors <driver_vrlink.dll>` checks disk anchors without SteamVR running.
+`tools/t1_transfer_latency.py` is the standalone public-ping proof; `tools/streaming-reference/` preserves
+the original research scripts.
+
+An unsigned build may be flagged by antivirus heuristics because it opens another process for reading.
+If that happens, inspect the detection and this source before deciding whether to allow it. Read access
+does not require administrator rights.
