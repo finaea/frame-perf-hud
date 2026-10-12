@@ -99,9 +99,10 @@ if(FPH_BUILD_HEADSET)
     headset/link_agent.cpp        # T06: the link wired into the agent, --serve-link
     headset/detached.cpp          # T05: Detached mode maths
     headset/layout_editor.cpp     # T05: the dashboard tab's layout editor
+    headset/camera_helper.cpp     # T09: the camera helper's agent side, --camera-helper-dump
     vendor/frame-updater/cpp/update_check.cpp
   )
-  target_include_directories(frame-perf-hud PRIVATE headset third_party/openvr vendor/frame-updater/cpp)
+  target_include_directories(frame-perf-hud PRIVATE headset helper third_party/openvr vendor/frame-updater/cpp)
   target_compile_options(frame-perf-hud PRIVATE -Wall -Wextra)
   # The version printed by --version (from project(VERSION) above)
   target_compile_definitions(frame-perf-hud PRIVATE FRAME_PERF_HUD_VERSION="${PROJECT_VERSION}")
@@ -123,6 +124,12 @@ if(FPH_BUILD_HEADSET)
   )
 
   install(TARGETS frame-perf-hud RUNTIME DESTINATION bin)
+
+  # T09: the camera helper. Plain C, no libraries, kept tiny: installed once with sudo (install-camera-helper.sh)
+  enable_language(C)
+  add_executable(fph-camgrab helper/fph-camgrab.c)
+  target_include_directories(fph-camgrab PRIVATE helper)
+  target_compile_options(fph-camgrab PRIVATE -Wall -Wextra -Wshadow)
 endif()
 
 # Tests: ctest --test-dir build. The release build (scripts/package.sh) passes -DBUILD_TESTING=OFF.
@@ -298,6 +305,24 @@ if(BUILD_TESTING)
     target_compile_options(link-server-test PRIVATE -Wall -Wextra)
     target_link_libraries(link-server-test PRIVATE fph-core)
     add_test(NAME link-server COMMAND link-server-test)
+
+    # T09: the camera helper's parsers and command check (C), the agent side, and the real helper process
+    # (uninstalled, so without the capability: protocol, EOF and parent-death exit; it never turns a camera on)
+    add_executable(camgrab-helper-test tests/camgrab_helper_test.c)
+    target_include_directories(camgrab-helper-test PRIVATE helper)
+    target_compile_options(camgrab-helper-test PRIVATE -Wall -Wextra)
+    add_test(NAME camgrab-helper COMMAND camgrab-helper-test)
+
+    add_executable(camera-helper-test tests/camera_helper_test.cpp headset/camera_helper.cpp)
+    target_include_directories(camera-helper-test PRIVATE headset helper)
+    target_compile_options(camera-helper-test PRIVATE -Wall -Wextra)
+    add_test(NAME camera-helper COMMAND camera-helper-test)
+
+    add_executable(camgrab-process-test tests/camgrab_process_test.cpp headset/camera_helper.cpp)
+    target_include_directories(camgrab-process-test PRIVATE headset helper)
+    target_compile_options(camgrab-process-test PRIVATE -Wall -Wextra)
+    add_dependencies(camgrab-process-test fph-camgrab)
+    add_test(NAME camgrab-process COMMAND camgrab-process-test $<TARGET_FILE:fph-camgrab>)
   endif()
 endif()
 

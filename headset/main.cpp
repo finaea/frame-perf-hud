@@ -12,6 +12,7 @@
 #include "layout.h"  // T04
 #include "layout_authority.h"  // T06
 #include "link_agent.h"  // T06
+#include "camera_helper.h"  // T09
 #include "metric_store.h"
 #include "paths.h"
 #include "scheduler.h"
@@ -74,10 +75,12 @@ struct Options {
     enum class Mode {
         Overlay, Print, DumpPng, DumpSettingsPng, DumpFrameTimings, DebugDump, ContrastReport, Help, Version,
         DumpMetrics,  // T03
-        ServeLink     // T06
+        ServeLink,    // T06
+        CameraHelperDump  // T09 (hidden: not in --help until the camera widgets exist)
     };
     DumpMetricsOptions dumpMetrics;  // T03: --dump-metrics
     ServeLinkOptions serveLink;      // T06: --serve-link
+    camhelper::CameraHelperDumpOptions cameraHelperDump;  // T09: --camera-helper-dump
     Mode mode = Mode::Overlay;
     std::string configPath;
     std::string pngPath;
@@ -270,6 +273,14 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.mode = Options::Mode::DumpMetrics;
         } else if (arg == "--serve-link") {  // T06
             options.mode = Options::Mode::ServeLink;
+        } else if (arg == "--camera-helper-dump") {  // T09
+            options.mode = Options::Mode::CameraHelperDump;
+        } else if (arg == "--camera-eye") {  // T09: also turn the eye cams on
+            options.cameraHelperDump.eye = true;
+        } else if (arg == "--camera-no-outward") {  // T09
+            options.cameraHelperDump.outward = false;
+        } else if (arg == "--camera-helper-path" && hasNext) {  // T09: an uninstalled build (protocol test only)
+            options.cameraHelperDump.helperPath = argv[++i];
         } else if (arg == "--port" && hasNext) {  // T06
             options.serveLink.port = std::max(0, std::min(65535, std::atoi(argv[++i])));
         } else if (arg == "--widgets" && hasNext) {
@@ -1451,6 +1462,9 @@ int main(int argc, char** argv) {
             options.serveLink.configPath = options.configPath;
             if (options.secondsGiven) options.serveLink.seconds = options.dumpSeconds;
             return runServeLink(options.serveLink, gStopRequested, gWakeFd);
+        case Options::Mode::CameraHelperDump:  // T09
+            if (options.secondsGiven) options.cameraHelperDump.seconds = options.dumpSeconds;
+            return camhelper::runCameraHelperDump(options.cameraHelperDump, gStopRequested);
         case Options::Mode::Overlay: break;
     }
     return runOverlay(options);

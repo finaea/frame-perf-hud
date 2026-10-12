@@ -24,6 +24,8 @@ icon_sizes="48 128 256"
 config_dir="$config_home/$name"
 state_dir="$state_home/$name"
 font_dir="$data_home/$name/fonts"
+# T09: the one-time-sudo camera helper (installed by install-camera-helper.sh, not by this script)
+camera_helper="/home/.frame-perf-hud/fph-camgrab"
 
 usage() {
     cat <<'EOF'
@@ -106,6 +108,7 @@ if [[ "$uninstall" == 1 ]]; then
     systemctl --user disable --now "$unit" 2>/dev/null || true
     stop_manual_instance
     rm -f "$unit_dir/$unit" "$bin" "$desktop" "$data_home/$name/frame-update.sh"
+    rm -f "$data_home/$name/fph-camgrab" "$data_home/$name/install-camera-helper.sh"
     rm -rf "$font_dir"
     rmdir "$data_home/$name" 2>/dev/null || true  # only if empty
     # The app's own state (session logs, debug dump) and the updater's cache (check results, downloads)
@@ -116,6 +119,9 @@ if [[ "$uninstall" == 1 ]]; then
     systemctl --user daemon-reload || true
     refresh_caches
     echo "Removed $name."
+    if [[ -e "$camera_helper" ]]; then
+        echo "The camera helper is root-owned, so it's still there. To remove it: sudo $here/install-camera-helper.sh --uninstall"
+    fi
     if [[ -d "$config_dir" ]]; then
         echo "Your settings are kept in $config_dir. To delete them too: rm -r \"$config_dir\""
     fi
@@ -181,6 +187,27 @@ else
     echo "Warning: $update_script not found. Update from the dashboard won't work until you install a release that includes it." >&2
 fi
 
+# Camera helper (T09): stage fph-camgrab and its installer in ~/.local/share/<name>/. Installing it needs sudo
+# once (install-camera-helper.sh), so this script only stages it and says whether the installed one is current.
+camera_note=""
+if [[ -f "$here/fph-camgrab" ]]; then
+    src_helper="$here/fph-camgrab"
+else
+    src_helper="$here/build/fph-camgrab"
+fi
+if [[ -f "$src_helper" && -f "$here/install-camera-helper.sh" ]]; then
+    install -Dm755 "$src_helper" "$data_home/$name/fph-camgrab"
+    install -Dm755 "$here/install-camera-helper.sh" "$data_home/$name/install-camera-helper.sh"
+    if [[ ! -e "$camera_helper" ]]; then
+        camera_note="Cameras:  optional, needs sudo once: sudo $data_home/$name/install-camera-helper.sh"
+    elif [[ "$(grep -a -o -m1 'fph-camgrab-version: [0-9]*;' "$camera_helper" 2>/dev/null)" != \
+            "$(grep -a -o -m1 'fph-camgrab-version: [0-9]*;' "$data_home/$name/fph-camgrab")" ]]; then
+        camera_note="Cameras:  the camera helper changed in this version. Update it (sudo again): sudo $data_home/$name/install-camera-helper.sh"
+    fi
+else
+    echo "Warning: fph-camgrab or install-camera-helper.sh not found, so camera widgets can't be set up." >&2
+fi
+
 # Options for the next automatic update (frame-update.sh install): one per line, # starts a comment
 mkdir -p "$config_dir" "$state_dir"
 install_args="$config_dir/install-args"
@@ -230,3 +257,6 @@ cat <<EOF
   Debug:    $bin --debug-dump   (sources, read counters, every metric)
   Remove:   ./install.sh --uninstall
 EOF
+if [[ -n "$camera_note" ]]; then
+    echo "  $camera_note"
+fi
