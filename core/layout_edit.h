@@ -24,10 +24,7 @@ struct WidgetRef {
 /** @return true for the types a layout may hold more than once (Network, the two cameras) */
 bool isRepeatable(WidgetType type);
 
-/**
- * @return true if the type can be added from the palette in this build. The cameras (12, 13) are
- *         placeholders until their tickets; they still load from a file, they just aren't offered.
- */
+/** @return true if the type can be added from the palette (every type but None) */
 bool isOfferedInPalette(WidgetType type);
 
 /** @return how many instances of the type the layout holds */

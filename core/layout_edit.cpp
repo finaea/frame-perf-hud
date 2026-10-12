@@ -10,12 +10,7 @@ bool isRepeatable(WidgetType type) {
 }
 
 bool isOfferedInPalette(WidgetType type) {
-    switch (type) {
-        case WidgetType::HeadsetCamera:
-        case WidgetType::EyeCamera:
-        case WidgetType::None: return false;
-        default: return true;
-    }
+    return type != WidgetType::None;  // T10: the cameras are real widgets now
 }
 
 int countType(const Layout& layout, WidgetType type) {

@@ -30,6 +30,13 @@ struct LinkEndpoint {
     uint64_t key() const { return static_cast<uint64_t>(ip) << 16 | port; }
 };
 
+/** T10: one PC's camera subscription: where its frames go, which cameras (bit = camera id), how fast. */
+struct LinkCameraTarget {
+    LinkEndpoint to;
+    uint8_t cameras = 0;
+    double fps = 10.0;
+};
+
 /** What LinkServer needs from the agent. */
 class LinkHostEnv {
 public:
@@ -53,6 +60,8 @@ public:
     /** Saves the config (allowed_pcs changed). @return false + error if it failed */
     virtual bool saveConfig(std::string& error) = 0;
     virtual void pcMetrics(const fph::PcMetrics&, double) {}
+    /** T10: bytes waiting in the socket's send queue (camera frames back off so control packets always fit) */
+    virtual size_t sendQueued() { return 0; }
 };
 
 class LinkServer {
@@ -82,6 +91,21 @@ public:
     /** @return true if some PC holds a lease ("someone looking") */
     bool hasLease() const;
 
+    /**
+     * T10: every lease holder that asked for cameras: its camera address (the dongle path it registered with a
+     * camera-path-only SUBSCRIBE within the lease time, else its lease address), the cameras and its fps.
+     */
+    std::vector<LinkCameraTarget> cameraTargets(double now) const;
+    /**
+     * T10: sends one camera frame / state as a Camera BLOB (stream id = camera), unless the socket's send queue is
+     * already over kCameraQueueLimit: then the frame is skipped (the next one comes), so a burst of camera chunks
+     * never crowds out METRICS / SUBSCRIBE_ACK on the same socket.
+     * @return false if skipped
+     */
+    bool sendCameraBlob(const LinkEndpoint& to, uint8_t camera, const std::vector<uint8_t>& data);
+    static constexpr size_t kCameraQueueLimit = 256 * 1024;
+    uint64_t cameraFramesSkipped() const { return cameraSkipped_; }
+
     /** Sends BYE to every lease holder (shutdown). */
     void sayGoodbye();
 
@@ -104,6 +128,7 @@ public:
 
     // ---- counters (tests, debug dump) ----
     uint64_t malformed() const { return malformed_; }
+    uint64_t unknownMetricValues() const { return unknownMetricValues_; }
     uint64_t layoutApplies() const { return layoutApplies_; }
     uint64_t metricsSent() const { return metricsSent_; }
     uint64_t hostIpLookups() const { return hostIpLookups_; }
@@ -132,6 +157,9 @@ private:
         uint64_t sentListGeneration = 0;
         uint32_t pcSnapshot = 0;
         bool havePcSnapshot = false;
+        uint8_t cameraFps = 0;           ///< T10: from SUBSCRIBE (0 = not given)
+        LinkEndpoint cameraAddress;      ///< T10: the PC's dongle path, from a camera-path-only SUBSCRIBE
+        double cameraAddressUntil = 0.0;
         std::deque<Answer> answers;  ///< last kLayoutAnswerMemory LAYOUT_SET answers
     };
 
@@ -152,9 +180,11 @@ private:
     double hostIpsAt_ = -1e9;
 
     uint64_t malformed_ = 0;
+    uint64_t unknownMetricValues_ = 0;
     uint64_t layoutApplies_ = 0;
     uint64_t metricsSent_ = 0;
     uint64_t hostIpLookups_ = 0;
+    uint64_t cameraSkipped_ = 0;  ///< T10
 
     void sendPacket(const LinkEndpoint& to, fph::link::PacketType type, const std::vector<uint8_t>& payload);
     void sendBlob(const LinkEndpoint& to, fph::link::BlobKind kind, uint8_t stream, const std::vector<uint8_t>& data);
@@ -192,6 +222,8 @@ public:
     int fd() const { return fd_; }
     /** Sends one datagram; errors are counted, not reported. */
     void send(const LinkEndpoint& to, const std::vector<uint8_t>& datagram);
+    /** T10: @return bytes not yet sent from the socket's queue (SIOCOUTQ), 0 if unknown */
+    size_t queuedBytes() const;
     /** Reads every queued datagram into the server (at most 256 per call, so a flood can't starve the loop). */
     void receiveAll(LinkServer& server, double now);
     uint64_t sendErrors() const { return sendErrors_; }

@@ -14,6 +14,7 @@ namespace pc {
 struct SettingsDialogData {
     std::string manualIp;      ///< in/out; "" = none (validated: empty or dotted IPv4)
     bool autostart = false;    ///< in/out
+    int cameraFps = 10;        ///< in/out: T10 camera frames per second sent to this PC (1-30)
     std::string info;          ///< in: read-only text (PC name + id, connection, remembered headsets)
     bool forgetHeadsets = false;  ///< out: "Forget remembered headsets" was pressed
 };

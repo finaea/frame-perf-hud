@@ -97,6 +97,16 @@ public:
      */
     bool update(uint64_t overlayHandle, const uint8_t* rgba, std::string& error);
 
+    /**
+     * T10: like update(), but doesn't wait for the transfer after submitting it. The previous transfer is waited for
+     * before the staging buffer and command buffer are reused (at camera rates it finished long ago, so that wait is
+     * ~0). The overlay gets the image while the copy may still be running on the same queue: OpenVR schedules its
+     * work for a submitted Vulkan texture on the VkQueue named in VRVulkanTextureData_t::m_pQueue (Valve's OpenVR
+     * wiki, "Vulkan support": https://github.com/ValveSoftware/openvr/wiki/Vulkan), which is ours, so it runs after
+     * our copy. For the camera tiles only; the panel keeps update().
+     */
+    bool updateNoWait(uint64_t overlayHandle, const uint8_t* rgba, std::string& error);
+
     /** @return 作成済みなら true */
     bool ready() const { return fence_ != VK_NULL_HANDLE; }
 
@@ -114,4 +124,7 @@ private:
     void* stagingMapped_ = nullptr;
     VkCommandBuffer commandBuffer_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
+    bool pending_ = false;  ///< T10: a submit whose fence nobody waited for yet (updateNoWait)
+
+    bool submit(uint64_t overlayHandle, const uint8_t* rgba, bool wait, std::string& error);
 };

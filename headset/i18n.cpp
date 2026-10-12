@@ -54,6 +54,8 @@ const UiText kEnglish = {
     "%u rows", ", by name",
     "Saved", "Changed on a PC meanwhile, try again", "Couldn't save the layout",
     "PC \"%s\" wants to connect", "Allow", "Deny", "Forget PCs (%zu)",
+    // T10: camera widget settings
+    "Cameras", "Full size", "FPS",
 };
 
 /** @return the value with no decimals */

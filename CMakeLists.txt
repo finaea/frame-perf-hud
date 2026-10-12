@@ -21,6 +21,7 @@ add_library(fph-core STATIC
   core/link_wire.cpp        # T06: the headset <-> PC wire format
   core/stream_metrics.cpp   # T08: typed PC streaming snapshots and freshness
   core/layout_edit.cpp      # T05: move / insert / remove widgets, drop slots (headset editor, PC editor)
+  core/camera_frame.cpp     # T10: camera ids, tiles, frame copy + dark filter, recheck gate, camera BLOB
 )
 target_include_directories(fph-core PUBLIC core)
 if(NOT MSVC)
@@ -74,6 +75,8 @@ if(FPH_BUILD_HEADSET)
   pkg_check_modules(VULKAN REQUIRED IMPORTED_TARGET vulkan)
   pkg_check_modules(LIBNL REQUIRED IMPORTED_TARGET libnl-genl-3.0)
   pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)  # T03: sd_journal for vrlink's events
+  pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)  # T10: camera JPEGs for the PC
+  find_package(Threads REQUIRED)  # T10: the camera thread
 
   add_executable(frame-perf-hud
     headset/main.cpp
@@ -101,6 +104,12 @@ if(FPH_BUILD_HEADSET)
     headset/detached.cpp          # T05: Detached mode maths
     headset/layout_editor.cpp     # T05: the dashboard tab's layout editor
     headset/camera_helper.cpp     # T09: the camera helper's agent side, --camera-helper-dump
+    headset/camera_cache.cpp      # T10: dc civac copies of buffers the camera hardware wrote
+    headset/camera_eye_ring.cpp   # T10: framestream's eye ring discovery (MIT, ported)
+    headset/camera_service.cpp    # T10: the camera thread
+    headset/camera_overlay.cpp    # T10: one overlay per camera tile
+    headset/camera_link.cpp       # T10: camera BLOBs to the PCs
+    headset/camera_dump.cpp       # T10: --camera-dump
     vendor/frame-updater/cpp/update_check.cpp
   )
   target_include_directories(frame-perf-hud PRIVATE headset helper third_party/openvr vendor/frame-updater/cpp)
@@ -115,6 +124,8 @@ if(FPH_BUILD_HEADSET)
     PkgConfig::VULKAN
     PkgConfig::LIBNL
     PkgConfig::SYSTEMD
+    PkgConfig::TURBOJPEG
+    Threads::Threads
     "${OPENVR_LIB_DIR}/libopenvr_api.so"
   )
   # Use SteamVR's library at run time too. Only INSTALL_RPATH, from the build on: a build RPATH ends in an
@@ -174,6 +185,17 @@ if(BUILD_TESTING)
   target_link_libraries(core-link-wire-test PRIVATE fph-core)
   target_compile_options(core-link-wire-test PRIVATE -Wall -Wextra)
   add_test(NAME core-link-wire COMMAND core-link-wire-test)
+
+  # T10: camera pieces in core (pitch copy, dark filter, recheck gate, tiles, BLOB format) and two cameras' BLOBs
+  foreach(t camera-frame camera-blob camera-layout)
+    string(REPLACE "-" "_" src ${t})
+    add_executable(${t}-test tests/${src}_test.cpp)
+    target_link_libraries(${t}-test PRIVATE fph-core)
+    if(NOT MSVC)
+      target_compile_options(${t}-test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME ${t} COMMAND ${t}-test)
+  endforeach()
 
   if(TARGET fph-render)
     # T04: grid geometry, 2048 cap, widget draw rules (renders PNGs into a temp dir)
@@ -324,6 +346,43 @@ if(BUILD_TESTING)
     target_compile_options(camgrab-process-test PRIVATE -Wall -Wextra)
     add_dependencies(camgrab-process-test fph-camgrab)
     add_test(NAME camgrab-process COMMAND camgrab-process-test $<TARGET_FILE:fph-camgrab>)
+
+    # T10: the eye ring port (synthetic arenas), the camera thread's mailbox / eventfd, the PC's camera feed
+    add_executable(camera-eye-ring-test tests/camera_eye_ring_test.cpp headset/camera_eye_ring.cpp)
+    target_include_directories(camera-eye-ring-test PRIVATE headset)
+    target_compile_options(camera-eye-ring-test PRIVATE -Wall -Wextra)
+    add_test(NAME camera-eye-ring COMMAND camera-eye-ring-test)
+
+    add_executable(camera-service-mailbox-test
+      tests/camera_service_mailbox_test.cpp
+      headset/camera_service.cpp
+      headset/camera_cache.cpp
+      headset/camera_eye_ring.cpp
+      headset/camera_helper.cpp
+    )
+    target_include_directories(camera-service-mailbox-test PRIVATE headset helper)
+    target_compile_options(camera-service-mailbox-test PRIVATE -Wall -Wextra)
+    target_link_libraries(camera-service-mailbox-test PRIVATE fph-core PkgConfig::TURBOJPEG Threads::Threads)
+    add_test(NAME camera-service-mailbox COMMAND camera-service-mailbox-test)
+
+    # T10 review: the eye search's wake-up vs its work (no busy spin), the shown watermark reset with a fresh CAM
+    add_executable(camera-review-fixes-test tests/camera_review_fixes_test.cpp)
+    target_include_directories(camera-review-fixes-test PRIVATE headset)
+    target_compile_options(camera-review-fixes-test PRIVATE -Wall -Wextra)
+    target_link_libraries(camera-review-fixes-test PRIVATE fph-core)
+    add_test(NAME camera-review-fixes COMMAND camera-review-fixes-test)
+
+    add_executable(camera-tile-geometry-test tests/camera_tile_geometry_test.cpp)
+    target_include_directories(camera-tile-geometry-test PRIVATE headset)
+    target_compile_options(camera-tile-geometry-test PRIVATE -Wall -Wextra)
+    target_link_libraries(camera-tile-geometry-test PRIVATE fph-render)
+    add_test(NAME camera-tile-geometry COMMAND camera-tile-geometry-test)
+
+    add_executable(camera-feed-test tests/pc_camera_feed_test.cpp pc/camera_feed.cpp)
+    target_include_directories(camera-feed-test PRIVATE pc)
+    target_compile_options(camera-feed-test PRIVATE -Wall -Wextra)
+    target_link_libraries(camera-feed-test PRIVATE fph-render PkgConfig::TURBOJPEG)
+    add_test(NAME camera-feed COMMAND camera-feed-test)
   endif()
 endif()
 

@@ -78,14 +78,29 @@ uint32_t LinkClient::wants() const {
             if (i.type == WidgetType::RamItems) w |= kWantRamList;
         }
     }
-    return w;
+    return w | CameraFeed::wantsFor(layout_);  // T10: the cameras of this layout's camera widgets
 }
 
 void LinkClient::sendSubscribe(double now) {
     Subscribe sub;
     sub.pcId = pcId_;
     sub.wants = wants();
+    sub.cameraFps = static_cast<uint8_t>(cameraFps_);
     sendPacket(headsetEp_, PacketType::Subscribe, encodeSubscribe(sub));
+    // T10: camera frames prefer the dongle path. When the headset's dongle AP address isn't the path we subscribed
+    // on, register it for camera frames only (the lease and metrics stay where they are). If this PC isn't on the
+    // dongle's network the copy just goes nowhere, and the frames come over the lease path.
+    cameraPathIp_ = 0;
+    if (sub.wants & cam::kWantCameraMask) {
+        for (const LocalAddress& a : headset_.addresses) {
+            if (a.ifName == "wlanap" && a.ip != 0 && a.ip != headsetEp_.ip) cameraPathIp_ = a.ip;
+        }
+    }
+    if (cameraPathIp_ != 0) {
+        Subscribe path = sub;
+        path.wants |= cam::kWantCameraPathOnly;
+        sendPacket(Endpoint {cameraPathIp_, port_}, PacketType::Subscribe, encodeSubscribe(path));
+    }
     ++subscribesSent_;
     nextSubscribe_ = now + kSubscribeEverySec;
 }
@@ -107,6 +122,8 @@ void LinkClient::backToDiscovery(double now, const char* why) {
     headsetEp_ = Endpoint();
     // A restarted headset numbers its blobs from 1 again: forget what was completed before
     blobs_ = BlobAssembler();
+    cameras_.reset();  // T10
+    cameraPathIp_ = 0;
     ++assemblerResets_;
     ++rediscoveries_;
     layoutLive_ = false;
@@ -220,9 +237,11 @@ void LinkClient::handlePacket(const uint8_t* data, size_t size, const Endpoint& 
         onHelloAck(ack, from, now);
         return;
     }
-    // Everything else only counts from the headset we're talking to
-    if (phase_ == LinkPhase::Discovery || from != headsetEp_) return;
-    lastHeard_ = now;
+    // Everything else only counts from the headset we're talking to (T10: camera BLOBs also from its dongle path)
+    const bool cameraPath = cameraPathIp_ != 0 && from.ip == cameraPathIp_ && from.port == port_ &&
+                            h.type == PacketType::Blob;
+    if (phase_ == LinkPhase::Discovery || (from != headsetEp_ && !cameraPath)) return;
+    if (!cameraPath) lastHeard_ = now;
     switch (h.type) {
         case PacketType::SubscribeAck: {
             SubscribeAck ack;
@@ -338,7 +357,16 @@ void LinkClient::noteHeadsetVersion(uint32_t version) {
 }
 
 void LinkClient::onMetrics(const Metrics& m, double now) {
-    for (const WireValue& v : m.values) if (!isPcStreamMetric(v.id)) storeWire(store_, v, now);
+    uint32_t skipped = 0;
+    for (const WireValue& v : m.values) {
+        if (isPcStreamMetric(v.id)) continue; // The PC owns these; never replace its values with an echo.
+        if (!storeWire(store_, v, now)) ++skipped;
+    }
+    if (skipped) {
+        unknownMetricValues_ += skipped;
+        logLine("[link] METRICS skipped %u unknown/incompatible metric ids (total %llu)", skipped,
+                static_cast<unsigned long long>(unknownMetricValues_));
+    }
     if (pending_ == nullptr) noteHeadsetVersion(m.state.layoutVersion);
 }
 
@@ -371,6 +399,8 @@ void LinkClient::onBlob(const Blob& blob, double now) {
         // A newer version may already be announced: keep asking until we hold it
         needLayout_ = fresh.version != headsetVersion_ && newerId(headsetVersion_, fresh.version);
         if (!needLayout_) headsetVersion_ = fresh.version;
+    } else if (blob.kind == BlobKind::Camera) {  // T10
+        cameras_.onBlob(blob.stream, blob.data.data(), blob.data.size(), now);
     } else if (blob.kind == BlobKind::ProcessList) {
         ProcessListWire list;
         if (!decodeProcessList(blob.data.data(), blob.data.size(), list)) return;
@@ -439,14 +469,14 @@ std::string LinkClient::debugText(double now) const {
     char buffer[512];
     std::snprintf(buffer, sizeof(buffer),
                   "phase %s, headset '%s' at %s, heard %.1f s ago, layout v%u (%s), headset v%u, edit %s, "
-                  "HELLO %llu, SUBSCRIBE %llu, LAYOUT_GET %llu, edit copies %llu, rediscoveries %llu, malformed %llu",
+                  "HELLO %llu, SUBSCRIBE %llu, LAYOUT_GET %llu, edit copies %llu, rediscoveries %llu, malformed %llu, skipped unknown metric ids %llu",
                   linkPhaseName(phase_), headset_.name.c_str(), headsetEp_.text().c_str(),
                   lastHeard_ > 0 ? now - lastHeard_ : -1.0,
                   layout_.version, layoutLive_ ? "live" : "cached", headsetVersion_,
                   pending_ != nullptr ? "pending" : "none", static_cast<unsigned long long>(hellosSent_),
                   static_cast<unsigned long long>(subscribesSent_), static_cast<unsigned long long>(layoutGetsSent_),
                   static_cast<unsigned long long>(editCopiesSent_), static_cast<unsigned long long>(rediscoveries_),
-                  static_cast<unsigned long long>(malformed_));
+                  static_cast<unsigned long long>(malformed_), static_cast<unsigned long long>(unknownMetricValues_));
     return buffer;
 }
 

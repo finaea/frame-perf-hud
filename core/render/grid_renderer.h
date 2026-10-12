@@ -1,5 +1,5 @@
 // Draws a Layout into one panel image: the columns side by side, each widget at its natural height.
-// - The static layer (background, cards, graph beds, titles) is rebuilt only when the layout changes.
+// - The static layer (background, cards, graph beds, titles) is rebuilt when layout or visible row states change.
 // - The panel is the bounding box of the columns, capped at kMaxTextureSide per side; past that the whole
 //   panel is scaled down to fit.
 // - render() reports whether any pixel changed, so the caller uploads only then.
@@ -44,7 +44,8 @@ struct GridGeometry {
  * @param layout the layout
  * @return the geometry
  */
-GridGeometry layoutGrid(const Layout& layout);
+GridGeometry layoutGrid(const Layout& layout, const WidgetContext* ctx = nullptr);
+bool sameGridGeometry(const GridGeometry& a, const GridGeometry& b);
 
 class GridRenderer {
 public:
@@ -60,6 +61,8 @@ public:
      * @return true if the geometry (and so possibly the texture size) changed
      */
     bool setLayout(const Layout& layout);
+    /** Reflows data-dependent card heights. True only if slots or texture dimensions changed. */
+    bool updateGeometry(const WidgetContext& ctx);
 
     /** Forces a static-layer rebuild on the next render (fonts or theme changed). */
     void invalidateStatic() { staticDirty_ = true; }
@@ -113,6 +116,7 @@ private:
 
     void ensureSurfaces();
     void buildStatic();
+    void applyGeometry(const GridGeometry& next);
 };
 
 }  // namespace fph

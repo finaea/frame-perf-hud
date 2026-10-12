@@ -89,7 +89,10 @@ enum class BlobKind : uint8_t {
 constexpr uint8_t kStreamCpuList = 0;
 constexpr uint8_t kStreamRamList = 1;
 
-/** SUBSCRIBE wants. Bits 8-15 are reserved for camera ids (ticket 10). */
+/**
+ * SUBSCRIBE wants. Bits 8-13: camera ids 0-5 (ticket 10, core/camera_frame.h); bit 31: a camera-path-only
+ * SUBSCRIBE (core/camera_frame.h kWantCameraPathOnly).
+ */
 constexpr uint32_t kWantMetrics = 1u << 0;
 constexpr uint32_t kWantCpuList = 1u << 1;
 constexpr uint32_t kWantRamList = 1u << 2;
@@ -229,6 +232,11 @@ struct HelloAck {
 struct Subscribe {
     Id128 pcId {};
     uint32_t wants = kWantMetrics;
+    /**
+     * T10: camera frames per second the PC wants (1-30). On the wire exactly when wants has a camera bit (8-13), as a
+     * trailing u8, so a SUBSCRIBE without cameras is byte-for-byte what it was. 0 = not given (the headset's 10).
+     */
+    uint8_t cameraFps = 0;
 };
 
 /** SUBSCRIBE_ACK (headset -> PC). */
@@ -274,6 +282,8 @@ WireValue toWire(uint16_t id, const MetricValue& value);
  * @return true if stored
  */
 bool storeWire(MetricStore& store, const WireValue& value, double now);
+/** Reads a typed value without consulting the local registry, so newer peers' ids can be skipped. */
+bool readWireValue(Reader& reader, WireValue& value);
 
 /** One METRICS part. */
 struct Metrics {

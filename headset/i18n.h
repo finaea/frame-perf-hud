@@ -162,6 +162,9 @@ struct UiText {
     const char* pcAllow;
     const char* pcDeny;
     const char* forgetPcsFormat;     ///< footer button (%zu = allowed PCs)
+    const char* rowCameras;          ///< T10 Headset camera: which outward cams
+    const char* rowFullSize;         ///< T10 Headset camera: full-size frames in the headset
+    const char* rowFps;              ///< T10 camera widgets: headset frame rate
 };
 
 /**

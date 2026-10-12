@@ -64,13 +64,12 @@ void testPaletteRules() {
                       W::Streaming, W::None}) {
         CHECK(!isRepeatable(t));
     }
-    // Streaming (ticket 08) is offered like any other single-instance widget; only the camera widgets
-    // (repeatable, but not yet offered in the palette) and None are held back.
+    // Every real widget is offered (the cameras since ticket 10); only None is held back.
     for (const W t : {W::Frame, W::Cpu, W::GpuRam, W::Power, W::Battery, W::Temp, W::CpuItems, W::RamItems, W::Network,
-                      W::General, W::Streaming}) {
+                      W::General, W::Streaming, W::HeadsetCamera, W::EyeCamera}) {
         CHECK(isOfferedInPalette(t));
     }
-    for (const W t : {W::HeadsetCamera, W::EyeCamera, W::None}) CHECK(!isOfferedInPalette(t));
+    CHECK(!isOfferedInPalette(W::None));
 
     const Layout layout = make({{W::Frame, W::Network}, {W::Network, W::Cpu}});
     CHECK(countType(layout, W::Network) == 2);
@@ -89,8 +88,8 @@ void testPaletteRules() {
     CHECK(!canAdd(layout, W::Frame));         // already there
     CHECK(canAdd(layout, W::Power));          // free
     CHECK(canAdd(layout, W::Network));        // repeatable
-    CHECK(!canAdd(layout, W::HeadsetCamera)); // repeatable but not offered
-    CHECK(!canAdd(layout, W::EyeCamera));
+    CHECK(canAdd(layout, W::HeadsetCamera));  // T10: offered and repeatable
+    CHECK(canAdd(layout, W::EyeCamera));
     CHECK(canAdd(layout, W::Streaming));      // offered, single-instance, not already there, room free
     CHECK(canAdd(Layout(), W::Frame));        // empty layout: a new column can be made
 }

@@ -40,6 +40,7 @@ Packages go to `out\pc\vcpkg_installed`, and vcpkg's binary cache to `..\vcpkg-c
   - `--exit-after N`: Exit after N seconds.
 - **Log:** `%LOCALAPPDATA%\frame-perf-hud\pc.log`, rewritten on each start.
 - **Layout cache:** `layout-cache.json` sits next to the log. It's drawn greyed until the headset answers.
+- **Clock:** the PC uses 24 h with the Time row shown; it does not follow the headset's clock setting.
 
 ## Streaming
 

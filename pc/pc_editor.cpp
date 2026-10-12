@@ -1,5 +1,6 @@
 #include "pc_editor.h"
 
+#include "camera_frame.h"  // T10: camera names
 #include "editor_model.h"
 #include "i18n.h"
 #include "theme.h"
@@ -25,6 +26,8 @@ constexpr double kChipH = 32;
 constexpr double kChipGap = 8;
 constexpr double kRowH = 34;
 constexpr double kRowGap = 8;
+constexpr double kFpsStepperW = 130;  // T10: the camera widgets' FPS − n + (ui units)
+constexpr double kFpsStep = 40;
 constexpr double kDragStart = 6;  // px the pointer moves before a press counts as a drag (headset: 14 for a laser)
 
 const UiText& text() {
@@ -64,8 +67,7 @@ double PcEditor::paletteWidth(double ui) {
 }
 
 bool PcEditor::sync(const Layout& layout, const GridGeometry& geometry) {
-    if (layout.version == layout_.version && layout.sameWidgets(layout_) && geometry.width == geometry_.width &&
-        geometry.height == geometry_.height) {
+    if (layout.version == layout_.version && layout.sameWidgets(layout_) && sameGridGeometry(geometry, geometry_)) {
         return false;
     }
     const bool versionMoved = layout.version != layout_.version;
@@ -161,6 +163,18 @@ void PcEditor::relayout() {
     } else if (w->type == WidgetType::Network) {
         settings_.push_back({Setting::AdapterDongle, {controlX, rowA, controlW / 2, kRowH * u}});
         settings_.push_back({Setting::AdapterHome, {controlX + controlW / 2, rowA, controlW / 2, kRowH * u}});
+    } else if (w->type == WidgetType::HeadsetCamera) {  // T10: one toggle per outward cam, then Full size
+        const double cw = (controlW + 70 * u) / 4;
+        for (int c = 0; c < 4; ++c)
+            settings_.push_back({static_cast<Setting>(static_cast<int>(Setting::Camera0) + c),
+                                 {controlX - 70 * u + c * cw, rowA, cw - 3 * u, kRowH * u}});
+        settings_.push_back({Setting::FpsDown, {controlX - 70 * u, rowB, kFpsStep * u, kRowH * u}});
+        settings_.push_back({Setting::FpsUp, {controlX - 70 * u + (kFpsStepperW - kFpsStep) * u, rowB, kFpsStep * u, kRowH * u}});
+        settings_.push_back({Setting::FullSizeToggle,
+                             {controlX + (kFpsStepperW - 64) * u, rowB, controlW - (kFpsStepperW - 64) * u, kRowH * u}});
+    } else if (w->type == WidgetType::EyeCamera) {  // T10: FPS − n +
+        settings_.push_back({Setting::FpsDown, {controlX - 70 * u, rowA, kFpsStep * u, kRowH * u}});
+        settings_.push_back({Setting::FpsUp, {controlX - 70 * u + (kFpsStepperW - kFpsStep) * u, rowA, kFpsStep * u, kRowH * u}});
     }
 }
 
@@ -262,6 +276,18 @@ void PcEditor::applySetting(Setting setting) {
         case Setting::SameNameOff: e.sumSameName = false; break;
         case Setting::AdapterDongle: e.adapter = NetAdapter::Dongle; break;
         case Setting::AdapterHome: e.adapter = NetAdapter::Home; break;
+        case Setting::Camera0:
+        case Setting::Camera1:
+        case Setting::Camera2:
+        case Setting::Camera3: {  // T10: toggles one cam; the last one can't be turned off (an empty card)
+            const auto bit = static_cast<uint8_t>(1u << (static_cast<int>(setting) - static_cast<int>(Setting::Camera0)));
+            const auto mask = static_cast<uint8_t>(e.cameras ^ bit);
+            if (mask & 0x0F) e.cameras = mask;
+            break;
+        }
+        case Setting::FullSizeToggle: e.cameraFullSize = !e.cameraFullSize; break;
+        case Setting::FpsDown: e.cameraFps = cameraFpsStep(e.cameraFps, -1, e.type); break;
+        case Setting::FpsUp: e.cameraFps = cameraFpsStep(e.cameraFps, +1, e.type); break;
         case Setting::Remove: break;
     }
     if (e != *w) queueCommit(edited, selected_);
@@ -538,6 +564,15 @@ void PcEditor::drawOverPanel(const Pen& pen) const {
         const double rowA = sy + (kRowH + kRowGap) * u;
         const double rowB = rowA + (kRowH + kRowGap) * u;
         const double labelSize = 14 * u;
+        const auto fpsStepper = [&](double row) {  // T10: − n + (like Rows)
+            button(Setting::FpsDown, "−", false);
+            button(Setting::FpsUp, "+", false);
+            for (const auto& [id, r] : settings_) {
+                if (id != Setting::FpsDown) continue;
+                textCentered(pen, r.x + kFpsStepperW * u / 2, centerBaseline(row, kRowH * u, 17 * u),
+                             std::to_string(w->cameraFps), 17 * u, kText, true);
+            }
+        };
         if (isList(w->type)) {
             pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowRows, labelSize, kTextMuted);
             button(Setting::RowsDown, "−", false);
@@ -555,6 +590,17 @@ void PcEditor::drawOverPanel(const Pen& pen) const {
             pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowAdapter, labelSize, kTextMuted);
             button(Setting::AdapterDongle, text().adapterDongle, w->adapter == NetAdapter::Dongle);
             button(Setting::AdapterHome, text().adapterHome, w->adapter == NetAdapter::Home);
+        } else if (w->type == WidgetType::HeadsetCamera) {  // T10
+            pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowCameras, labelSize, kTextMuted);
+            for (uint8_t c = 0; c < 4; ++c)
+                button(static_cast<Setting>(static_cast<int>(Setting::Camera0) + c), cam::cameraName(c),
+                       (w->cameras & (1u << c)) != 0);
+            pen.text(sx, centerBaseline(rowB, kRowH * u, labelSize), text().rowFps, labelSize, kTextMuted);
+            fpsStepper(rowB);
+            button(Setting::FullSizeToggle, text().rowFullSize, w->cameraFullSize);
+        } else if (w->type == WidgetType::EyeCamera) {  // T10
+            pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowFps, labelSize, kTextMuted);
+            fpsStepper(rowA);
         } else {
             pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().noSettings, labelSize, kTextMuted);
         }

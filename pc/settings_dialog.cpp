@@ -30,6 +30,7 @@ INT_PTR CALLBACK settingsProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
             SetWindowLongPtrW(dlg, DWLP_USER, lp);
             SetDlgItemTextW(dlg, IDC_MANUAL_IP, widen(data->manualIp).c_str());
             CheckDlgButton(dlg, IDC_AUTOSTART, data->autostart ? BST_CHECKED : BST_UNCHECKED);
+            SetDlgItemInt(dlg, IDC_CAMERA_FPS, static_cast<UINT>(data->cameraFps), FALSE);  // T10
             SetDlgItemTextW(dlg, IDC_INFO, widen(data->info).c_str());
             return TRUE;
         case WM_COMMAND:
@@ -48,6 +49,15 @@ INT_PTR CALLBACK settingsProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
                         SetFocus(GetDlgItem(dlg, IDC_MANUAL_IP));
                         return TRUE;
                     }
+                    BOOL fpsOk = FALSE;  // T10
+                    const UINT fps = GetDlgItemInt(dlg, IDC_CAMERA_FPS, &fpsOk, FALSE);
+                    if (!fpsOk || fps < 1 || fps > 30) {
+                        MessageBoxW(dlg, L"The camera frame rate is a whole number from 1 to 30.", L"frame-perf-hud",
+                                    MB_OK | MB_ICONWARNING);
+                        SetFocus(GetDlgItem(dlg, IDC_CAMERA_FPS));
+                        return TRUE;
+                    }
+                    data->cameraFps = static_cast<int>(fps);
                     data->manualIp = ip;
                     data->autostart = IsDlgButtonChecked(dlg, IDC_AUTOSTART) == BST_CHECKED;
                     EndDialog(dlg, IDOK);

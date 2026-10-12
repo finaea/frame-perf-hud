@@ -38,12 +38,24 @@ void PanelView::setLayout(const Layout& layout) {
         return;
     }
     const GridGeometry next = layoutGrid(layout);
+    layout_ = layout;
+    haveLayout_ = true;
+    applyGeometry(next);
+}
+
+bool PanelView::updateGeometry(const WidgetContext& ctx) {
+    if (!haveLayout_) setLayout(defaultLayout());
+    const auto next = layoutGrid(layout_, &ctx);
+    if (sameGridGeometry(next, geometry_)) return false;
+    applyGeometry(next);
+    return true;
+}
+
+void PanelView::applyGeometry(const GridGeometry& next) {
     std::vector<WidgetHistory> histories(next.slots.size());
     for (size_t k = 0; k < next.slots.size() && k < geometry_.slots.size(); ++k) {
         if (next.slots[k].widget.type == geometry_.slots[k].widget.type) histories[k] = std::move(histories_[k]);
     }
-    layout_ = layout;
-    haveLayout_ = true;
     geometry_ = next;
     histories_ = std::move(histories);
     signatures_.assign(geometry_.slots.size(), 0);
@@ -55,6 +67,7 @@ void PanelView::setLayout(const Layout& layout) {
 
 cairo_surface_t* PanelView::render(const WidgetContext& ctx, double scale) {
     if (!haveLayout_) setLayout(defaultLayout());
+    updateGeometry(ctx);
     scale = std::max(0.05, scale);
     const int w = std::max(1, static_cast<int>(std::ceil(geometry_.width * scale)));
     const int h = std::max(1, static_cast<int>(std::ceil(geometry_.height * scale)));
@@ -81,7 +94,7 @@ cairo_surface_t* PanelView::render(const WidgetContext& ctx, double scale) {
         spen.color(kBg);
         spen.roundedRect(0, 0, geometry_.width, geometry_.height, 16);
         cairo_fill(sc);
-        for (const WidgetSlot& slot : geometry_.slots) drawWidgetStatic(spen, slot.x, slot.y, slot.widget);
+        for (const WidgetSlot& slot : geometry_.slots) drawWidgetStatic(spen, slot.x, slot.y, slot.widget, slot.h);
         cairo_destroy(sc);
         cairo_surface_flush(static_);
         staticDirty_ = false;

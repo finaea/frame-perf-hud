@@ -15,12 +15,12 @@ namespace {
 
 int failures = 0;
 
-#define CHECK(expr)                                                              \
-    do {                                                                         \
-        if (!(expr)) {                                                           \
-            std::printf("FAIL line %d: %s\n", __LINE__, #expr);                  \
-            ++failures;                                                          \
-        }                                                                        \
+#define CHECK(expr)                                                                                                    \
+    do {                                                                                                               \
+        if (!(expr)) {                                                                                                 \
+            std::printf("FAIL line %d: %s\n", __LINE__, #expr);                                                        \
+            ++failures;                                                                                                \
+        }                                                                                                              \
     } while (false)
 
 using namespace fph::pc::streaming;
@@ -72,11 +72,10 @@ void testParseLogEvent() {
 
 void testFeedWholeLines() {
     LogParser p;
-    feed(p,
-         "2026-10-11 19:08:03 - Reset video stream\n"
-         "2026-10-11 19:08:04 - Bad link event\n"
-         "2026-10-11 19:08:05 - Finished encoder reinit\n"
-         "2026-10-11 19:08:06 - THROTTLE EVENT\n");
+    feed(p, "2026-10-11 19:08:03 - Reset video stream\n"
+            "2026-10-11 19:08:04 - Bad link event\n"
+            "2026-10-11 19:08:05 - Finished encoder reinit\n"
+            "2026-10-11 19:08:06 - THROTTLE EVENT\n");
     CHECK(p.events().resets == 1 && p.events().badLinks == 1 && p.events().encoderReinits == 1 &&
           p.events().throttles == 1);
 }
@@ -87,7 +86,7 @@ void testFeedSplitAcrossCalls() {
     for (size_t cut = 1; cut < line.size() - 1; ++cut) {
         LogParser q;
         q.feed(line.data(), cut);
-        CHECK(allZero(q.events()));  // not counted until the newline arrives
+        CHECK(allZero(q.events())); // not counted until the newline arrives
         q.feed(line.data() + cut, line.size() - cut);
         CHECK(q.events().resets == 1);
     }
@@ -97,14 +96,14 @@ void testFeedSplitAcrossCalls() {
     feed(p, "2026-10-11 19:08:03 - Re");
     CHECK(allZero(p.events()));
     feed(p, "set video stream\n2026-10-11 19:08:04 - Bad ");
-    CHECK(p.events().resets == 1 && p.events().badLinks == 0);  // second line still incomplete
+    CHECK(p.events().resets == 1 && p.events().badLinks == 0); // second line still incomplete
     feed(p, "link event\n");
     CHECK(p.events().resets == 1 && p.events().badLinks == 1);
 }
 
 void testFeedTrailingPartialNotCounted() {
     LogParser p;
-    feed(p, "2026-10-11 19:08:03 - Reset video stream");  // no trailing '\n' yet
+    feed(p, "2026-10-11 19:08:03 - Reset video stream"); // no trailing '\n' yet
     CHECK(allZero(p.events()));
     feed(p, "\n");
     CHECK(p.events().resets == 1);
@@ -123,7 +122,8 @@ void testFeedManyNoiseLines() {
     // after them
     LogParser p;
     std::string chunk;
-    for (int i = 0; i < 50; ++i) chunk += "- SVLDataLink::HandleFECChange( " + std::to_string(i) + " )\n";
+    for (int i = 0; i < 50; ++i)
+        chunk += "- SVLDataLink::HandleFECChange( " + std::to_string(i) + " )\n";
     chunk += "- Finished encoder reinit\n";
     feed(p, chunk);
     CHECK(p.events().encoderReinits == 1 && p.events().resets == 0 && p.events().badLinks == 0);
@@ -135,8 +135,9 @@ void testFeedHugeLineIsSafe() {
     LogParser p;
     // well past any reasonable single-line cap, fed in large chunks, with no newline at all
     const std::string junkChunk(1 << 16, 'x');
-    for (int i = 0; i < 64; ++i) feed(p, junkChunk);  // 4 MiB, still no '\n'
-    CHECK(allZero(p.events()));  // nothing matched (and nothing crashed getting here)
+    for (int i = 0; i < 64; ++i)
+        feed(p, junkChunk);     // 4 MiB, still no '\n'
+    CHECK(allZero(p.events())); // nothing matched (and nothing crashed getting here)
 
     // a real event line right after: the parser must still recognize it once a newline finally arrives, even
     // though it spent the whole run above dropping the oversized fragment
@@ -155,7 +156,7 @@ void testRewritten() {
     // comes after reopening from byte 0 of the new file
     feed(p, "2026-10-11 19:08:05 - Bad li");
     p.rewritten();
-    feed(p, "nk event\n");  // if the old fragment had survived, this would complete a (wrong) bad-link line
+    feed(p, "nk event\n"); // if the old fragment had survived, this would complete a (wrong) bad-link line
     CHECK(p.events().badLinks == 0);
 
     // counts accumulated before the rewrite are not thrown away by it (same convention as the headset's
@@ -168,7 +169,7 @@ void testRewritten() {
     CHECK(p.events().resets == 1);
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     testParseLogEvent();

@@ -2,6 +2,7 @@
 // Renders into memory; a few PNGs go to $FPH_PNG_DIR (default /tmp/fph-t04-tests/png) for a look by eye.
 #include "atomic_file.h"
 #include "grid_renderer.h"
+#include "stream_metrics.h"
 
 #include <cairo.h>
 
@@ -204,6 +205,363 @@ void testGfxVoltsDash() {
     CHECK(renderPx(layout, invalid, nullptr, "power_gfx_dash.png") != renderPx(layout, failed));
 }
 
+// ---- Widget polish: Battery follows its visible rows ----
+
+void testBatteryRowCountMirrorsDrawnPredicates() {
+    MetricStore minimal;  // nothing set: unplugged, no optional field known
+    WidgetContext minimalCtx;
+    minimalCtx.store = &minimal;
+    minimalCtx.now = kNow;
+    CHECK(batteryRowCount(minimalCtx) == 5);  // charge, flow, health, charger, USB
+
+    MetricStore withOptionals = minimal;
+    withOptionals.setI32(metric::kBatteryTimeToFullS, 1200, kNow);
+    withOptionals.setI32(metric::kBatteryTimeToEmptyS, 600, kNow);
+    withOptionals.setF32(metric::kBatterySetCurrentA, 2.0, kNow);
+    WidgetContext withOptionalsCtx;
+    withOptionalsCtx.store = &withOptionals;
+    withOptionalsCtx.now = kNow;
+    CHECK(batteryRowCount(withOptionalsCtx) == 8);  // + toFull + toEmpty + setCurrent
+
+    MetricStore pluggedBare = minimal;
+    pluggedBare.setEnum(metric::kBatteryPlugged, 1, kNow);
+    WidgetContext pluggedBareCtx;
+    pluggedBareCtx.store = &pluggedBare;
+    pluggedBareCtx.now = kNow;
+    CHECK(batteryRowCount(pluggedBareCtx) == 6);  // + Arriving (unconditional once plugged)
+
+    MetricStore pluggedFull = pluggedBare;
+    pluggedFull.setF32(metric::kBatteryPdOfferedV, 20.0, kNow);
+    pluggedFull.setF32(metric::kBatterySagV, 0.3, kNow);
+    WidgetContext pluggedFullCtx;
+    pluggedFullCtx.store = &pluggedFull;
+    pluggedFullCtx.now = kNow;
+    CHECK(batteryRowCount(pluggedFullCtx) == 8);  // + PdOffered + Sag
+
+    // widgetHeight: no context falls back to the fixed legacy reservation; with one, it follows row count
+    const WidgetInstance battery = inst(W::Battery);
+    const int noCtx = widgetHeight(battery);
+    const int minimalH = widgetHeight(battery, &minimalCtx);
+    const int pluggedFullH = widgetHeight(battery, &pluggedFullCtx);
+    CHECK(minimalH < pluggedFullH);  // 5 rows is shorter than 8
+    CHECK(noCtx >= pluggedFullH);    // the legacy fixed reservation covers even the busiest case built here
+
+    // the per-row height delta is a real, consistent constant, not a one-off correction
+    MetricStore plusOne = minimal;
+    plusOne.setI32(metric::kBatteryTimeToFullS, 1, kNow);
+    WidgetContext plusOneCtx;
+    plusOneCtx.store = &plusOne;
+    plusOneCtx.now = kNow;
+    MetricStore plusTwo = plusOne;
+    plusTwo.setI32(metric::kBatteryTimeToEmptyS, 1, kNow);
+    WidgetContext plusTwoCtx;
+    plusTwoCtx.store = &plusTwo;
+    plusTwoCtx.now = kNow;
+    const int delta1 = widgetHeight(battery, &plusOneCtx) - minimalH;
+    const int delta2 = widgetHeight(battery, &plusTwoCtx) - widgetHeight(battery, &plusOneCtx);
+    CHECK(delta1 > 0 && delta1 == delta2);
+}
+
+void testBatteryReflow() {
+    // Battery, then a card that must move when Battery's row count changes
+    Layout layout;
+    layout.columns.resize(1);
+    layout.columns[0].widgets = {inst(W::Battery), inst(W::General)};
+
+    MetricStore store;
+    store.setF32(metric::kBatteryPct, 55, 1.0);
+    GridRenderer renderer(fonts());
+    renderer.setLayout(layout);
+    WidgetContext ctx;
+    ctx.store = &store;
+    ctx.now = kNow;
+
+    CHECK(renderer.render(ctx));
+    CHECK(renderer.staticBuilds() == 1);
+    CHECK(renderer.geometry().slots.size() == 2);
+    const int generalYBefore = renderer.geometry().slots[1].y;
+    const int batteryHBefore = renderer.geometry().slots[0].h;
+
+    // Plugging in adds rows: the panel reflows, costing exactly one more static build, and General moves down
+    store.setEnum(metric::kBatteryPlugged, 1, 2.0);
+    store.setF32(metric::kBatteryPdOfferedV, 20.0, 2.0);
+    store.setF32(metric::kBatterySagV, 0.3, 2.0);
+    CHECK(renderer.render(ctx));
+    CHECK(renderer.staticBuilds() == 2);
+    CHECK(renderer.geometry().slots[0].h > batteryHBefore);
+    CHECK(renderer.geometry().slots[1].y > generalYBefore);
+    const int generalYPlugged = renderer.geometry().slots[1].y;
+    const int batteryHPlugged = renderer.geometry().slots[0].h;
+
+    // A same-shape metric update (percentage changes, but still plugged with the same optional fields known)
+    // redraws the widget without touching the geometry or rebuilding the static layer
+    store.setF32(metric::kBatteryPct, 56, 3.0);
+    CHECK(renderer.render(ctx));
+    CHECK(renderer.staticBuilds() == 2);
+    CHECK(renderer.geometry().slots[0].h == batteryHPlugged);
+    CHECK(renderer.geometry().slots[1].y == generalYPlugged);
+
+    // Unplugging reflows back down: one more static build, General moves back up
+    store.setNa(metric::kBatteryPlugged, Reason::NotSampledYet, 4.0);
+    CHECK(renderer.render(ctx));
+    CHECK(renderer.staticBuilds() == 3);
+    CHECK(renderer.geometry().slots[0].h == batteryHBefore);
+    CHECK(renderer.geometry().slots[1].y == generalYBefore);
+}
+
+// ---- Widget polish: Streaming fails closed per part ----
+
+void testStreamingNoPcStillShowsLinkAndFec() {
+    MetricStore a;
+    a.setEnum(metric::kStreamLinkMode, static_cast<uint32_t>(StreamLinkMode::Dongle), 1.0);
+    a.setI32(metric::kStreamFecRetries, 2, 1.0);
+    a.setI32(metric::kStreamFecRetryPackets, 14, 1.0);
+    setPcStreamNa(a, Reason::PcAppNotRunning, 1.0);  // no PC app at all
+
+    MetricStore b = a;
+    b.setEnum(metric::kStreamLinkMode, static_cast<uint32_t>(StreamLinkMode::Multi), 1.0);
+    b.setI32(metric::kStreamFecRetries, 9, 1.0);
+
+    const Layout layout = oneWidget(inst(W::Streaming));
+    CHECK(renderPx(layout, a) != renderPx(layout, b, nullptr, "streaming_no_pc_link_fec.png"));
+}
+
+void testStreamingHeaderMismatchKeepsL1L2HealthShown() {
+    MetricStore base;  // a fully working PC snapshot, the shape streaming_preview.cpp calls "simulated"
+    base.setEnum(metric::kStreamLinkMode, static_cast<uint32_t>(StreamLinkMode::Multi), 1.0);
+    base.setF32(metric::kPcStreamPing, 2.4, 1.0);
+    base.setF32(metric::kPcStreamFps, 72, 1.0);
+    base.setF32(metric::kPcStreamWireMbps, 151.2, 1.0);
+    for (unsigned j = 0; j < 7; ++j) {
+        base.setF32(static_cast<uint16_t>(1040 + 2 * j), 1.0 + j, 1.0);
+        base.setF32(static_cast<uint16_t>(1041 + 2 * j), 2.0 + j, 1.0);
+    }
+    base.setF32(metric::kPcStreamLink0Ping, 11.9, 1.0);
+    base.setF32(metric::kPcStreamLink0Share, 67, 1.0);
+    CHECK(base.setF32(metric::kPcStreamRetransmitRequests, 0, 1.0));
+    base.setText(metric::kPcStreamBuild, "1791581198", 1.0);
+
+    MetricStore mismatch = base;
+    for (uint16_t id = 1030; id <= 1053; ++id) mismatch.setNa(id, Reason::SteamVrChanged, 1.0);
+    mismatch.setText(metric::kPcStreamL3Note, "CSV header/stride mismatch", 1.0);
+
+    const Layout layout = oneWidget(inst(W::Streaming));
+    // the timing/bitrate block greys out: the picture differs from the fully-working one
+    CHECK(renderPx(layout, base) != renderPx(layout, mismatch, nullptr, "streaming_header_mismatch.png"));
+
+    // L2 (link ping/share) is untouched by an L3-only mismatch: its own data still changes the picture
+    MetricStore mismatchDifferentLink = mismatch;
+    mismatchDifferentLink.setF32(metric::kPcStreamLink0Ping, 45.1, 1.0);
+    CHECK(renderPx(layout, mismatch) != renderPx(layout, mismatchDifferentLink));
+
+    // likewise a health counter (retransmits): still responds to its own data under an L3 mismatch
+    MetricStore mismatchDifferentHealth = mismatch;
+    CHECK(mismatchDifferentHealth.setF32(metric::kPcStreamRetransmitRequests, 12, 1.0));
+    CHECK(renderPx(layout, mismatch) != renderPx(layout, mismatchDifferentHealth));
+}
+
+// ---- Widget polish: conditional shrink across widgets 9 (Network), 10 (Streaming), 11 (General) ----
+
+/** A fully working PC snapshot: every Streaming section (L1 named, L2 links, L3 stages + bitrate) present. */
+MetricStore fullStreamingStore() {
+    MetricStore s;
+    s.setF32(metric::kPcStreamPing, 2.4, kNow);
+    s.setF32(metric::kPcStreamNamedEncode, 2.6, kNow);
+    s.setF32(metric::kPcStreamNamedSend, 0.2, kNow);
+    for (unsigned j = 0; j < 7; ++j) {
+        s.setF32(static_cast<uint16_t>(1040 + 2 * j), 1.0 + j, kNow);
+        s.setF32(static_cast<uint16_t>(1041 + 2 * j), 2.0 + j, kNow);
+    }
+    for (uint16_t id : {metric::kPcStreamWireMbps, metric::kPcStreamVideoMbps, metric::kPcStreamFecMbps,
+                        metric::kPcStreamAudioMbps, metric::kPcStreamRetryMbps, metric::kPcStreamLogicMbps}) {
+        s.setF32(id, 10.0, kNow);
+    }
+    s.setF32(metric::kPcStreamLink0Ping, 11.9, kNow);
+    s.setF32(metric::kPcStreamLink0Share, 67, kNow);
+    CHECK(s.setF32(metric::kPcStreamRetransmitRequests, 0, kNow));
+    s.setText(metric::kPcStreamBuild, "1791581198", kNow);
+    return s;
+}
+
+void testStreamingHeightByState() {
+    const WidgetInstance streaming = inst(W::Streaming);
+    WidgetContext ctx;
+    ctx.now = kNow;
+
+    // No PC app at all: collapsed to the fixed 108 px (link mode / FEC only)
+    MetricStore noPc;
+    setPcStreamNa(noPc, Reason::PcAppNotRunning, kNow);
+    ctx.store = &noPc;
+    CHECK(widgetHeight(streaming, &ctx) == 108);
+
+    // PC present, but SteamVR isn't running on it: also collapsed to 108
+    MetricStore noSteamVr;
+    setPcStreamNa(noSteamVr, Reason::NoSteamVr, kNow);
+    ctx.store = &noSteamVr;
+    CHECK(widgetHeight(streaming, &ctx) == 108);
+
+    // Fully working: taller than the collapsed state
+    MetricStore full = fullStreamingStore();
+    ctx.store = &full;
+    const int fullH = widgetHeight(streaming, &ctx);
+    CHECK(fullH > 108);
+
+    // L3 N/A (header mismatch): the stage legend and bitrate drop (shorter than full), but L1 (named),
+    // L2 (links) and health stay -- so it's still well above the fully-collapsed 108 px
+    MetricStore l3Na = full;
+    for (uint16_t id = 1030; id <= 1053; ++id) l3Na.setNa(id, Reason::SteamVrChanged, kNow);
+    l3Na.setText(metric::kPcStreamL3Note, "CSV header/stride mismatch", kNow);
+    ctx.store = &l3Na;
+    const int l3NaH = widgetHeight(streaming, &ctx);
+    CHECK(l3NaH < fullH);
+    CHECK(l3NaH > 108);
+    CHECK(renderPx(oneWidget(streaming), full) != renderPx(oneWidget(streaming), l3Na, nullptr,
+                                                           "streaming_l3_na_keeps_l1_l2_health.png"));
+}
+
+void testStreamingHealthChipsFixedWidthRegardlessOfCount() {
+    // "Health chips fixed-width 3 columns, counts must not resize": a count moving from single digit to six
+    // digits must not change the card's height (chips wrap at a fixed column count, not by content width)
+    MetricStore small = fullStreamingStore();
+    CHECK(small.setF32(metric::kPcStreamRetransmitRequests, 0, kNow));
+    MetricStore big = fullStreamingStore();
+    CHECK(big.setF32(metric::kPcStreamRetransmitRequests, 999999, kNow));
+    WidgetContext smallCtx;
+    smallCtx.store = &small;
+    smallCtx.now = kNow;
+    WidgetContext bigCtx;
+    bigCtx.store = &big;
+    bigCtx.now = kNow;
+    const WidgetInstance streaming = inst(W::Streaming);
+    CHECK(widgetHeight(streaming, &smallCtx) == widgetHeight(streaming, &bigCtx));
+    // the picture still responds to the value (it's just not wider/taller for it)
+    CHECK(renderPx(oneWidget(streaming), small) != renderPx(oneWidget(streaming), big));
+}
+
+void testGeneralClockOffShrinks() {
+    MetricStore store;
+    WidgetContext ctx;
+    ctx.store = &store;
+    ctx.now = kNow;
+    const WidgetInstance general = inst(W::General);
+
+    ctx.clockFormat = 24;
+    const int withClock = widgetHeight(general, &ctx);
+    ctx.clockFormat = 0;
+    const int withoutClock = widgetHeight(general, &ctx);
+    CHECK(withClock - withoutClock > 0);  // the Time row's height, exactly
+
+    ctx.clockFormat = 12;
+    CHECK(widgetHeight(general, &ctx) == withClock);  // 12 h / 24 h both show the row; only "Off" hides it
+
+    // no context at all (e.g. the layout editor, which doesn't know the dashboard's clock setting): the fixed
+    // fallback must reserve at least as much room as showing the clock does
+    CHECK(widgetHeight(general) >= withClock);
+}
+
+void testNetworkShrinksWhenNotExpanded() {
+    const WidgetInstance dongle = inst(W::Network, 15, NetAdapter::Dongle);
+
+    MetricStore absent;  // kNetAdapterPresent N/A: not expanded
+    WidgetContext absentCtx;
+    absentCtx.store = &absent;
+    absentCtx.now = kNow;
+    CHECK(widgetHeight(dongle, &absentCtx) == 64);
+
+    MetricStore disconnected;
+    disconnected.setEnum(metric::kNetDongleBase + metric::kNetAdapterPresent, 1, kNow);
+    disconnected.setEnum(metric::kNetDongleBase + metric::kNetAdapterConnected, 0, kNow);
+    WidgetContext disconnectedCtx;
+    disconnectedCtx.store = &disconnected;
+    disconnectedCtx.now = kNow;
+    CHECK(widgetHeight(dongle, &disconnectedCtx) == 64);
+
+    MetricStore connected;
+    connected.setEnum(metric::kNetDongleBase + metric::kNetAdapterPresent, 1, kNow);
+    connected.setEnum(metric::kNetDongleBase + metric::kNetAdapterConnected, 1, kNow);
+    WidgetContext connectedCtx;
+    connectedCtx.store = &connected;
+    connectedCtx.now = kNow;
+    CHECK(widgetHeight(dongle, &connectedCtx) == 108);
+
+    CHECK(widgetHeight(dongle) == 108);  // no ctx: fixed fallback keeps the full reservation
+
+    CHECK(renderPx(oneWidget(dongle), disconnected, nullptr, "network_collapsed.png") !=
+          renderPx(oneWidget(dongle), connected, nullptr, "network_expanded.png"));
+}
+
+void testListAndCameraHeightsIgnoreContext() {
+    // these never had a dynamic-height concern (maxItems / fixed tile layout only), so adding the ctx
+    // parameter elsewhere must not have changed anything about them
+    MetricStore store;
+    WidgetContext ctx;
+    ctx.store = &store;
+    ctx.now = kNow;
+    for (const WidgetInstance& w : {inst(W::CpuItems, 10), inst(W::RamItems, 6), inst(W::HeadsetCamera),
+                                    inst(W::EyeCamera)}) {
+        CHECK(widgetHeight(w) == widgetHeight(w, &ctx));
+    }
+}
+
+void testCpuClusterRowsShrinkWhenSensorsMissing() {
+    const WidgetInstance cpu = inst(W::Cpu);
+    WidgetContext ctx;
+    ctx.now = kNow;
+
+    // no cluster clock info at all: core bars/header stay, both cluster rows gone
+    MetricStore allMissing;
+    for (uint16_t k = 0; k < 4; ++k) allMissing.setNa(static_cast<uint16_t>(metric::kCpuCluster0Mhz + k),
+                                                      Reason::SensorMissing, kNow);
+    ctx.store = &allMissing;
+    CHECK(widgetHeight(cpu, &ctx) == 120);
+
+    // only cluster 0 (row 0, the first of its pair) valid: row 0 reserved, row 1 (both its slots missing) isn't
+    MetricStore c0Valid = allMissing;
+    c0Valid.setF32(metric::kCpuCluster0Mhz, 2035.2, kNow);
+    ctx.store = &c0Valid;
+    CHECK(widgetHeight(cpu, &ctx) == 144);
+
+    // only cluster 2 (row 1) valid: row 1's fixed position still has to be reserved, so this is the full
+    // 2-row height even though row 0 itself is empty (clusters are drawn at a fixed slot, not reflowed)
+    MetricStore c2Valid = allMissing;
+    c2Valid.setF32(static_cast<uint16_t>(metric::kCpuCluster0Mhz + 2), 2035.2, kNow);
+    ctx.store = &c2Valid;
+    CHECK(widgetHeight(cpu, &ctx) == 166);
+
+    // all four present (today's common real-hardware case): unchanged from the old fixed height
+    MetricStore allValid = allMissing;
+    for (uint16_t k = 0; k < 4; ++k) {
+        allValid.setF32(static_cast<uint16_t>(metric::kCpuCluster0Mhz + k), 2000.0 + k * 100, kNow);
+    }
+    ctx.store = &allValid;
+    CHECK(widgetHeight(cpu, &ctx) == 166);
+
+    // a numeric value change (still present) must not move the height
+    MetricStore allValidChanged = allValid;
+    allValidChanged.setF32(metric::kCpuCluster0Mhz, 3000.0, kNow);
+    ctx.store = &allValidChanged;
+    CHECK(widgetHeight(cpu, &ctx) == 166);
+
+    // then a sensor actually goes missing: the row it was the last occupant of shrinks
+    MetricStore row1Gone = allValid;
+    row1Gone.setNa(static_cast<uint16_t>(metric::kCpuCluster0Mhz + 2), Reason::SensorMissing, kNow);
+    row1Gone.setNa(static_cast<uint16_t>(metric::kCpuCluster0Mhz + 3), Reason::SensorMissing, kNow);
+    ctx.store = &row1Gone;
+    CHECK(widgetHeight(cpu, &ctx) == 144);
+
+    // ReadFailed (not SensorMissing) still counts as present -- the existing draw predicate only skips a
+    // slot that's both N/A and specifically SensorMissing ("past the last core/cluster")
+    MetricStore readFailed = allMissing;
+    readFailed.setNa(static_cast<uint16_t>(metric::kCpuCluster0Mhz + 2), Reason::ReadFailed, kNow);
+    ctx.store = &readFailed;
+    CHECK(widgetHeight(cpu, &ctx) == 166);
+
+    // no context at all: the fixed fallback must cover at least the busiest real case built here
+    CHECK(widgetHeight(cpu) >= 166);
+
+    CHECK(renderPx(oneWidget(cpu), allMissing) != renderPx(oneWidget(cpu), allValid, nullptr, "cpu_clusters.png"));
+}
+
 void testPlaceholders() {
     // Dynamic layer only (the title is static): 12 and 13 say the same thing, 10 says something else
     const auto dynamicPx = [](W type) {
@@ -225,7 +583,7 @@ void testPlaceholders() {
     const Pixels streaming = dynamicPx(W::Streaming);
     const Pixels headsetCam = dynamicPx(W::HeadsetCamera);
     const Pixels eyeCam = dynamicPx(W::EyeCamera);
-    CHECK(headsetCam == eyeCam);
+    CHECK(headsetCam != eyeCam);  // T10: one video0 tile vs the two eye tiles
     CHECK(streaming != headsetCam);
 
     // Whole card: all three draw, and 12 vs 13 differ by their titles
@@ -444,6 +802,16 @@ int main() {
     testBatteryTimeRows();
     testUnmeasuredNegative();
     testGfxVoltsDash();
+    testBatteryRowCountMirrorsDrawnPredicates();
+    testBatteryReflow();
+    testStreamingNoPcStillShowsLinkAndFec();
+    testStreamingHeaderMismatchKeepsL1L2HealthShown();
+    testStreamingHeightByState();
+    testStreamingHealthChipsFixedWidthRegardlessOfCount();
+    testGeneralClockOffShrinks();
+    testNetworkShrinksWhenNotExpanded();
+    testListAndCameraHeightsIgnoreContext();
+    testCpuClusterRowsShrinkWhenSensorsMissing();
     testPlaceholders();
     testEmptyStoreAllTypes();
     testDefaultFilled();

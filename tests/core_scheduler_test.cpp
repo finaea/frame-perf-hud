@@ -201,6 +201,110 @@ void testRecomputeCount() {
     CHECK(r.sched.recomputeCount() == start + 2);
 }
 
+// ---- Streaming's implicit demand for SourceId::Network: link naming (Dongle / Home Wi-Fi) needs
+// net.dongle.ip / net.home.ip even when there's no Network widget on screen at all. The scheduler grants
+// this via an extra ownerMask bit on SourceId::Network for WidgetType::Streaming, not a duplicated metric, so
+// it doesn't show up in the registry defs below -- it's purely scheduler-side wiring. ----
+
+const std::vector<MetricDef> kStreamingDefs = {
+    {20, "net.ip", "", W::Network, S::Network, 2000, WireType::F32},
+    {21, "stream.link", "", W::Streaming, S::StreamLink, 1000, WireType::F32},
+};
+
+struct StreamingRig {
+    Scheduler sched {kStreamingDefs};
+    int networkReads = 0, streamReads = 0;
+    std::vector<bool> networkResumed;
+    double now = 0.0;
+    StreamingRig() {
+        sched.addSource(S::Network, [this](double, bool resumed) {
+            ++networkReads;
+            networkResumed.push_back(resumed);
+        });
+        sched.addSource(S::StreamLink, [this](double, bool) { ++streamReads; });
+    }
+    void run(int ticks, double stepSec = 1.0) {
+        for (int i = 0; i < ticks; ++i) {
+            sched.runDue(now);
+            now += stepSec;
+        }
+    }
+    void look() {
+        DemandInputs d;
+        d.editorOpen = true;
+        sched.setDemand(d);
+    }
+};
+
+void testStreamingAloneEnablesNetwork() {
+    StreamingRig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Streaming});  // no Network widget anywhere
+    CHECK(r.sched.refCount(S::Network) == 1);   // Streaming alone still pulls Network in
+    CHECK(r.sched.refCount(S::StreamLink) == 1);
+
+    r.run(4);  // Network's interval is 2 s, StreamLink's is 1 s
+    CHECK(r.networkReads == 2);
+    CHECK(r.streamReads == 4);
+
+    // removing Streaming stops Network too (nothing else demands it in this table)
+    r.sched.setEnabledWidgets({});
+    CHECK(r.sched.refCount(S::Network) == 0);
+    CHECK(r.sched.refCount(S::StreamLink) == 0);
+    const int frozenNet = r.networkReads;
+    const int frozenStream = r.streamReads;
+    r.run(10);
+    CHECK(r.networkReads == frozenNet && r.streamReads == frozenStream);
+}
+
+void testStreamingNetworkResumeSemanticsUnchanged() {
+    StreamingRig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Streaming});
+    r.run(3);
+    CHECK(r.networkResumed.size() == 2);  // 2 s interval over 3 x 1 s ticks: reads at t=0, t=2
+    CHECK(r.networkResumed[0] && !r.networkResumed[1]);  // first read since activation is "resumed"
+
+    // pause, then reactivate: the first read after the pause is "resumed" again, same as any other source
+    r.sched.setDemand(DemandInputs {});
+    r.run(4);
+    r.look();
+    r.networkResumed.clear();
+    r.run(3);
+    CHECK(r.networkResumed.size() == 2);
+    CHECK(r.networkResumed[0] && !r.networkResumed[1]);
+}
+
+void testStreamingRemovalStopsNetworkReads() {
+    StreamingRig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Streaming});
+    r.run(2);
+    CHECK(r.networkReads > 0);
+    r.sched.setEnabledWidgets({});  // Streaming (the only thing demanding Network here) goes away
+    const int frozen = r.networkReads;
+    r.run(10);
+    CHECK(r.networkReads == frozen);
+}
+
+void testTwoNetworkWidgetsPlusStreamingShareOneCallbackPerTick() {
+    StreamingRig r;
+    r.look();
+    // two real Network widget instances, plus Streaming's implicit demand: refs stack (3), but runDue must
+    // still invoke the registered callback exactly once per due tick, not once per contributing widget
+    r.sched.setEnabledWidgets({W::Network, W::Network, W::Streaming});
+    CHECK(r.sched.refCount(S::Network) == 3);
+    r.run(4);
+    CHECK(r.networkReads == 2);  // same count as the Streaming-alone case: one callback per due tick
+
+    // dropping back to just the two Network widgets keeps it active (refs 2, still > 0)
+    r.sched.setEnabledWidgets({W::Network, W::Network});
+    CHECK(r.sched.refCount(S::Network) == 2);
+    const int before = r.networkReads;
+    r.run(4);
+    CHECK(r.networkReads == before + 2);  // unaffected: still exactly one callback per due tick
+}
+
 }  // namespace
 
 int main() {
@@ -213,6 +317,10 @@ int main() {
     testResumed();
     testIntervals();
     testRecomputeCount();
+    testStreamingAloneEnablesNetwork();
+    testStreamingNetworkResumeSemanticsUnchanged();
+    testStreamingRemovalStopsNetworkReads();
+    testTwoNetworkWidgetsPlusStreamingShareOneCallbackPerTick();
     if (failures) std::printf("%d check(s) failed\n", failures);
     return failures ? 1 : 0;
 }

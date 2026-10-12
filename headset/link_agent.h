@@ -28,6 +28,7 @@ public:
     uint64_t processLists(fph::link::ProcessListWire& cpu, fph::link::ProcessListWire& ram) override;
     bool saveConfig(std::string& error) override;
     void pcMetrics(const fph::PcMetrics& m, double now) override { pcStream_.apply(m, store_, now); }
+    size_t sendQueued() override { return socket_.queuedBytes(); }  // T10
     void expirePcMetrics(double now) { pcStream_.expire(store_, now); }
 
 private:

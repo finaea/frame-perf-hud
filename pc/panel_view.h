@@ -26,6 +26,7 @@ public:
 
     /** Sets the layout; graphs of widgets that keep their type and slot survive. */
     void setLayout(const Layout& layout);
+    bool updateGeometry(const WidgetContext& ctx);
 
     /** @return the unscaled geometry (panel px), as layoutGrid gives it */
     const GridGeometry& geometry() const { return geometry_; }
@@ -55,6 +56,7 @@ private:
     size_t lastRedrawn_ = 0;
 
     void dropSurfaces();
+    void applyGeometry(const GridGeometry& next);
 };
 
 }  // namespace pc

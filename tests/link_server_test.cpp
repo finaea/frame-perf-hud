@@ -541,6 +541,63 @@ void testPcMetrics() {
     CHECK(r.env.pcMetricsCalls.size() == 4);
 }
 
+/** Builds a PC_METRICS payload without encodePcMetrics's registry validation, so it can carry ids this build
+ *  doesn't know about (standing in for a newer PC build / mixed-version peer). */
+Bytes rawPcMetricsBytes(uint8_t seed, uint32_t snapshotId, const std::vector<WireValue>& values) {
+    Writer w;
+    w.id(pcId(seed));
+    w.u32(snapshotId);
+    w.u16(static_cast<uint16_t>(values.size()));
+    for (const WireValue& v : values) {
+        w.u16(v.id);
+        w.u8(static_cast<uint8_t>(v.type));
+        w.u8(v.ok ? 0 : 1);
+        if (!v.ok) {
+            w.u16(static_cast<uint16_t>(v.reason));
+            continue;
+        }
+        switch (v.type) {
+            case fph::WireType::F32: w.f32(v.f32); break;
+            case fph::WireType::I32: w.i32(v.i32); break;
+            case fph::WireType::Enum: w.u8(v.enumValue); break;
+            case fph::WireType::ShortString: w.str8(v.text, fph::kShortStringMax); break;
+        }
+    }
+    return w.bytes();
+}
+
+void testPcMetricsUnknownIdsFromNewerPc() {
+    // this (installed) headset build doesn't know some of the PC's fields yet (e.g. it predates the
+    // Link0-3Address ids): the gate still accepts the packet, applies every known field, and counts the rest
+    // via a separate debug counter rather than rejecting the whole snapshot
+    const uint32_t otherIp = ip(192, 168, 1, 199);
+    Rig r;
+    const LinkEndpoint pc = ep(otherIp, 40030);
+    r.allowInConfig(30);
+    CHECK(r.hello(30, pc, 0.0).status == PeerStatus::Allowed);
+    CHECK(r.subscribe(30, pc, 0.0).status == PeerStatus::Allowed);
+
+    fph::link::WireValue known;
+    known.id = fph::metric::kPcStreamPing;
+    known.type = fph::WireType::F32;
+    known.ok = true;
+    known.f32 = 2.4f;
+    fph::link::WireValue unknown;
+    unknown.id = 65000;  // stands in for a real id this build's registry doesn't carry yet
+    unknown.type = fph::WireType::ShortString;
+    unknown.ok = true;
+    unknown.text = "10.35.78.1";
+
+    const uint64_t before = r.server.unknownMetricValues();
+    r.send(PacketType::PcMetrics, rawPcMetricsBytes(30, 1, {known, unknown}), pc, 0.5);
+    CHECK(r.server.malformed() == 0);
+    CHECK(r.env.pcMetricsCalls.size() == 1);
+    CHECK(r.env.pcMetricsCalls[0].values.size() == 1);
+    CHECK(r.env.pcMetricsCalls[0].values[0].id == fph::metric::kPcStreamPing);
+    CHECK(r.env.pcMetricsCalls[0].unknownValues == 1);
+    CHECK(r.server.unknownMetricValues() == before + 1);
+}
+
 // ---- vrlink host IPs ----
 
 std::string cmdlineOf(const std::vector<std::string>& args) {
@@ -1263,6 +1320,7 @@ int main() {
     tempDir = dir;
     testAllowList();
     testPcMetrics();
+    testPcMetricsUnknownIdsFromNewerPc();
     testParseVrlink();
     testReadVrlink();
     testLease();

@@ -95,7 +95,11 @@ public:
     /** @return the scroll offset (px) */
     double scrollY() const { return scrollY_; }
     /** @return the settings buttons for the selected widget, by id (see Setting) */
-    enum class Setting { Remove, RowsDown, RowsUp, SameNameOn, SameNameOff, AdapterDongle, AdapterHome };
+    enum class Setting {
+        Remove, RowsDown, RowsUp, SameNameOn, SameNameOff, AdapterDongle, AdapterHome,
+        Camera0, Camera1, Camera2, Camera3, FullSizeToggle,  // T10 Headset camera
+        FpsDown, FpsUp                                       // T10 both camera widgets
+    };
     const std::vector<std::pair<Setting, EditorRect>>& settingButtons() const { return settings_; }
 
 private:

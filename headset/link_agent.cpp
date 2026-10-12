@@ -85,6 +85,10 @@ std::vector<fph::link::WireValue> AgentLinkEnv::metricValues() {
         const size_t index = static_cast<size_t>(type);
         if (index < enabled.size()) enabled[index] = true;
     }
+    // Streaming also consumes Network's adapter IPs for link names, even without a Network card.
+    if (enabled[static_cast<size_t>(fph::WidgetType::Streaming)]) {
+        enabled[static_cast<size_t>(fph::WidgetType::Network)] = true;
+    }
     std::vector<fph::link::WireValue> values;
     for (const fph::MetricDef& def : store_.defs()) {
         const size_t owner = static_cast<size_t>(def.owner);
@@ -145,7 +149,9 @@ void LinkService::tick(double now) {
 
 std::string LinkService::debugText(double now) const {
     return server_.debugText(now) + "socket " + (socket_.fd() >= 0 ? "open" : "closed") + ", send errors " +
-           std::to_string(socket_.sendErrors()) + "\n";
+           std::to_string(socket_.sendErrors()) + ", camera frames skipped (send queue full) " +
+           std::to_string(server_.cameraFramesSkipped()) + ", queued now " + std::to_string(socket_.queuedBytes()) +
+           " B\n";  // T10
 }
 
 void LinkService::shutdown() {

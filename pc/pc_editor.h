@@ -28,7 +28,11 @@ struct Box {
 class PcEditor {
 public:
     enum class CommitOutcome { Applied, Stale, Failed };
-    enum class Setting { Remove, RowsDown, RowsUp, SameNameOn, SameNameOff, AdapterDongle, AdapterHome };
+    enum class Setting {
+        Remove, RowsDown, RowsUp, SameNameOn, SameNameOff, AdapterDongle, AdapterHome,
+        Camera0, Camera1, Camera2, Camera3, FullSizeToggle,  // T10 Headset camera
+        FpsDown, FpsUp                                       // T10 both camera widgets
+    };
 
     /** Where things are this frame. */
     struct View {

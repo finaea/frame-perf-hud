@@ -9,3 +9,4 @@
 #define IDC_AUTOSTART 202
 #define IDC_INFO 203
 #define IDC_FORGET 204
+#define IDC_CAMERA_FPS 205  // T10

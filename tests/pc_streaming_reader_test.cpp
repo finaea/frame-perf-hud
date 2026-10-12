@@ -19,8 +19,8 @@
 #include "streaming/reader.h"
 
 #include <cmath>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -29,12 +29,12 @@ namespace {
 
 int failures = 0;
 
-#define CHECK(expr)                                                              \
-    do {                                                                         \
-        if (!(expr)) {                                                           \
-            std::printf("FAIL line %d: %s\n", __LINE__, #expr);                  \
-            ++failures;                                                          \
-        }                                                                        \
+#define CHECK(expr)                                                                                                    \
+    do {                                                                                                               \
+        if (!(expr)) {                                                                                                 \
+            std::printf("FAIL line %d: %s\n", __LINE__, #expr);                                                        \
+            ++failures;                                                                                                \
+        }                                                                                                              \
     } while (false)
 
 using namespace fph;
@@ -52,18 +52,18 @@ std::vector<uint8_t> frameBytes(const uint32_t (&t)[13], int32_t pingUs) {
 /** A self-consistent, complete frame: each stage a plausible small delay, ping 2 ms. */
 void baseFields(uint32_t (&t)[13], uint32_t wgpRelease = 1000, uint32_t id = 1) {
     t[0] = id;
-    t[1] = wgpRelease;        // WGP Release
-    t[2] = t[1] + 1000;       // App Submit            (game = 1.0 ms)
-    t[3] = t[2] + 300;        // Encode Start
-    t[4] = t[3] + 2600;       // Encode End             (encode = 2.6 ms)
-    t[5] = t[4] + 170;        // Send Start
-    t[6] = t[5] + 180;        // Send End               (send = 0.18 ms)
-    t[7] = t[6] + 6000;       // Receive                (network = 6.0 ms)
-    t[8] = t[7] + 70;         // Decode Start
-    t[9] = t[8] + 7000;       // Decode End             (decode, incl. queue = 7.07 ms)
-    t[10] = t[9] + 36000;     // Submit Illumination    (slack = 36.0 ms)
-    t[11] = t[10] + 500;      // Predicted Display (unused by parseFrame)
-    t[12] = 0;                // Decode Query (unused)
+    t[1] = wgpRelease;    // WGP Release
+    t[2] = t[1] + 1000;   // App Submit            (game = 1.0 ms)
+    t[3] = t[2] + 300;    // Encode Start
+    t[4] = t[3] + 2600;   // Encode End             (encode = 2.6 ms)
+    t[5] = t[4] + 170;    // Send Start
+    t[6] = t[5] + 180;    // Send End               (send = 0.18 ms)
+    t[7] = t[6] + 6000;   // Receive                (network = 6.0 ms)
+    t[8] = t[7] + 70;     // Decode Start
+    t[9] = t[8] + 7000;   // Decode End             (decode, incl. queue = 7.07 ms)
+    t[10] = t[9] + 36000; // Submit Illumination    (slack = 36.0 ms)
+    t[11] = t[10] + 500;  // Predicted Display (unused by parseFrame)
+    t[12] = 0;            // Decode Query (unused)
 }
 
 void testParseFrameFieldMapping() {
@@ -117,7 +117,7 @@ void testParseFrameBounds() {
         Frame f;
         CHECK(!parseFrame(frameBytes(t, -1).data(), f));
         CHECK(!parseFrame(frameBytes(t, 600000).data(), f));
-        CHECK(parseFrame(frameBytes(t, 500000).data(), f));  // the bound itself is inclusive
+        CHECK(parseFrame(frameBytes(t, 500000).data(), f)); // the bound itself is inclusive
     }
 }
 
@@ -126,12 +126,12 @@ void testParseFrameU32Wrap() {
     // between stages is unchanged (1000 us of "game", 53320 us total) -- only the raw counters wrap.
     uint32_t t[13] = {};
     baseFields(t, /*wgpRelease=*/0xFFFFFF9Cu);
-    CHECK(t[2] < t[1]);  // confirms the fixture actually wrapped (App Submit reads numerically smaller)
+    CHECK(t[2] < t[1]); // confirms the fixture actually wrapped (App Submit reads numerically smaller)
 
     Frame f;
     CHECK(parseFrame(frameBytes(t, 2000).data(), f));
-    CHECK(std::fabs(f.ms[0] - 1.0) < 1e-9);    // game: still 1.0 ms despite the wrap
-    CHECK(std::fabs(f.ms[6] - 53.32) < 1e-6);  // total: WGP Release -> Submit Illumination, also wrapped
+    CHECK(std::fabs(f.ms[0] - 1.0) < 1e-9);   // game: still 1.0 ms despite the wrap
+    CHECK(std::fabs(f.ms[6] - 53.32) < 1e-6); // total: WGP Release -> Submit Illumination, also wrapped
 }
 
 // ==================== FrameWindow ====================
@@ -179,7 +179,7 @@ void testFrameWindowDedupeAndLateCompletion() {
     CHECK(w.published() == 144);
     CHECK(w.recent(0.2).size() == 144);
     w.add(tail2, 0.3);
-    CHECK(w.published() == 144);  // still just the one new id; no double count
+    CHECK(w.published() == 144); // still just the one new id; no double count
 }
 
 void testFrameWindowWrongSizeIgnored() {
@@ -217,7 +217,7 @@ void testFrameWindowStallReadsAsNoFrames() {
 void testFrameWindowInteriorLateCompletion() {
     FrameWindow w;
     auto firstRead = tail144(100, 144, 1000);
-    clearField(firstRead, 120, 10);  // id 220 isn't done yet on this read
+    clearField(firstRead, 120, 10); // id 220 isn't done yet on this read
     w.add(firstRead, 0.0);
     CHECK(w.published() == 143);
     CHECK(w.recent(0.0).size() == 143);
@@ -226,14 +226,14 @@ void testFrameWindowInteriorLateCompletion() {
     // last by insertion order, even though its illumination sits in the *middle* of the span.
     const auto secondRead = tail144(100, 144, 1000);
     w.add(secondRead, 0.2);
-    CHECK(w.published() == 144);  // exactly the one new id (220), no dupes
+    CHECK(w.published() == 144); // exactly the one new id (220), no dupes
 
     const auto window = w.recent(0.2);
-    CHECK(window.size() == 144);  // every completed frame stays in the window, not just the 121 up to id 220
+    CHECK(window.size() == 144); // every completed frame stays in the window, not just the 121 up to id 220
     bool sawId220 = false, sawNewestId243 = false;
     for (const Frame& f : window) {
         sawId220 |= f.id == 220;
-        sawNewestId243 |= f.id == 243;  // slot 143: the genuinely newest frame, by far the latest illumination
+        sawNewestId243 |= f.id == 243; // slot 143: the genuinely newest frame, by far the latest illumination
     }
     CHECK(sawId220 && sawNewestId243);
 
@@ -247,10 +247,10 @@ void testFrameWindowInteriorLateCompletion() {
  *  (close to 0xFFFFFFFF) and slot 143's has wrapped around to a small number, even though slot 143 is the
  *  later frame. A naive "biggest number wins" newest-tracker would get this backwards. */
 void testFrameWindowInteriorLateCompletionWraps() {
-    constexpr uint32_t kWrapBase = 0xFFFFFFFFu - 70000u;  // the 144 x 1000 us span straddles the wrap
+    constexpr uint32_t kWrapBase = 0xFFFFFFFFu - 70000u; // the 144 x 1000 us span straddles the wrap
     FrameWindow w;
     auto firstRead = tail144(300, 144, 1000, kWrapBase);
-    clearField(firstRead, 120, 10);  // id 420
+    clearField(firstRead, 120, 10); // id 420
     w.add(firstRead, 0.0);
     CHECK(w.published() == 143);
 
@@ -261,34 +261,38 @@ void testFrameWindowInteriorLateCompletionWraps() {
     const auto window = w.recent(0.2);
     CHECK(window.size() == 144);
     bool sawNewestId443 = false;
-    for (const Frame& f : window) sawNewestId443 |= f.id == 443;  // slot 143: past the wrap, numerically small
+    for (const Frame& f : window)
+        sawNewestId443 |= f.id == 443; // slot 143: past the wrap, numerically small
     CHECK(sawNewestId443);
 }
 
 // ==================== Reader: fake Memory + Anchors ====================
 
 constexpr uint64_t kModuleBase = 0x0000000010000000ULL;
-constexpr uint64_t kBufSize = 0x00600000ULL;  // 6 MiB: module RTTI area + two independent "server" worlds
+constexpr uint64_t kBufSize = 0x00600000ULL; // 6 MiB: module RTTI area + two independent "server" worlds
 
 /** A flat, sparse-enough backing store for one contiguous fake address space starting at kModuleBase. */
 class FakeMemory : public fph::pc::streaming::Memory {
 public:
     FakeMemory() : buf_(kBufSize, 0) {}
     bool read(uint64_t address, void* dest, size_t bytes) override {
-        if (address < kModuleBase) return false;
+        if (address < kModuleBase)
+            return false;
         const uint64_t off = address - kModuleBase;
-        if (off > buf_.size() || bytes > buf_.size() - off) return false;
+        if (off > buf_.size() || bytes > buf_.size() - off)
+            return false;
         std::memcpy(dest, buf_.data() + off, bytes);
         return true;
     }
-    template <class T>
-    void poke(uint64_t address, T v) {
+    template <class T> void poke(uint64_t address, T v) {
         write(address, &v, sizeof(v));
     }
     void write(uint64_t address, const void* src, size_t bytes) {
         std::memcpy(buf_.data() + (address - kModuleBase), src, bytes);
     }
-    void writeCString(uint64_t address, const std::string& s) { write(address, s.data(), s.size() + 1); }
+    void writeCString(uint64_t address, const std::string& s) {
+        write(address, s.data(), s.size() + 1);
+    }
 
 private:
     std::vector<uint8_t> buf_;
@@ -300,7 +304,7 @@ constexpr uint64_t kVtServer = kModuleBase + 0x1000, kColServer = kModuleBase + 
 constexpr uint64_t kVtUber = kModuleBase + 0x1300, kColUber = kModuleBase + 0x1400, kTdUber = 0x1500;
 constexpr uint64_t kVtLink = kModuleBase + 0x1600, kColLink = kModuleBase + 0x1700, kTdLink = 0x1800;
 constexpr uint64_t kVtBogus = kModuleBase + 0x1900, kColBogus = kModuleBase + 0x1A00, kTdBogus = 0x1B00;
-constexpr uint32_t kFakeImageSize = 0x02000000;  // 32 MiB: generous bound for the RTTI checks
+constexpr uint32_t kFakeImageSize = 0x02000000; // 32 MiB: generous bound for the RTTI checks
 
 void writePeHeader(FakeMemory& mem, uint32_t timestamp, uint32_t imageSize) {
     uint8_t dos[64] = {};
@@ -313,10 +317,10 @@ void writePeHeader(FakeMemory& mem, uint32_t timestamp, uint32_t imageSize) {
     nt[0] = 'P';
     nt[1] = 'E';
     nt[4] = 0x64;
-    nt[5] = 0x86;  // machine = AMD64
+    nt[5] = 0x86; // machine = AMD64
     std::memcpy(nt + 8, &timestamp, 4);
     nt[24] = 0x0b;
-    nt[25] = 0x02;  // magic = 0x20b (PE32+)
+    nt[25] = 0x02; // magic = 0x20b (PE32+)
     std::memcpy(nt + 80, &imageSize, 4);
     mem.write(kModuleBase + lfanew, nt, sizeof(nt));
 }
@@ -324,12 +328,39 @@ void writePeHeader(FakeMemory& mem, uint32_t timestamp, uint32_t imageSize) {
 /** One RTTI chain (vtable -> complete object locator -> type descriptor name), MSVC x64 layout. Shared by
  *  every object of that type: real C++ objects of the same class share one vtable too. */
 void writeRttiType(FakeMemory& mem, uint64_t vt, uint64_t col, uint32_t td, const std::string& name) {
-    mem.poke<uint32_t>(col + 0, 1);  // signature (1 = x64)
+    mem.poke<uint32_t>(col + 0, 1); // signature (1 = x64)
     mem.poke<uint32_t>(col + 12, td);
     mem.poke<uint64_t>(vt - 8, col);
     uint8_t zero[16] = {};
     mem.write(kModuleBase + td, zero, sizeof(zero));
     mem.writeCString(kModuleBase + td + 16, name);
+}
+
+// The remote-address getter: a tiny, fixed instruction shape at module+remoteGetterRva --
+// `lea rdx,[rcx+offset]; movzx eax,word ptr[rdx]; cmp eax,2` -- with the embedded offset immediate required to
+// equal anchors.remoteAddressOffset. 0x120 is the real offset this build's anchors derived.
+constexpr uint32_t kRemoteGetterRva = 0x1c00;
+constexpr uint32_t kRemoteAddressOffset = 0x120;
+
+void writeRemoteGetterCode(FakeMemory& mem, uint32_t rva, uint32_t embeddedOffset) {
+    uint8_t code[14] = {0x48, 0x8d, 0x91, 0, 0, 0, 0, 0x0f, 0xb7, 0x02, 0x66, 0x83, 0xf8, 0x02};
+    std::memcpy(code + 3, &embeddedOffset, sizeof(embeddedOffset));
+    mem.write(kModuleBase + rva, code, sizeof(code));
+}
+
+/** A sockaddr-shaped 16 bytes at link+offset: family (u16), port (u16, only its zero-ness matters), then the
+ *  IPv4 octets in the order they'd print ("o1.o2.o3.o4"), matching how Windows lays out a real sockaddr_in
+ *  regardless of host endianness. */
+void writeRemoteAddress(FakeMemory& mem, uint64_t link, uint32_t offset, uint16_t family, uint16_t port, uint8_t o1,
+                        uint8_t o2, uint8_t o3, uint8_t o4) {
+    uint8_t addr[16] = {};
+    std::memcpy(addr + 0, &family, sizeof(family));
+    std::memcpy(addr + 2, &port, sizeof(port));
+    addr[4] = o1;
+    addr[5] = o2;
+    addr[6] = o3;
+    addr[7] = o4;
+    mem.write(link + offset, addr, sizeof(addr));
 }
 
 void setupModule(FakeMemory& mem, uint32_t timestamp) {
@@ -338,32 +369,32 @@ void setupModule(FakeMemory& mem, uint32_t timestamp) {
     writeRttiType(mem, kVtUber, kColUber, kTdUber, ".?AVSVLDataLinkUber@@");
     writeRttiType(mem, kVtLink, kColLink, kTdLink, ".?AVSVLDataLinkTransferUDP@@");
     writeRttiType(mem, kVtBogus, kColBogus, kTdBogus, "bogus");
+    writeRemoteGetterCode(mem, kRemoteGetterRva, kRemoteAddressOffset); // the real (unmodified) getter shape
 }
 
 void setObjectRtti(FakeMemory& mem, uint64_t obj, uint64_t vt) {
     mem.poke<uint64_t>(obj, vt);
 }
 
-constexpr uint64_t kServerGlobalSlot = 0x2000;  // module+this holds a pointer to the *current* SVLServer
-constexpr uint32_t kMapOffset = 0x200;          // srv+this -> the stats map's head sentinel
+constexpr uint64_t kServerGlobalSlot = 0x2000; // module+this holds a pointer to the *current* SVLServer
+constexpr uint32_t kMapOffset = 0x200;         // srv+this -> the stats map's head sentinel
 
 // ---- one SVLServer "world": map, Uber, two links, the AFTM tail and the bandwidth ring tail ----
 
 /** @param node must have at least 0x80 scratch bytes free right after it (for keys >= 16 bytes, which can't
  *      use the inline SSO form and need a "heap" pointer instead -- e.g. "nFramesSkippedPS" is exactly 16) */
-void writeMapNode(FakeMemory& mem, uint64_t node, uint64_t left, uint64_t right, const std::string& key,
-                  double value) {
+void writeMapNode(FakeMemory& mem, uint64_t node, uint64_t left, uint64_t right, const std::string& key, double value) {
     mem.poke<uint64_t>(node + 0, left);
     mem.poke<uint64_t>(node + 0x10, right);
-    mem.poke<uint8_t>(node + 0x19, 0);  // not a sentinel
+    mem.poke<uint8_t>(node + 0x19, 0); // not a sentinel
     if (key.size() < 16) {
         uint8_t sso[16] = {};
         std::memcpy(sso, key.data(), key.size());
         mem.write(node + 0x20, sso, sizeof(sso));
         mem.poke<uint64_t>(node + 0x30, static_cast<uint64_t>(key.size()));
-        mem.poke<uint64_t>(node + 0x38, static_cast<uint64_t>(15));  // SSO capacity (< 16)
+        mem.poke<uint64_t>(node + 0x38, static_cast<uint64_t>(15)); // SSO capacity (< 16)
     } else {
-        const uint64_t heap = node + 0x80;  // scratch area between this node and the next
+        const uint64_t heap = node + 0x80; // scratch area between this node and the next
         mem.write(heap, key.data(), key.size());
         mem.poke<uint64_t>(node + 0x20, heap);
         mem.poke<uint64_t>(node + 0x30, static_cast<uint64_t>(key.size()));
@@ -377,8 +408,7 @@ struct StatKv {
     double value;
 };
 
-void writeMap(FakeMemory& mem, uint64_t srv, uint64_t head, uint64_t rootBase,
-             const std::vector<StatKv>& kvs) {
+void writeMap(FakeMemory& mem, uint64_t srv, uint64_t head, uint64_t rootBase, const std::vector<StatKv>& kvs) {
     mem.poke<uint64_t>(srv + kMapOffset, head);
     mem.poke<uint64_t>(head + 8, rootBase);
     // a simple right-chained list (left always the sentinel) satisfies walkMap's stack traversal fully.
@@ -395,12 +425,12 @@ void writeAftmRecord(FakeMemory& mem, uint64_t addr, uint32_t presentId, uint32_
     uint32_t t[13] = {};
     baseFields(t, wgpRelease, presentId);
     mem.write(addr, t, sizeof(t));
-    const int32_t ping = 2000;  // matches the sPingMS below for the L3 cross-check
+    const int32_t ping = 2000; // matches the sPingMS below for the L3 cross-check
     mem.poke<int32_t>(addr + 0x38, ping);
 }
 
 void writeBandwidthRecord(FakeMemory& mem, uint64_t addr, uint64_t timestampUs) {
-    const int32_t fields[7] = {150000, 120000, 15000, 2000, 5000, 3000, 0};  // wire,video,fec,logic,audio,retry
+    const int32_t fields[7] = {150000, 120000, 15000, 2000, 5000, 3000, 0}; // wire,video,fec,logic,audio,retry
     mem.write(addr, fields, sizeof(fields));
     mem.poke<uint64_t>(addr + 0x40, timestampUs);
 }
@@ -437,17 +467,17 @@ World buildWorld(FakeMemory& mem, uint64_t base, uint32_t index, uint32_t extraT
 
     mem.poke<uint64_t>(w.srv + 0x188, w.uber);
     mem.poke<uint64_t>(w.srv + 0x1f0, w.bw);
-    mem.poke<uint32_t>(w.srv + 0x1e8, 8192);  // bandwidth ring size: must read back exactly this
-    mem.poke<uint32_t>(w.srv + 0x1ec, 144);   // write index chosen so the 144-tail starts at bw+0
+    mem.poke<uint32_t>(w.srv + 0x1e8, 8192); // bandwidth ring size: must read back exactly this
+    mem.poke<uint32_t>(w.srv + 0x1ec, 144);  // write index chosen so the 144-tail starts at bw+0
 
     uint64_t linksArr[16] = {};
     linksArr[0] = w.link0;
     linksArr[1] = w.link1;
     mem.write(w.uber + 0x388, linksArr, sizeof(linksArr));
     mem.poke<uint32_t>(w.link0 + 0x24, 434);
-    mem.poke<uint32_t>(w.link0 + 0x2c, 11700);  // µs
+    mem.poke<uint32_t>(w.link0 + 0x2c, 11700); // µs
     mem.poke<uint32_t>(w.link1 + 0x24, 625);
-    mem.poke<uint32_t>(w.link1 + 0x2c, 9200);  // 434 + 625 = 1059 = sRXpps below (the L2 cross-check)
+    mem.poke<uint32_t>(w.link1 + 0x2c, 9200); // 434 + 625 = 1059 = sRXpps below (the L2 cross-check)
 
     writeMap(mem, w.srv, head, root,
              {{"sPingMS", 2.0},
@@ -464,8 +494,7 @@ World buildWorld(FakeMemory& mem, uint64_t base, uint32_t index, uint32_t extraT
     const uint32_t start = (index - kTailFrames) & 0xfff;
     const uint32_t count = kTailFrames + extraTail;
     for (uint32_t i = 0; i < count; ++i) {
-        writeAftmRecord(mem, w.srv + static_cast<uint64_t>(start + i) * kFrameStride, idStart + i,
-                        i * kFixtureStepUs);
+        writeAftmRecord(mem, w.srv + static_cast<uint64_t>(start + i) * kFrameStride, idStart + i, i * kFixtureStepUs);
         writeBandwidthRecord(mem, w.bw + static_cast<uint64_t>(i) * 0xa8, i * kFixtureStepUs);
     }
     mem.poke<uint16_t>(w.srv + 0x88000, static_cast<uint16_t>(index));
@@ -487,6 +516,8 @@ Anchors goldenAnchors(uint32_t timestamp) {
     a.uberPingOffset = 0x488;
     a.stride = kFrameStride;
     a.fileOffset = 0x88030;
+    a.remoteGetterRva = kRemoteGetterRva;
+    a.remoteAddressOffset = kRemoteAddressOffset;
     a.l1 = a.l2 = a.l3 = true;
     return a;
 }
@@ -506,11 +537,14 @@ std::vector<MetricDef> readerMetricDefs() {
     const auto add = [&](uint16_t id, WireType t) {
         defs.push_back({id, "x", "", WidgetType::Streaming, SourceId::None, 1000, t});
     };
-    for (uint16_t id = 1021; id <= 1067; ++id) add(id, WireType::F32);
+    for (uint16_t id = 1021; id <= 1067; ++id)
+        add(id, WireType::F32);
     add(metric::kPcStreamBuild, WireType::ShortString);
     add(metric::kPcStreamL1Note, WireType::ShortString);
     add(metric::kPcStreamL2Note, WireType::ShortString);
     add(metric::kPcStreamL3Note, WireType::ShortString);
+    for (uint16_t id = 1090; id <= 1093; ++id)
+        add(id, WireType::ShortString); // Link0..3Address
     return defs;
 }
 
@@ -589,7 +623,7 @@ void testReaderRttiMismatchOnlyL2() {
 
     CHECK(noteOf(store, metric::kPcStreamL1Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamNamedPing, 2.0, 1e-6));
-    CHECK(!noteOf(store, metric::kPcStreamL2Note).empty());  // "link RTTI/packets mismatch"
+    CHECK(!noteOf(store, metric::kPcStreamL2Note).empty()); // "link RTTI/packets mismatch"
     CHECK(notOk(store, metric::kPcStreamLink0Ping));
     CHECK(notOk(store, metric::kPcStreamLink1Share));
     CHECK(store.get(metric::kPcStreamLink0Ping)->reason == Reason::SteamVrChanged);
@@ -603,7 +637,7 @@ void testReaderOwnerChangeWaitsForNewBaseline() {
     constexpr uint32_t kBuild = kKnownBuild;
     setupModule(mem, kBuild);
     const World w1 = buildWorld(mem, 0x10000, 300, 0, 1000);
-    const World w2 = buildWorld(mem, 0x300000, 500, /*extraTail=*/1, 5000);  // one spare slot for index+1
+    const World w2 = buildWorld(mem, 0x300000, 500, /*extraTail=*/1, 5000); // one spare slot for index+1
     setActiveServer(mem, w1.srv);
 
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
@@ -640,7 +674,7 @@ void testReaderOwnerChangeWaitsForNewBaseline() {
     // a completely fresh dedupe/publish state (the old world's last-published Present IDs are gone)
     mem.poke<uint16_t>(w2.srv + 0x88000, static_cast<uint16_t>(501));
     reader.tick(3.0, 72.0, store);
-    CHECK(reader.resets() == 1);  // resolving the wait is not itself another reset
+    CHECK(reader.resets() == 1); // resolving the wait is not itself another reset
     CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
     CHECK(reader.published() > 0);
@@ -657,7 +691,7 @@ void testReaderL2RecoversIndependentlyOfDisabledL3() {
     constexpr uint32_t kBuild = kKnownBuild;
     setupModule(mem, kBuild);
     const World w1 = buildWorld(mem, 0x10000, 300, 0, 1000);
-    const World w2 = buildWorld(mem, 0x300000, 500, 0, 5000);  // index never changes after this
+    const World w2 = buildWorld(mem, 0x300000, 500, 0, 5000); // index never changes after this
     setActiveServer(mem, w1.srv);
 
     Anchors a = goldenAnchors(kBuild);
@@ -675,7 +709,7 @@ void testReaderL2RecoversIndependentlyOfDisabledL3() {
     setActiveServer(mem, w2.srv);
     for (const double now : {11.0, 12.0, 22.0, 42.0}) {
         reader.tick(now, 72.0, store);
-        CHECK(reader.resets() == 1);  // one owner change, counted once, not once per tick
+        CHECK(reader.resets() == 1); // one owner change, counted once, not once per tick
         CHECK(noteOf(store, metric::kPcStreamL1Note).empty());
         CHECK(isOkF32(store, metric::kPcStreamNamedPing, 2.0, 1e-6));
         // L2 recovers on the very first post-reset tick and stays valid: it never waits on L3's ring index
@@ -689,7 +723,119 @@ void testReaderL2RecoversIndependentlyOfDisabledL3() {
     }
 }
 
-}  // namespace
+// ==================== readLinkEndpoint ====================
+
+void testReadLinkEndpointValid() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    writeRemoteAddress(mem, w.link0, kRemoteAddressOffset, 2, 0x1234, 10, 35, 78, 1);
+    const Anchors a = goldenAnchors(kKnownBuild);
+    CHECK(readLinkEndpoint(mem, w.link0, kModuleBase, a) == "10.35.78.1");
+}
+
+void testReadLinkEndpointGetterShapeChanged() {
+    // a build where the getter's embedded offset moved (or the shape otherwise changed): fail closed rather
+    // than trust whatever happens to be at the old offset
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    writeRemoteGetterCode(mem, kRemoteGetterRva, kRemoteAddressOffset + 8); // overwrite: wrong embedded offset
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    writeRemoteAddress(mem, w.link0, kRemoteAddressOffset, 2, 0x1234, 10, 35, 78, 1);
+    const Anchors a = goldenAnchors(kKnownBuild);
+    CHECK(readLinkEndpoint(mem, w.link0, kModuleBase, a).empty());
+}
+
+void testReadLinkEndpointBadFamily() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    writeRemoteAddress(mem, w.link0, kRemoteAddressOffset, 23 /* AF_INET6 */, 0x1234, 10, 35, 78, 1);
+    const Anchors a = goldenAnchors(kKnownBuild);
+    CHECK(readLinkEndpoint(mem, w.link0, kModuleBase, a).empty());
+}
+
+void testReadLinkEndpointZeroPort() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    writeRemoteAddress(mem, w.link0, kRemoteAddressOffset, 2, 0, 10, 35, 78, 1);
+    const Anchors a = goldenAnchors(kKnownBuild);
+    CHECK(readLinkEndpoint(mem, w.link0, kModuleBase, a).empty());
+}
+
+void testReadLinkEndpointInsaneIp() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    const Anchors a = goldenAnchors(kKnownBuild);
+
+    writeRemoteAddress(mem, w.link0, kRemoteAddressOffset, 2, 0x1234, 0, 0, 0, 0);
+    CHECK(readLinkEndpoint(mem, w.link0, kModuleBase, a).empty()); // 0.0.0.0
+    writeRemoteAddress(mem, w.link0, kRemoteAddressOffset, 2, 0x1234, 127, 0, 0, 1);
+    CHECK(readLinkEndpoint(mem, w.link0, kModuleBase, a).empty()); // loopback
+    writeRemoteAddress(mem, w.link0, kRemoteAddressOffset, 2, 0x1234, 224, 0, 0, 1);
+    CHECK(readLinkEndpoint(mem, w.link0, kModuleBase, a).empty()); // multicast / reserved
+    writeRemoteAddress(mem, w.link0, kRemoteAddressOffset, 2, 0x1234, 192, 168, 1, 47);
+    CHECK(readLinkEndpoint(mem, w.link0, kModuleBase, a) == "192.168.1.47"); // sane: accepted
+}
+
+void testReadLinkEndpointWrongObjectType() {
+    // a non-TransferUDP object (e.g. the Uber) must never be read as if it had a remote address, even if
+    // something happens to sit at the same offset
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    writeRemoteAddress(mem, w.uber, kRemoteAddressOffset, 2, 0x1234, 10, 35, 78, 1);
+    const Anchors a = goldenAnchors(kKnownBuild);
+    CHECK(readLinkEndpoint(mem, w.uber, kModuleBase, a).empty());
+}
+
+// ==================== Reader::tick: endpoint publishing (ids 1090-1093) ====================
+
+void testReaderEndpointSuccessPopulatesAddress() {
+    FakeMemory mem;
+    constexpr uint32_t kBuild = kKnownBuild;
+    setupModule(mem, kBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    setActiveServer(mem, w.srv);
+    writeRemoteAddress(mem, w.link0, kRemoteAddressOffset, 2, 0x1234, 10, 35, 78, 1);
+    writeRemoteAddress(mem, w.link1, kRemoteAddressOffset, 2, 0x1234, 192, 168, 1, 47);
+
+    Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, 72.0, store);
+
+    CHECK(noteOf(store, metric::kPcStreamL2Note).empty());
+    CHECK(noteOf(store, metric::kPcStreamLink0Address) == "10.35.78.1");
+    CHECK(noteOf(store, metric::kPcStreamLink1Address) == "192.168.1.47");
+}
+
+void testReaderEndpointFailureDoesNotAffectL2Timing() {
+    // the getter's backing-field signature changed (a SteamVR update moved the struct, say): the address
+    // extraction must fail closed (N/A, so streamLinkName falls back to "Link N") without taking L2's own
+    // ping/share timing down with it -- those come from a completely separate read.
+    FakeMemory mem;
+    constexpr uint32_t kBuild = kKnownBuild;
+    setupModule(mem, kBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    setActiveServer(mem, w.srv);
+    writeRemoteGetterCode(mem, kRemoteGetterRva, kRemoteAddressOffset + 8); // "changed backing-field signature"
+
+    Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, 72.0, store);
+
+    CHECK(noteOf(store, metric::kPcStreamL2Note).empty());
+    CHECK(isOkF32(store, metric::kPcStreamLink0Ping, 11.7, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamLink1Ping, 9.2, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamLink0Share, 100.0 * 434 / 1059, 1e-4));
+    CHECK(isOkF32(store, metric::kPcStreamLink1Share, 100.0 * 625 / 1059, 1e-4));
+    CHECK(notOk(store, metric::kPcStreamLink0Address));
+    CHECK(notOk(store, metric::kPcStreamLink1Address));
+}
+
+} // namespace
 
 int main() {
     testParseFrameFieldMapping();
@@ -706,6 +852,14 @@ int main() {
     testReaderRttiMismatchOnlyL2();
     testReaderOwnerChangeWaitsForNewBaseline();
     testReaderL2RecoversIndependentlyOfDisabledL3();
+    testReadLinkEndpointValid();
+    testReadLinkEndpointGetterShapeChanged();
+    testReadLinkEndpointBadFamily();
+    testReadLinkEndpointZeroPort();
+    testReadLinkEndpointInsaneIp();
+    testReadLinkEndpointWrongObjectType();
+    testReaderEndpointSuccessPopulatesAddress();
+    testReaderEndpointFailureDoesNotAffectL2Timing();
     if (failures == 0) {
         std::printf("pc streaming reader: all checks passed\n");
         return 0;

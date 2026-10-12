@@ -1,11 +1,15 @@
 #include "link_server.h"
 
+#include "camera_frame.h"  // T10: camera wants bits
+
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <linux/sockios.h>  // T10: SIOCOUTQ
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -140,6 +144,7 @@ void LinkServer::handlePacket(const uint8_t* data, size_t size, const LinkEndpoi
             if (!peer.leased || now > peer.leaseUntil || peer.status != PeerStatus::Allowed ||
                 from != peer.leaseAddress) break;
             if (peer.havePcSnapshot && static_cast<int32_t>(m.snapshotId - peer.pcSnapshot) <= 0) break;
+            unknownMetricValues_ += m.unknownValues;
             peer.pcSnapshot = m.snapshotId;
             peer.havePcSnapshot = true;
             env_.pcMetrics(m, now);
@@ -234,6 +239,18 @@ void LinkServer::onSubscribe(const Subscribe& m, const LinkEndpoint& from, doubl
     }
     Peer& peer = it->second;
     peer.lastSeen = now;
+    if (m.wants & fph::cam::kWantCameraPathOnly) {
+        // T10: the PC's second path (the dongle) for camera frames only: the lease and its address stay as they are
+        if (peer.status == PeerStatus::Allowed && peer.leased) {
+            if (peer.cameraAddress != from || now >= peer.cameraAddressUntil) {
+                std::fprintf(stderr, "[link] PC '%s' (%s) gets camera frames at %s\n", peer.name.c_str(),
+                             shortId(it->first).c_str(), from.text().c_str());
+            }
+            peer.cameraAddress = from;
+            peer.cameraAddressUntil = now + kLeaseSec;
+        }
+        return;
+    }
     peer.address = from;
     ack.status = peer.status;
     if (peer.status == PeerStatus::Allowed) {
@@ -246,9 +263,35 @@ void LinkServer::onSubscribe(const Subscribe& m, const LinkEndpoint& from, doubl
         peer.leased = true;
         peer.leaseUntil = now + kLeaseSec;
         peer.wants = m.wants;
+        peer.cameraFps = m.cameraFps;
         peer.leaseAddress = from;
     }
     sendPacket(from, PacketType::SubscribeAck, encodeSubscribeAck(ack));
+}
+
+std::vector<LinkCameraTarget> LinkServer::cameraTargets(double now) const {
+    std::vector<LinkCameraTarget> out;
+    for (const auto& entry : peers_) {
+        const Peer& peer = entry.second;
+        if (!peer.leased || peer.status != PeerStatus::Allowed) continue;
+        const uint8_t cams = fph::cam::camerasFromWants(peer.wants);
+        if (!cams) continue;
+        LinkCameraTarget t;
+        t.to = now < peer.cameraAddressUntil ? peer.cameraAddress : peer.leaseAddress;
+        t.cameras = cams;
+        t.fps = peer.cameraFps ? peer.cameraFps : 10.0;
+        out.push_back(t);
+    }
+    return out;
+}
+
+bool LinkServer::sendCameraBlob(const LinkEndpoint& to, uint8_t camera, const std::vector<uint8_t>& data) {
+    if (env_.sendQueued() + data.size() > kCameraQueueLimit) {
+        ++cameraSkipped_;
+        return false;
+    }
+    sendBlob(to, BlobKind::Camera, camera, data);
+    return true;
 }
 
 void LinkServer::onLayoutGet(const LayoutGet& m, const LinkEndpoint& from, double now) {
@@ -455,7 +498,8 @@ std::string LinkServer::debugText(double now) const {
     std::string text = "== Link ==\nheadset id " + shortId(config_.link.headsetId) + "…, layout version " +
                        std::to_string(layout_.version()) + ", allowed_pcs " +
                        std::to_string(config_.link.allowedPcs.size()) + ", malformed packets " +
-                       std::to_string(malformed_) + ", METRICS snapshots sent " + std::to_string(metricsSent_) +
+                       std::to_string(malformed_) + ", skipped unknown metric ids " +
+                       std::to_string(unknownMetricValues_) + ", METRICS snapshots sent " + std::to_string(metricsSent_) +
                        ", layout edits applied " + std::to_string(layoutApplies_) + ", vrlink lookups " +
                        std::to_string(hostIpLookups_) + ", blobs in progress " +
                        std::to_string(blobs_.inProgress()) + "\n";
@@ -495,8 +539,17 @@ bool LinkSocket::open(uint16_t port, std::string& error) {
         ::close(fd);
         return false;
     }
+    // T10: room for a few camera frames' chunks on top of METRICS (the kernel caps it at net.core.wmem_max, 4 MiB here)
+    const int sndbuf = 1 << 20;
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
     fd_ = fd;
     return true;
+}
+
+size_t LinkSocket::queuedBytes() const {
+    int queued = 0;
+    if (fd_ < 0 || ::ioctl(fd_, SIOCOUTQ, &queued) != 0 || queued < 0) return 0;
+    return static_cast<size_t>(queued);
 }
 
 void LinkSocket::close() {

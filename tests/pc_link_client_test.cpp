@@ -724,6 +724,52 @@ void testGoodbye() {
     CHECK(env.sent.empty());
 }
 
+// ---- Mixed-version tolerance: a METRICS packet from a headset build with newer ids than this PC build
+// knows (or vice versa) must retain every known value and never count as malformed -- only the unknown ids
+// get skipped (link_client.cpp's own local counter; decodeMetrics itself doesn't consult the registry) ----
+
+void testOnMetricsSkipsUnknownIdsKeepsKnownOnes() {
+    Rig r;
+    r.connect();
+    const uint64_t malformedBefore = r.client.malformed();
+    const uint64_t unknownBefore = r.client.unknownMetricValues();
+
+    WireValue known1;
+    known1.id = metric::kBatteryPct;
+    known1.type = WireType::F32;
+    known1.ok = true;
+    known1.f32 = 55.0f;
+
+    WireValue unknownOk;
+    unknownOk.id = 65000;  // not in this build's registry at all
+    unknownOk.type = WireType::F32;
+    unknownOk.ok = true;
+    unknownOk.f32 = 1.0f;
+
+    WireValue unknownNa;
+    unknownNa.id = 65001;
+    unknownNa.type = WireType::I32;
+    unknownNa.ok = false;
+    unknownNa.reason = Reason::NotSampledYet;
+
+    WireValue known2;
+    known2.id = metric::kTempCpuC;
+    known2.type = WireType::F32;
+    known2.ok = true;
+    known2.f32 = 42.0f;
+
+    LinkState st;
+    st.layoutVersion = r.live.version;
+    const auto parts = encodeMetrics(1000, 1, st, {known1, unknownOk, unknownNa, known2});
+    for (const Bytes& p : parts) feed(r.client, pkt(PacketType::Metrics, p), kHeadset, r.now);
+
+    CHECK(r.client.malformed() == malformedBefore);          // never malformed just for an unknown id
+    CHECK(r.client.unknownMetricValues() == unknownBefore + 2);
+    // the known entries, on either side of the unknown ones, are retained regardless
+    CHECK(r.client.store().f32Or(metric::kBatteryPct, -1) == 55.0f);
+    CHECK(r.client.store().f32Or(metric::kTempCpuC, -1) == 42.0f);
+}
+
 }  // namespace
 
 int main() {
@@ -744,6 +790,7 @@ int main() {
     testMultiChunkEdit();
     testDeniedThenAllowed();
     testGoodbye();
+    testOnMetricsSkipsUnknownIdsKeepsKnownOnes();
     if (failures != 0) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

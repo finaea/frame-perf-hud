@@ -1,6 +1,7 @@
 // OpenVR との接続、頭か手首（コントローラー）に固定する性能パネル、ダッシュボードの設定パネル、フレーム時間の取得。
 #pragma once
 
+#include "camera_overlay.h"  // T10
 #include "config.h"
 #include "history.h"
 #include "placement.h"
@@ -262,7 +263,16 @@ public:
      */
     void setDetachedTransform(const DetachedPose& pose);
 
+    /** T10: the camera tiles (created with the panel; nullptr while not connected). They follow the panel. */
+    CameraOverlays* cameraOverlays() { return cameras_.get(); }
+
 private:
+    // T10: the panel's placement as applied, for the camera tiles (notePlacement bumps its revision on change)
+    PanelPlacement placement_;
+    vr::HmdMatrix34_t appliedTransform_ {};
+    std::unique_ptr<CameraOverlays> cameras_;
+    void notePlacement();
+
     bool panelInteractive_ = false;  ///< T05: the HUD's input method is Mouse
     DetachedPose appliedDetached_;   ///< T05: the room pose last given to SetOverlayTransformAbsolute
     bool connected_ = false;

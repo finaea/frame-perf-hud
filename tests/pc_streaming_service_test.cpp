@@ -20,12 +20,12 @@ namespace {
 
 int failures = 0;
 
-#define CHECK(expr)                                                              \
-    do {                                                                         \
-        if (!(expr)) {                                                           \
-            std::printf("FAIL line %d: %s\n", __LINE__, #expr);                  \
-            ++failures;                                                          \
-        }                                                                        \
+#define CHECK(expr)                                                                                                    \
+    do {                                                                                                               \
+        if (!(expr)) {                                                                                                 \
+            std::printf("FAIL line %d: %s\n", __LINE__, #expr);                                                        \
+            ++failures;                                                                                                \
+        }                                                                                                              \
     } while (false)
 
 using namespace fph;
@@ -39,8 +39,8 @@ void testRepeatedConstructTakeStopDestruct() {
         CHECK(!svc.take(store, 0.0));
         CHECK(!svc.take(store, 0.1));
         svc.stop();
-        svc.stop();  // idempotent: a second stop() must not hang, block or crash
-    }  // ~Service() runs here too, every iteration (it calls stop() itself -- see the next test)
+        svc.stop(); // idempotent: a second stop() must not hang, block or crash
+    } // ~Service() runs here too, every iteration (it calls stop() itself -- see the next test)
 }
 
 void testDestructWithoutExplicitStop() {
@@ -50,7 +50,7 @@ void testDestructWithoutExplicitStop() {
         MetricStore store;
         (void)svc.take(store, 0.0);
     }
-    CHECK(true);  // reaching here (no hang, no crash) is the assertion
+    CHECK(true); // reaching here (no hang, no crash) is the assertion
 }
 
 void testForceHeaderMismatchConstructDestruct() {
@@ -68,11 +68,12 @@ void testTakeBeforeAnyStop() {
     // take() must be safe to call on a freshly constructed, still-running Service, repeatedly, before stop()
     Service svc;
     MetricStore store;
-    for (int i = 0; i < 20; ++i) CHECK(!svc.take(store, static_cast<double>(i)));
+    for (int i = 0; i < 20; ++i)
+        CHECK(!svc.take(store, static_cast<double>(i)));
     svc.stop();
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     testRepeatedConstructTakeStopDestruct();

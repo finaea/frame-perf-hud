@@ -30,6 +30,8 @@ Scheduler::Scheduler(const std::vector<MetricDef>& defs) {
         if (s.interval == 0.0 || sec < s.interval) s.interval = sec;
         if (static_cast<size_t>(d.owner) < kWidgetTypeCount) s.ownerMask |= 1u << static_cast<unsigned>(d.owner);
     }
+    // Streaming names its links using the headset adapter IPs from the existing Network source.
+    sources_[indexOf(SourceId::Network)].ownerMask |= 1u << static_cast<unsigned>(WidgetType::Streaming);
 }
 
 void Scheduler::addSource(SourceId source, ReadFn read) {

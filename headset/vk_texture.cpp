@@ -323,6 +323,7 @@ void OverlayTexture::destroy() {
     }
     const VkDevice device = context_->device();
     vkDeviceWaitIdle(device);
+    pending_ = false;
     if (fence_ != VK_NULL_HANDLE) vkDestroyFence(device, fence_, nullptr);
     if (commandBuffer_ != VK_NULL_HANDLE) vkFreeCommandBuffers(device, context_->commandPool(), 1, &commandBuffer_);
     if (stagingMapped_ != nullptr) vkUnmapMemory(device, stagingMemory_);
@@ -344,9 +345,25 @@ void OverlayTexture::destroy() {
 }
 
 bool OverlayTexture::update(uint64_t overlayHandle, const uint8_t* rgba, std::string& error) {
+    return submit(overlayHandle, rgba, true, error);
+}
+
+bool OverlayTexture::updateNoWait(uint64_t overlayHandle, const uint8_t* rgba, std::string& error) {
+    return submit(overlayHandle, rgba, false, error);
+}
+
+bool OverlayTexture::submit(uint64_t overlayHandle, const uint8_t* rgba, bool wait, std::string& error) {
     if (!ready()) {
         error = "texture not created";
         return false;
+    }
+    if (pending_) {  // T10: the staging buffer and command buffer are still the previous transfer's
+        const VkResult r = vkWaitForFences(context_->device(), 1, &fence_, VK_TRUE, 1000000000ull);
+        if (r != VK_SUCCESS) {
+            error = vkError("vkWaitForFences", r);
+            return false;
+        }
+        pending_ = false;
     }
     const int index = next_;
     next_ = 1 - next_;
@@ -398,11 +415,15 @@ bool OverlayTexture::update(uint64_t overlayHandle, const uint8_t* rgba, std::st
         error = vkError("vkQueueSubmit", result);
         return false;
     }
-    // 転送が終わるまで待つ（数百 µs。待っている間 CPU は眠る）
-    result = vkWaitForFences(context_->device(), 1, &fence_, VK_TRUE, 1000000000ull);
-    if (result != VK_SUCCESS) {
-        error = vkError("vkWaitForFences", result);
-        return false;
+    // 転送が終わるまで待つ（数百 µs。待っている間 CPU は眠る）。T10: updateNoWait は次の呼び出しで待つ
+    if (wait) {
+        result = vkWaitForFences(context_->device(), 1, &fence_, VK_TRUE, 1000000000ull);
+        if (result != VK_SUCCESS) {
+            error = vkError("vkWaitForFences", result);
+            return false;
+        }
+    } else {
+        pending_ = true;
     }
     imageUsed_[index] = true;
 

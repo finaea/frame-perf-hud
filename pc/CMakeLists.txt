@@ -16,6 +16,7 @@ add_library(fph-pc-lib STATIC
   editor_model.cpp
   panel_view.cpp
   pc_editor.cpp
+  camera_feed.cpp  # T10: camera BLOBs -> pictures in the camera widgets
   # The headset's UI strings, so the PC editor says exactly what the dashboard editor says (platform-free)
   ${CMAKE_SOURCE_DIR}/headset/i18n.cpp
   log.cpp
@@ -28,6 +29,10 @@ target_include_directories(fph-pc-lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(fph-pc-lib PRIVATE ${CMAKE_SOURCE_DIR}/headset)  # i18n.h only
 target_include_directories(fph-pc-lib PRIVATE ${CMAKE_SOURCE_DIR}/third_party/openvr)
 target_link_libraries(fph-pc-lib PUBLIC fph-core fph-render ws2_32 iphlpapi shell32 advapi32 ole32)
+# T10: TurboJPEG decodes the headset's camera frames (static, from the vcpkg manifest)
+find_package(libjpeg-turbo CONFIG REQUIRED)
+target_link_libraries(fph-pc-lib PUBLIC
+  $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>)
 target_compile_definitions(fph-pc-lib PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 
 # The fonts are embedded as resources (one exe, nothing else to ship)

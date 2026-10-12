@@ -7,6 +7,7 @@
 // the blob assembler reset, on SUBSCRIBE_ACK unknown_subscriber, BYE, or 6 s without a packet from the headset.
 #pragma once
 
+#include "camera_feed.h"  // T10
 #include "layout.h"
 #include "link_wire.h"
 #include "metric_store.h"
@@ -122,6 +123,14 @@ public:
     /** @return the newest layout version the headset reported */
     uint32_t headsetLayoutVersion() const { return headsetVersion_; }
 
+    /** T10: the camera pictures (Camera BLOBs, from the lease path or the dongle path) */
+    CameraFeed& cameras() { return cameras_; }
+    const CameraFeed& cameras() const { return cameras_; }
+    /** T10: camera frames per second asked for in SUBSCRIBE (settings.json camera_fps, 1-30) */
+    void setCameraFps(int fps) { cameraFps_ = fps < 1 ? 1 : (fps > 30 ? 30 : fps); }
+    /** T10: @return the headset's dongle-path address camera frames are asked for at (0 = none) */
+    uint32_t cameraPathIp() const { return cameraPathIp_; }
+
     MetricStore& store() { return store_; }
     const MetricStore& store() const { return store_; }
     const ProcessListsView& processes() const { return processes_; }
@@ -151,6 +160,7 @@ public:
     uint64_t editCopiesSent() const { return editCopiesSent_; }
     uint64_t rediscoveries() const { return rediscoveries_; }
     uint64_t malformed() const { return malformed_; }
+    uint64_t unknownMetricValues() const { return unknownMetricValues_; }
     /** @return how many times the blob assembler was reset (every return to discovery) */
     uint64_t assemblerResets() const { return assemblerResets_; }
 
@@ -197,6 +207,9 @@ private:
 
     MetricStore store_;
     ProcessListsView processes_;
+    CameraFeed cameras_;          ///< T10
+    int cameraFps_ = 10;          ///< T10
+    uint32_t cameraPathIp_ = 0;   ///< T10: the headset's wlanap address, when it isn't the lease path
 
     uint64_t hellosSent_ = 0;
     uint64_t subscribesSent_ = 0;
@@ -204,6 +217,7 @@ private:
     uint64_t editCopiesSent_ = 0;
     uint64_t rediscoveries_ = 0;
     uint64_t malformed_ = 0;
+    uint64_t unknownMetricValues_ = 0;
     uint64_t assemblerResets_ = 0;
 
     void sendPacket(const Endpoint& to, link::PacketType type, const std::vector<uint8_t>& payload);

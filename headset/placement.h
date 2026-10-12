@@ -132,6 +132,10 @@ public:
         return retry;
     }
 
+    /** T10: what OpenVR accepted last (the camera tiles copy it) */
+    double appliedAlpha() const { return appliedAlpha_ < 0.0 ? 0.0 : appliedAlpha_; }
+    bool shown() const { return shown_; }
+
 private:
     double appliedAlpha_ = -1.0;  ///< 最後に受け付けられた透明度（まだなら負）
     bool shown_ = false;          ///< 最後に受け付けられた表示・非表示

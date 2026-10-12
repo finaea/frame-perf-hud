@@ -377,6 +377,10 @@ constexpr size_t kPartCountOffset = 13;
 
 }  // namespace
 
+bool readWireValue(Reader& reader, WireValue& value) {
+    return readValue(reader, value);
+}
+
 std::vector<std::vector<uint8_t>> encodeMetrics(uint64_t headsetMs, uint32_t snapshotId, const LinkState& state,
                                                 const std::vector<WireValue>& values) {
     std::vector<std::vector<uint8_t>> parts;
@@ -631,6 +635,7 @@ std::vector<uint8_t> encodeSubscribe(const Subscribe& m) {
     Writer w;
     w.id(m.pcId);
     w.u32(m.wants);
+    if (m.wants & (0x3Fu << 8)) w.u8(m.cameraFps);  // T10
     return std::move(w.bytes());
 }
 
@@ -639,6 +644,7 @@ bool decodeSubscribe(const uint8_t* payload, size_t size, Subscribe& out) {
     if (!readAll(payload, size, [&](Reader& r) {
             m.pcId = r.id();
             m.wants = r.u32();
+            if (m.wants & (0x3Fu << 8)) m.cameraFps = r.u8();  // T10: there exactly when cameras are wanted
         })) {
         return false;
     }

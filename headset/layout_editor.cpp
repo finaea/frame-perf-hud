@@ -1,6 +1,7 @@
 // T05: the dashboard tab's layout editor.
 #include "layout_editor.h"
 
+#include "camera_frame.h"  // T10: camera names
 #include "draw.h"
 #include "i18n.h"
 #include "theme.h"
@@ -32,6 +33,8 @@ constexpr double kChipGap = 8;
 constexpr int kChipRows = 5;
 constexpr double kRowH = 44;          // settings rows
 constexpr double kRowGap = 8;
+constexpr double kFpsStepperW = 200;  // T10: the camera widgets' FPS − n + (no room for a third settings row)
+constexpr double kFpsStep = 60;
 constexpr uint32_t kRowsMin = 1;
 
 /** Card height in the lanes. */
@@ -155,6 +158,17 @@ void LayoutEditor::relayout() {
     } else if (w->type == fph::WidgetType::Network) {
         settings_.push_back({Setting::AdapterDongle, {controlX, rowA, controlW / 2, kRowH}});
         settings_.push_back({Setting::AdapterHome, {controlX + controlW / 2, rowA, controlW / 2, kRowH}});
+    } else if (w->type == fph::WidgetType::HeadsetCamera) {  // T10: one toggle per outward cam; FPS − n + and Full size
+        const double cw = (controlW + 70) / 4;
+        for (int c = 0; c < 4; ++c)
+            settings_.push_back({static_cast<Setting>(static_cast<int>(Setting::Camera0) + c),
+                                 {controlX - 70 + c * cw, rowA, cw - 4, kRowH}});
+        settings_.push_back({Setting::FpsDown, {controlX - 70, rowB, kFpsStep, kRowH}});
+        settings_.push_back({Setting::FpsUp, {controlX - 70 + kFpsStepperW - kFpsStep, rowB, kFpsStep, kRowH}});
+        settings_.push_back({Setting::FullSizeToggle, {controlX + kFpsStepperW - 60, rowB, controlW + 60 - kFpsStepperW, kRowH}});
+    } else if (w->type == fph::WidgetType::EyeCamera) {  // T10: FPS − n +
+        settings_.push_back({Setting::FpsDown, {controlX - 70, rowA, kFpsStep, kRowH}});
+        settings_.push_back({Setting::FpsUp, {controlX - 70 + kFpsStepperW - kFpsStep, rowA, kFpsStep, kRowH}});
     }
 }
 
@@ -274,6 +288,18 @@ void LayoutEditor::applySetting(Setting setting) {
         case Setting::SameNameOff: e.sumSameName = false; break;
         case Setting::AdapterDongle: e.adapter = fph::NetAdapter::Dongle; break;
         case Setting::AdapterHome: e.adapter = fph::NetAdapter::Home; break;
+        case Setting::Camera0:
+        case Setting::Camera1:
+        case Setting::Camera2:
+        case Setting::Camera3: {  // T10: toggles one cam; the last one can't be turned off (an empty card)
+            const auto bit = static_cast<uint8_t>(1u << (static_cast<int>(setting) - static_cast<int>(Setting::Camera0)));
+            const auto mask = static_cast<uint8_t>(e.cameras ^ bit);
+            if (mask & 0x0F) e.cameras = mask;
+            break;
+        }
+        case Setting::FullSizeToggle: e.cameraFullSize = !e.cameraFullSize; break;
+        case Setting::FpsDown: e.cameraFps = fph::cameraFpsStep(e.cameraFps, -1, e.type); break;
+        case Setting::FpsUp: e.cameraFps = fph::cameraFpsStep(e.cameraFps, +1, e.type); break;
         case Setting::Remove: break;
     }
     if (e != *w) queueCommit(edited, selected_);
@@ -610,6 +636,15 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
     button(Setting::Remove, text.removeWidget, false);
     const double rowA = sy + kRowH + kRowGap;
     const double rowB = rowA + kRowH + kRowGap;
+    const auto fpsStepper = [&](double row) {  // T10: − n + (like Rows)
+        button(Setting::FpsDown, "−", false);
+        button(Setting::FpsUp, "+", false);
+        for (const auto& [id, r] : settings_) {
+            if (id != Setting::FpsDown) continue;
+            textCentered(pen, r.x + kFpsStepperW / 2.0, centerBaseline(row, kRowH, 24), std::to_string(w->cameraFps), 24,
+                         kText, true);
+        }
+    };
     if (isList(w->type)) {
         pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowRows, 20, kTextMuted);
         button(Setting::RowsDown, "−", false);
@@ -627,6 +662,17 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
         pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowAdapter, 20, kTextMuted);
         button(Setting::AdapterDongle, text.adapterDongle, w->adapter == fph::NetAdapter::Dongle);
         button(Setting::AdapterHome, text.adapterHome, w->adapter == fph::NetAdapter::Home);
+    } else if (w->type == fph::WidgetType::HeadsetCamera) {  // T10
+        pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowCameras, 20, kTextMuted);
+        for (uint8_t c = 0; c < 4; ++c)
+            button(static_cast<Setting>(static_cast<int>(Setting::Camera0) + c), fph::cam::cameraName(c),
+                   (w->cameras & (1u << c)) != 0);
+        pen.text(sx, centerBaseline(rowB, kRowH, 20), text.rowFps, 20, kTextMuted);
+        fpsStepper(rowB);
+        button(Setting::FullSizeToggle, text.rowFullSize, w->cameraFullSize);
+    } else if (w->type == fph::WidgetType::EyeCamera) {  // T10
+        pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowFps, 20, kTextMuted);
+        fpsStepper(rowA);
     } else {
         pen.text(sx, centerBaseline(rowA, kRowH, 18), text.noSettings, 18, kTextMuted);
     }

@@ -193,6 +193,9 @@ VrOverlay::ConnectResult VrOverlay::connect(int panelWidth, int panelHeight, int
 
     // 4) ダッシュボードの設定パネル（失敗しても性能パネルは動かす）
     createDashboard(settingsWidth, settingsHeight);
+    cameras_ = std::make_unique<CameraOverlays>(vulkan_);  // T10: the camera tiles share this Vulkan device
+    placement_ = PanelPlacement {};
+    placement_.revision = 1;
 
     vrserverPid_ = findVrserverPid();
     lastFrameIndex_ = 0;
@@ -280,6 +283,7 @@ void VrOverlay::shutdown() {
     }
     // 3) オーバーレイを消す（サムネイルは設定パネルと一緒に消える）
     if (panelHandle_ != 0) logShutdownStep("DestroyOverlay(panel)", overlay->DestroyOverlay(panelHandle_));
+    if (cameras_) cameras_->destroyOverlays();  // T10
     if (dashboardHandle_ != 0) logShutdownStep("DestroyOverlay(settings)", overlay->DestroyOverlay(dashboardHandle_));
     panelHandle_ = 0;
     dashboardHandle_ = 0;
@@ -295,6 +299,8 @@ void VrOverlay::shutdown() {
     std::fprintf(stderr, "[VR] shutdown VR_Shutdown done\n");
 
     // 6) Vulkan の画像とデバイスを壊す
+    if (cameras_) cameras_->destroyTextures();  // T10
+    cameras_.reset();
     thumbnailTexture_.destroy();
     settingsTexture_.destroy();
     if (retiredPanelTexture_) retiredPanelTexture_->destroy();
@@ -312,6 +318,7 @@ void VrOverlay::applyConfig(const Config& config) {
     checkOverlay("SetOverlayWidthInMeters", vr::VROverlay()->SetOverlayWidthInMeters(
                                                 panelHandle_, static_cast<float>(config.widthM * panelColumns_)));
     transformDirty_ = true;
+    notePlacement();  // T10: the width moved the camera tiles
     updatePlacement(config, nowSeconds());
     // 変換を渡した直後に交差を聞くと、SteamVR はまだ前の変換で答える（実機で確かめた）ので、少し待ってから聞く。
     // 確かめるのは頭に固定しているときだけ（頭の中心から見た向きを計算するため）
@@ -331,6 +338,7 @@ void VrOverlay::setPanelVisibleHeight(int visibleHeight) {
                                         static_cast<float>(visibleHeight) / static_cast<float>(panelTextureHeight_)};
     if (checkOverlay("SetOverlayTextureBounds", vr::VROverlay()->SetOverlayTextureBounds(panelHandle_, &bounds))) {
         panelVisibleHeight_ = visibleHeight;
+        notePlacement();  // T10
     }
 }
 
@@ -362,6 +370,7 @@ void VrOverlay::updatePlacement(const Config& config, double now) {
                              overlay->SetOverlayTransformAbsolute(panelHandle_, vr::TrackingUniverseStanding, &m))) {
                 attachedDevice_ = kDetachedDevice;
                 appliedDetached_ = config.detachedPose;
+                appliedTransform_ = m;  // T10
                 transformDirty_ = false;
             } else {
                 shown = false;
@@ -379,6 +388,7 @@ void VrOverlay::updatePlacement(const Config& config, double now) {
                                     show ? overlay->ShowOverlay(panelHandle_) : overlay->HideOverlay(panelHandle_));
             });
         nextPlacementAt_ = retry ? now + kPlacementRetrySec : std::numeric_limits<double>::infinity();
+        notePlacement();  // T10
         return;
     }
     const bool wrist = config.attachment != Attachment::Head;
@@ -416,6 +426,7 @@ void VrOverlay::updatePlacement(const Config& config, double now) {
         const vr::EVROverlayError error = overlay->SetOverlayTransformTrackedDeviceRelative(panelHandle_, device, &transform);
         if (checkOverlay("SetOverlayTransformTrackedDeviceRelative", error)) {
             attachedDevice_ = device;
+            appliedTransform_ = transform;  // T10
             transformDirty_ = false;
         } else {
             // 置き場所を渡せなかったパネルは出さない（前の場所に残さない）。次の呼び出しでやり直す
@@ -440,6 +451,7 @@ void VrOverlay::updatePlacement(const Config& config, double now) {
     if (wrist && config.visible) interval = wristPollInterval(shown, tracked ? target : 0.0);
     if (retry) interval = std::min(interval, kPlacementRetrySec);
     nextPlacementAt_ = now + interval;
+    notePlacement();  // T10
 }
 
 void VrOverlay::logFacingCheck(const Config& config) const {
@@ -838,6 +850,7 @@ bool VrOverlay::submitPanel(const uint8_t* rgba, int width, int height, int colu
         checkOverlay("SetOverlayWidthInMeters", vr::VROverlay()->SetOverlayWidthInMeters(
                                                     panelHandle_, static_cast<float>(configWidthM_ * panelColumns_)));
     }
+    notePlacement();  // T10: a new texture size / column count moves the camera tiles
     const bool ok = panelTexture_->update(panelHandle_, rgba, message);
     // 同じエラーを毎回出さない
     if (message != lastPanelError_) {
@@ -872,7 +885,36 @@ void VrOverlay::setDetachedTransform(const DetachedPose& pose) {
                      vr::VROverlay()->SetOverlayTransformAbsolute(panelHandle_, vr::TrackingUniverseStanding, &m))) {
         attachedDevice_ = kDetachedDevice;
         appliedDetached_ = pose;
+        appliedTransform_ = m;  // T10
+        notePlacement();
     }
+}
+
+void VrOverlay::notePlacement() {
+    if (!cameras_) return;
+    PanelPlacement p;
+    p.valid = attachedDevice_ != vr::k_unTrackedDeviceIndexInvalid;
+    p.shown = presentation_.shown();
+    p.alpha = static_cast<float>(presentation_.appliedAlpha());
+    p.absolute = attachedDevice_ == kDetachedDevice;
+    p.device = p.absolute ? 0 : attachedDevice_;
+    p.transform = appliedTransform_;
+    p.widthM = static_cast<float>(configWidthM_ * panelColumns_);
+    p.textureWidth = panelTextureWidth_;
+    p.visibleHeight = panelVisibleHeight_;
+    const bool same = p.valid == placement_.valid && p.shown == placement_.shown &&
+                      std::fabs(p.alpha - placement_.alpha) < 0.002f && p.absolute == placement_.absolute &&
+                      p.device == placement_.device && std::memcmp(&p.transform, &placement_.transform, sizeof(p.transform)) == 0 &&
+                      p.widthM == placement_.widthM && p.textureWidth == placement_.textureWidth &&
+                      p.visibleHeight == placement_.visibleHeight;
+    if (same) return;
+    const bool samePose = p.valid == placement_.valid && p.absolute == placement_.absolute && p.device == placement_.device &&
+                          std::memcmp(&p.transform, &placement_.transform, sizeof(p.transform)) == 0 &&
+                          p.widthM == placement_.widthM && p.visibleHeight == placement_.visibleHeight;
+    p.revision = placement_.revision + 1;
+    p.poseRevision = placement_.poseRevision + (samePose ? 0 : 1);  // a wrist fade only changes alpha
+    placement_ = p;
+    cameras_->follow(placement_);
 }
 
 bool VrOverlay::submitSettings(const uint8_t* rgba) {

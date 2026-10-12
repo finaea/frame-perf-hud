@@ -625,27 +625,12 @@ void testNetworkAddedRepeatedly() {
 }
 
 void testUnofferedChips() {
-    Rig rig(baseLayout(2));
-    // Streaming (ticket 08) moved out of this group: it's offered in the palette like any other
-    // single-instance widget, see testStreamingChipOffered below. Only the two camera types (repeatable,
-    // but not yet offered) and the implicit None stay unofferable.
+    // T10: the camera widgets are offered now (and repeatable); only the implicit None is held back
     for (const W type : {W::HeadsetCamera, W::EyeCamera}) {
-        const Pt c = rig.chip(type);
-        CHECK(!fph::isOfferedInPalette(type));
-        CHECK(!fph::canAdd(rig.layout, type));
-        CHECK(!rig.ed.pointerDown(c.x, c.y));
-        CHECK(!rig.ed.busy());
-        rig.ed.pointerUp(c.x, c.y);
-        CHECK(rig.nothingQueued());
-        // A drag from it doesn't start either
-        rig.ed.pointerDown(c.x, c.y);
-        const Pt to = rig.above({0, 0});
-        rig.ed.pointerMove(to.x, to.y);
-        CHECK(rig.ed.dropTarget().first == -1);
-        rig.ed.pointerUp(to.x, to.y);
-        CHECK(rig.nothingQueued());
+        CHECK(fph::isOfferedInPalette(type));
+        CHECK(fph::canAdd(baseLayout(2), type));
     }
-    // ... but the cameras still count as repeatable for a layout that has them (loaded from a file / sent by a PC)
+    // The cameras are repeatable in a layout that has them
     Layout withCameras = make({{W::Frame, W::HeadsetCamera, W::HeadsetCamera}, {W::EyeCamera}});
     CHECK(fph::insertWidget(withCameras, inst(W::HeadsetCamera), 1, 0));
     CHECK(fph::insertWidget(withCameras, inst(W::EyeCamera), 1, 0));

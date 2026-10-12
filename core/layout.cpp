@@ -43,6 +43,29 @@ WidgetInstance instance(WidgetType type, NetAdapter adapter = NetAdapter::Dongle
 
 }  // namespace
 
+uint8_t cameraFpsMax(WidgetType type) {
+    return type == WidgetType::HeadsetCamera ? 15 : 30;
+}
+
+uint8_t cameraFpsNearest(double fps, WidgetType type) {
+    uint8_t best = kCameraFpsSteps[0];
+    for (uint8_t s : kCameraFpsSteps)
+        if (s <= cameraFpsMax(type) && std::fabs(fps - s) < std::fabs(fps - best)) best = s;
+    return best;
+}
+
+uint8_t cameraFpsStep(uint8_t fps, int direction, WidgetType type) {
+    const uint8_t now = cameraFpsNearest(fps, type);
+    for (size_t i = 0; i < kCameraFpsSteps.size(); ++i) {
+        if (kCameraFpsSteps[i] != now) continue;
+        if (direction < 0 && i > 0) return kCameraFpsSteps[i - 1];
+        if (direction > 0 && i + 1 < kCameraFpsSteps.size() && kCameraFpsSteps[i + 1] <= cameraFpsMax(type))
+            return kCameraFpsSteps[i + 1];
+        return now;
+    }
+    return now;
+}
+
 Layout defaultLayout() {
     using W = WidgetType;
     Layout layout;
@@ -103,6 +126,13 @@ std::string layoutToJson(const Layout& layout, int indent) {
             }
             if (w.type == WidgetType::Network) {
                 out += "," + sp + "\"adapter\":" + sp + (w.adapter == NetAdapter::Home ? "\"home\"" : "\"dongle\"");
+            }
+            if (w.type == WidgetType::HeadsetCamera) {  // T10
+                out += "," + sp + "\"cameras\":" + sp + std::to_string(w.cameras) + "," + sp +
+                       "\"full_size\":" + sp + (w.cameraFullSize ? "true" : "false");
+            }
+            if (w.type == WidgetType::HeadsetCamera || w.type == WidgetType::EyeCamera) {  // T10
+                out += "," + sp + "\"fps\":" + sp + std::to_string(w.cameraFps);
             }
             out += sp + "}";
         }
@@ -166,7 +196,10 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
             for (const auto& member : item.members) {
                 const std::string& k = member.first;
                 const bool known = k == "type" || ((k == "max_items" || k == "sum_same_name") && isList(w.type)) ||
-                                   (k == "adapter" && w.type == WidgetType::Network);
+                                   (k == "adapter" && w.type == WidgetType::Network) ||
+                                   ((k == "cameras" || k == "full_size") && w.type == WidgetType::HeadsetCamera) ||
+                                   (k == "fps" &&
+                                    (w.type == WidgetType::HeadsetCamera || w.type == WidgetType::EyeCamera));
                 if (!known) warnings.push_back(at + ": unknown key " + k + " for " + type->text);
             }
             if (isList(w.type)) {
@@ -190,6 +223,32 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
                     if (adapter->isString() && adapter->text == "home") w.adapter = NetAdapter::Home;
                     else if (adapter->isString() && adapter->text == "dongle") w.adapter = NetAdapter::Dongle;
                     else warnings.push_back(at + ".adapter must be \"dongle\" or \"home\"");
+                }
+            }
+            if (w.type == WidgetType::HeadsetCamera) {  // T10
+                if (const JsonValue* cams = item.get("cameras")) {
+                    // a mask of the 4 outward cams; none at all would be an empty card, so that falls back to cam 0
+                    const double mask = cams->isNumber() ? std::floor(cams->number) : -1.0;
+                    if (mask >= 1.0 && mask <= 15.0) w.cameras = static_cast<uint8_t>(mask);
+                    else warnings.push_back(at + ".cameras must be a mask 1-15 (bit n = outward cam n)");
+                }
+                if (const JsonValue* full = item.get("full_size")) {
+                    if (full->isBool()) w.cameraFullSize = full->boolean;
+                    else warnings.push_back(at + ".full_size must be true or false");
+                }
+            }
+            if (w.type == WidgetType::HeadsetCamera || w.type == WidgetType::EyeCamera) {  // T10
+                if (const JsonValue* fps = item.get("fps")) {
+                    if (fps->isNumber()) {
+                        const uint8_t snapped = cameraFpsNearest(fps->number, w.type);
+                        if (snapped != fps->number)
+                            warnings.push_back(at + ".fps must be 5, 10, 15" +
+                                               (w.type == WidgetType::EyeCamera ? " or 30" : "") + ": using " +
+                                               std::to_string(snapped));
+                        w.cameraFps = snapped;
+                    } else {
+                        warnings.push_back(at + ".fps must be a number");
+                    }
                 }
             }
             out1.widgets.push_back(w);

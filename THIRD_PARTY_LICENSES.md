@@ -64,6 +64,39 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
+### framestream eye-ring discovery (`headset/camera_eye_ring.*`)
+
+- Project: FrameEyeCameraFeed's `framestream.c` by Curtis English, https://github.com/Curtis-VL/FrameEyeCameraFeed
+- Version: commit 309c41d (2026-10-02)
+- License: MIT
+- How it is used: the eye cameras' ring discovery, "ring is live" check and slot reading were ported from C to
+  C++ (`headset/camera_eye_ring.cpp`), with a tear guard added. The cache-maintained copy in
+  `headset/camera_cache.cpp` follows the same technique.
+
+```
+MIT License
+
+Copyright (c) 2026 Curtis English
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Used at run time from the Steam Frame, not bundled
 
 The release tarball contains only the frame-perf-hud program, its install script, the files in
@@ -80,6 +113,7 @@ on a Steam Frame. Versions are the SteamOS packages on the headset at the time o
 | cairo (`libcairo.so.2`, 1.18.0) | Dynamically linked; draws the panels | LGPL-2.1 or MPL-1.1 | https://gitlab.freedesktop.org/cairo/cairo/-/blob/master/COPYING |
 | FreeType (`libfreetype.so.6`, 2.13.2) | Dynamically linked; loads the font | FreeType License (FTL) or GPL-2.0 | https://gitlab.freedesktop.org/freetype/freetype/-/blob/master/LICENSE.TXT |
 | libnl (`libnl-3.so.200`, `libnl-genl-3.so.200`, 3.9.0) | Dynamically linked; reads the Wi-Fi link status over nl80211 | LGPL-2.1 | https://github.com/thom311/libnl/blob/main/COPYING |
+| libjpeg-turbo (`libturbojpeg.so.0`) | Dynamically linked; encodes camera frames sent to the PC app (ticket 10) | BSD-3-Clause, IJG, zlib | https://github.com/libjpeg-turbo/libjpeg-turbo/blob/main/LICENSE.md |
 | Vulkan loader (`libvulkan.so.1`, 1.4.309) | Dynamically linked; hands the panel image to SteamVR | Apache-2.0 | https://github.com/KhronosGroup/Vulkan-Loader/blob/main/LICENSE.txt |
 | GNU C Library (`libc.so.6`, `libm.so.6`, 2.39) | Dynamically linked | LGPL-2.1-or-later | https://www.gnu.org/software/libc/ |
 | GCC runtime libraries (`libstdc++.so.6`, `libgcc_s.so.1`) | Dynamically linked | GPL-3.0 with the GCC Runtime Library Exception 3.1 | https://www.gnu.org/licenses/gcc-exception-3.1.html |

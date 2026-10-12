@@ -110,6 +110,7 @@ private:
     std::unique_ptr<PanelView> panel_;
     uint64_t renderedLayoutRev_ = ~0ull;
     bool panelDirty_ = true;
+    uint64_t cameraRev_ = 0;  // T10: CameraFeed::revision last drawn
 
     cairo_surface_t* surface_ = nullptr;  ///< the window's picture, client size
     int surfaceW_ = 0;
@@ -455,6 +456,7 @@ void App::openSettings() {
     SettingsDialogData data;
     data.manualIp = settings_.manualIp;
     data.autostart = autostartEnabled();
+    data.cameraFps = settings_.cameraFps;  // T10
     std::ostringstream info;
     info << "This PC: " << computerName() << "\r\nPC id: " << settings_.pcId << "\r\n";
     const LinkPhase phase = client_->phase();
@@ -476,6 +478,10 @@ void App::openSettings() {
     if (data.manualIp != settings_.manualIp) {
         logLine("[app] manual IP: '%s'", data.manualIp.c_str());
         settings_.manualIp = data.manualIp;
+    }
+    if (data.cameraFps != settings_.cameraFps) {  // T10: the next SUBSCRIBE carries it
+        logLine("[app] camera frame rate: %d fps", data.cameraFps);
+        settings_.cameraFps = data.cameraFps;
     }
     if (data.forgetHeadsets) {
         logLine("[app] remembered headsets forgotten");
@@ -573,6 +579,13 @@ void App::onTick() {
     // In case a FD_READ was coalesced; new packets (METRICS at 2 Hz, layouts) are what repaint the window
     if (socket_.receiveAll(*client_, now) > 0) panelDirty_ = true;
     client_->tick(now);
+    // T10: camera pictures (they arrive as packets, which repaint) and stale ones dropping back to their state text
+    client_->setCameraFps(settings_.cameraFps);
+    client_->cameras().tick(now);
+    if (client_->cameras().revision() != cameraRev_) {
+        cameraRev_ = client_->cameras().revision();
+        panelDirty_ = true;
+    }
     bool streamWanted = false;
     for (const auto type : enabledWidgets(client_->layout())) streamWanted |= type == WidgetType::Streaming;
     streaming_.setDemand(streamWanted);
@@ -718,6 +731,9 @@ void App::drawFrame() {
         ctx.store = &client_->store();
         ctx.processes = &client_->processes();
         ctx.now = nowSec();
+        for (uint8_t c = 0; c < cam::kCameraCount; ++c)  // T10: the camera cards' state text
+            ctx.cameraStates[c] = static_cast<uint8_t>(client_->cameras().state(c, ctx.now));
+        panel_->updateGeometry(ctx);
         const GridGeometry& g = panel_->geometry();
         const bool live = client_->subscribed() && client_->layoutIsLive();
         if (!editing_) {
@@ -729,6 +745,12 @@ void App::drawFrame() {
             cairo_surface_t* panel = panel_->render(ctx, viewScale_);
             cairo_set_source_surface(cr, panel, originX_, originY_);  // 1:1, whole device pixels
             cairo_paint(cr);
+            if (live) {  // T10: the camera pictures go on top of their tiles
+                cairo_save(cr);
+                cairo_translate(cr, originX_, originY_);
+                client_->cameras().paint(cr, g, viewScale_, ctx.now);
+                cairo_restore(cr);
+            }
             if (!live) {  // not live: the cached layout, greyed
                 pen.color(kBg, 0.6);
                 cairo_rectangle(cr, originX_, originY_, g.width * viewScale_, g.height * viewScale_);

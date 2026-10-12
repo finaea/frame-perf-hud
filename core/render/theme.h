@@ -49,6 +49,11 @@ constexpr Color kAccentText = hexColor(0xf0c4fa);     ///< カードの上のピ
 constexpr Color kGpu = hexColor(0x58a6ff);            ///< GPU（使用率の塗り・GPU 温度の線・「GPU」の文字）
 constexpr double kGpuFillAlpha = 0.22;                ///< グラフの台の上の GPU 使用率の塗り
 constexpr Color kGpuFill = blendColor(kGpu, kBg, kGpuFillAlpha);
+// Streaming stage and bitrate colors, shared by bars and their legends.
+constexpr Color kStreamGame = hexColor(0x9d7cf5);
+constexpr Color kStreamSend = hexColor(0xf08a4b);
+constexpr Color kStreamDecode = hexColor(0x3cc7b4);
+constexpr Color kStreamSlack = hexColor(0x5b6270);
 // ---- 状態の色（色だけで伝えない。● や文字も付ける） ----
 constexpr Color kSuccess = hexColor(0x3fb950);        ///< パネル表示中
 constexpr Color kSuccessTint = blendColor(kSuccess, kBg, 0.15);

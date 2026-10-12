@@ -13,6 +13,11 @@
 #include "layout_authority.h"  // T06
 #include "link_agent.h"  // T06
 #include "camera_helper.h"  // T09
+#include "camera_dump.h"     // T10
+#include "camera_frame.h"    // T10
+#include "camera_link.h"     // T10
+#include "camera_service.h"  // T10
+#include "camera_tile_geometry.h"  // T10
 #include "metric_store.h"
 #include "paths.h"
 #include "scheduler.h"
@@ -76,8 +81,10 @@ struct Options {
         Overlay, Print, DumpPng, DumpSettingsPng, DumpFrameTimings, DebugDump, ContrastReport, Help, Version,
         DumpMetrics,  // T03
         ServeLink,    // T06
-        CameraHelperDump  // T09 (hidden: not in --help until the camera widgets exist)
+        CameraHelperDump,  // T09 (hidden)
+        CameraDump         // T10 (hidden): the camera thread on its own
     };
+    CameraDumpOptions cameraDump;  // T10: --camera-dump
     DumpMetricsOptions dumpMetrics;  // T03: --dump-metrics
     ServeLinkOptions serveLink;      // T06: --serve-link
     camhelper::CameraHelperDumpOptions cameraHelperDump;  // T09: --camera-helper-dump
@@ -275,6 +282,18 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.mode = Options::Mode::ServeLink;
         } else if (arg == "--camera-helper-dump") {  // T09
             options.mode = Options::Mode::CameraHelperDump;
+        } else if (arg == "--camera-dump") {  // T10: --camera-dump [--cameras HEX] [--camera-pc] [--camera-snap DIR]
+            options.mode = Options::Mode::CameraDump;
+        } else if (arg == "--cameras" && hasNext) {  // T10: bit = camera id (0-3 outward, 4-5 eyes)
+            options.cameraDump.cameras = static_cast<uint8_t>(std::strtoul(argv[++i], nullptr, 16) & 0x3F);
+        } else if (arg == "--camera-pc") {  // T10: also make the PC's JPEGs
+            options.cameraDump.pc = true;
+        } else if (arg == "--camera-full") {  // T10
+            options.cameraDump.fullSize = true;
+        } else if (arg == "--camera-standby") {  // T10: as if the HMD were in standby
+            options.cameraDump.worn = false;
+        } else if (arg == "--camera-snap" && hasNext) {  // T10: first frame per camera as PGM
+            options.cameraDump.snapshotDir = argv[++i];
         } else if (arg == "--camera-eye") {  // T09: also turn the eye cams on
             options.cameraHelperDump.eye = true;
         } else if (arg == "--camera-no-outward") {  // T09
@@ -594,8 +613,12 @@ frame_updater::UpdateStatus fakeUpdateStatus(const std::string& name) {
 
 /** T04: what the widgets draw with. */
 fph::WidgetContext widgetContext(const Config& config, const fph::MetricStore& store,
-                                 const fph::ProcessListsView& lists, double now) {
+                                 const fph::ProcessListsView& lists, double now,
+                                 const CameraService* cameras = nullptr) {
     fph::WidgetContext ctx;
+    if (cameras != nullptr) {  // T10: the camera cards' state text
+        for (uint8_t c = 0; c < fph::cam::kCameraCount; ++c) ctx.cameraStates[c] = static_cast<uint8_t>(cameras->state(c));
+    }
     ctx.store = &store;
     ctx.processes = &lists;
     ctx.thresholds = config.thresholds;
@@ -603,6 +626,23 @@ fph::WidgetContext widgetContext(const Config& config, const fph::MetricStore& s
     ctx.graphSeconds = config.graphSeconds;
     ctx.clockFormat = config.clockFormat;
     return ctx;
+}
+
+/** T10: the camera thread's counters + the tiles' upload cost, for the debug dump. */
+std::string cameraDebugText(const CameraService& cameras, VrOverlay& vr) {
+    std::string text = cameras.debugText();
+    if (CameraOverlays* tiles = vr.cameraOverlays()) {
+        double avgMs = 0.0;
+        unsigned count = 0, hidden = 0;
+        tiles->takeUploadStats(avgMs, count, hidden);
+        char line[160];
+        std::snprintf(line, sizeof(line),
+                      "camera tile uploads since the last dump: %u, %.3f ms avg wall (main thread); %u frames skipped "
+                      "while the HUD was hidden\n",
+                      count, avgMs, hidden);
+        text += line;
+    }
+    return text;
 }
 
 /** T04: applies a layout to the scheduler (which widgets are on) and the process scan (list sizes). */
@@ -978,7 +1018,7 @@ struct RenderStats {
  * - metrics (2 Hz): SteamVR events, config reload, "someone looking" signals, due sources, HUD redraw,
  * - input (50 / 100 ms): dashboard pointer events, only while the dashboard tab is visible,
  * - placement: upstream's wrist fade (1/30 s while fading), only when attached to a hand,
- * - camera: an eventfd the camera thread will signal (ticket 10; never fires yet).
+ * - camera: the camera thread's eventfd (T10): a frame for a camera tile / the PC, or a camera state change.
  * Signals wake it through the same poll().
  */
 int runOverlay(const Options& options) {
@@ -1052,7 +1092,14 @@ int runOverlay(const Options& options) {
     std::fprintf(stderr, "[layout] version %u, %zu widget(s) in %zu column(s), panel %dx%d\n", config.layout.version,
                  fph::enabledWidgets(config.layout).size(), config.layout.columns.size(),
                  renderer.geometry().textureWidth, renderer.geometry().textureHeight);
-    const int cameraFd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);  // stub: the camera thread arrives in ticket 10
+    // T10: the camera thread. It idles in poll() (and the helper isn't running) until a camera widget is on
+    CameraService cameras;
+    if (!cameras.start()) std::fprintf(stderr, "[camera] couldn't start the camera thread\n");
+    const int cameraFd = cameras.eventFd();
+    CameraLink cameraLink;
+    fph::GridGeometry cameraGeometry;  // the grid the camera tiles were last placed on
+    bool haveCameraGeometry = false;
+    uint64_t cameraStateRevision = 0;
 
     // Wait for SteamVR
     std::string lastMessage;
@@ -1373,7 +1420,7 @@ int runOverlay(const Options& options) {
                 const double c2 = cpuSeconds();
                 const double w2 = nowSeconds();
                 const fph::ProcessListsView lists = bridge.processListsView();
-                const bool changed = renderer.render(widgetContext(config, store, lists, now));
+                const bool changed = renderer.render(widgetContext(config, store, lists, now, &cameras));
                 const double c3 = cpuSeconds();
                 const double w3 = nowSeconds();
                 bool sent = false;
@@ -1406,7 +1453,47 @@ int runOverlay(const Options& options) {
             gDumpRequested = 0;
             writeDebugDump(scheduler, store, activityLevel, settingsVisible, nowSeconds(),
                            bridge.debugText() + renderStats.text(renderer.geometry()) +
-                               linkService.debugText(nowSeconds()));  // T06
+                               linkService.debugText(nowSeconds()) + cameraDebugText(cameras, vr));  // T06, T10
+        }
+
+        // ---- T10: cameras. Wants from the layout, the HUD and the PCs; new frames to the tiles and the PCs ----
+        {
+            const uint8_t widgetCams = fph::cam::camerasInLayout(config.layout);
+            const std::vector<CameraTarget> targets = linkService.server().cameraTargets(nowSeconds());
+            CameraWants wants;
+            wants.display = config.visible ? widgetCams : 0;  // kept on in standby: waking up is then instant
+            wants.pc = CameraLink::wanted(targets, widgetCams);
+            wants.fullSize = fph::cam::fullSizeInLayout(config.layout);
+            wants.worn = scheduler.demand().hmdInUse;
+            wants.pcFps = CameraLink::fps(targets);
+            fph::cam::displayFpsInLayout(config.layout, wants.displayFps);  // each widget's fps; the max per camera
+            cameras.setWants(wants);
+            CameraOverlays* tiles = vr.cameraOverlays();
+            if (tiles != nullptr) {
+                // re-placed on any grid change that moves a camera tile, layout edit or not (a widget above it
+                // changing height, the panel's size or scale)
+                if (!haveCameraGeometry || !camtiles::sameTileGeometry(renderer.geometry(), cameraGeometry)) {
+                    tiles->setGeometry(renderer.geometry());
+                    cameraGeometry = renderer.geometry();
+                    haveCameraGeometry = true;
+                }
+                uint8_t live = 0;
+                for (uint8_t c = 0; c < fph::cam::kCameraCount; ++c) {
+                    if (cameras.state(c) == fph::cam::CameraState::Live) live |= static_cast<uint8_t>(1u << c);
+                    CameraImage image;
+                    if (cameras.takeImage(c, image) && wants.display) tiles->onFrame(c, image);
+                }
+                tiles->setLive(live);
+            }
+            cameraLink.pump(cameras, targets, widgetCams, nowSeconds(),
+                            [&](const LinkEndpoint& to, uint8_t camera, const std::vector<uint8_t>& blob) {
+                                linkService.server().sendCameraBlob(to, camera, blob);
+                            });
+            // a camera state changed (live, not worn, helper missing, ...): redraw the cards' text now
+            if (cameras.stateRevision() != cameraStateRevision) {
+                cameraStateRevision = cameras.stateRevision();
+                if (widgetCams) nextPanel = std::min(nextPanel, nowSeconds());
+            }
         }
 
         // ---- Sleep until the earliest deadline ----
@@ -1426,9 +1513,9 @@ int runOverlay(const Options& options) {
 
     // Same cleanup for SIGTERM / SIGINT, SteamVR quitting, vrserver vanishing, and Quit
     linkService.shutdown();  // T06: BYE to lease holders, so PCs go back to discovery at once
-    vr.shutdown();
+    cameras.stop();          // T10: the camera thread and the helper (it exits on socket EOF)
+    vr.shutdown();           // destroys the camera tiles with the panel
     std::fprintf(stderr, "[VR] Shut down\n");
-    if (cameraFd >= 0) ::close(cameraFd);
     if (lockFd >= 0) ::close(lockFd);
     // A user quit gets the exit code systemd's RestartPreventExitStatus= keeps from restarting
     return userQuit ? kExitCodeUserQuit : 0;
@@ -1465,6 +1552,9 @@ int main(int argc, char** argv) {
         case Options::Mode::CameraHelperDump:  // T09
             if (options.secondsGiven) options.cameraHelperDump.seconds = options.dumpSeconds;
             return camhelper::runCameraHelperDump(options.cameraHelperDump, gStopRequested);
+        case Options::Mode::CameraDump:  // T10
+            if (options.secondsGiven) options.cameraDump.seconds = options.dumpSeconds;
+            return runCameraDump(options.cameraDump, gStopRequested);
         case Options::Mode::Overlay: break;
     }
     return runOverlay(options);

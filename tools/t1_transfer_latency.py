@@ -17,7 +17,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seconds", type=float, default=15)
     args = parser.parse_args()
-    paths = json.loads((Path(os.environ["LOCALAPPDATA"]) / "openvr/openvrpaths.vrpath").read_text())
+    paths_file = Path(os.environ["LOCALAPPDATA"]) / "openvr/openvrpaths.vrpath"
+    paths = json.loads(paths_file.read_text())
     dll = c.CDLL(str(Path(paths["runtime"][0]) / "bin/win64/openvr_api.dll"))
     init = dll.VR_InitInternal2
     init.argtypes = [c.POINTER(c.c_int), c.c_int, c.c_char_p]
