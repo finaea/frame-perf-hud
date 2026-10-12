@@ -14,6 +14,24 @@ enum class Attachment {
     Head,        ///< 頭（HMD）
     LeftWrist,   ///< 左手のコントローラー
     RightWrist,  ///< 右手のコントローラー
+    Detached,    ///< T05: pinned in the room (standing space, Config::detachedPose)
+};
+
+/** T05: a 3×4 standing-space transform, row-major (the same layout as vr::HmdMatrix34_t). */
+struct DetachedPose {
+    bool valid = false;  ///< false until the HUD has been placed in the room once
+    double m[3][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}};
+
+    bool operator==(const DetachedPose& o) const {
+        if (valid != o.valid) return false;
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 4; ++c) {
+                if (m[r][c] != o.m[r][c]) return false;
+            }
+        }
+        return true;
+    }
+    bool operator!=(const DetachedPose& o) const { return !(*this == o); }
 };
 
 /**
@@ -42,6 +60,18 @@ struct WristPose {
     }
 };
 
+/** T06: the PC link's settings ("link" key). */
+struct LinkConfig {
+    /** A PC that was allowed on the dashboard tab. */
+    struct AllowedPc {
+        std::string id;    ///< 32 hex chars
+        std::string name;  ///< its computer name when it was allowed
+    };
+    int port = 47630;            ///< UDP port the headset listens on
+    std::string headsetId;       ///< 32 hex chars, generated on the first start; "" = not yet
+    std::vector<AllowedPc> allowedPcs;
+};
+
 /**
  * アプリの設定一式。ファイルが無いときはこの既定値で動く。
  */
@@ -58,6 +88,7 @@ struct Config {
     double rollDeg = 0.0;           ///< 画面内の回転（度）。正で面の側から見て反時計回り（-180〜180）
     WristPose leftWrist;            ///< 左手に固定するときの位置と向き
     WristPose rightWrist;           ///< 右手に固定するときの位置と向き
+    DetachedPose detachedPose;      ///< T05: where the HUD sits in the room ("detached_pose")
     bool wristFade = true;          ///< 手首のとき、パネルの面が目から外れるほど薄くして消す
     double wristFadeEndDeg = 75.0;  ///< 消えきる角度（度、35〜90）。その 30° 手前から薄くなり始める
     int clockFormat = 24;           ///< 性能パネルの時計（0 = 出さない、12 = 12 時間制、24 = 24 時間制。本体の時刻）
@@ -70,6 +101,7 @@ struct Config {
     Thresholds thresholds;
     fph::Layout layout = fph::defaultLayout();  ///< T04: the widget grid ("layout" key)
     bool layoutInFile = false;  ///< T04: the file had a usable "layout" (false = first run, or it was unreadable)
+    LinkConfig link;            ///< T06: the PC link ("link" key)
 };
 
 /**
@@ -81,7 +113,7 @@ std::string defaultConfigPath();
 /**
  * 設定ファイルに書く固定先の名前。
  * @param attachment 固定先
- * @return "head" / "left_wrist" / "right_wrist"
+ * @return "head" / "left_wrist" / "right_wrist" / "detached"
  */
 const char* attachmentName(Attachment attachment);
 

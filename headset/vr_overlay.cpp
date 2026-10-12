@@ -1,6 +1,7 @@
 // OpenVR との接続とオーバーレイの実装。
 #include "vr_overlay.h"
 
+#include "detached.h"  // T05
 #include "openvr.h"
 #include "placement.h"
 
@@ -37,6 +38,8 @@ constexpr double kFacingCheckDelaySec = 0.5;
 constexpr double kPlacementRetrySec = 0.1;
 // 手首に固定しているコントローラーの番号（役割から引く）を聞き直す間隔（秒）
 constexpr double kWristRoleCheckSec = 1.0;
+// T05: attachedDevice_ while the HUD is placed with SetOverlayTransformAbsolute (no device)
+constexpr uint32_t kDetachedDevice = 0xfffffffeu;
 
 /**
  * 単調増加の時計で今の時刻を秒で返す。
@@ -163,6 +166,8 @@ VrOverlay::ConnectResult VrOverlay::connect(int panelWidth, int panelHeight, int
     nextPlacementAt_ = std::numeric_limits<double>::infinity();
     wristDevice_ = vr::k_unTrackedDeviceIndexInvalid;
     wristDeviceCheckedAt_ = -1.0;
+    panelInteractive_ = false;  // T05: a new overlay's input method is None
+    appliedDetached_ = DetachedPose {};
     // 新しいオーバーレイはテクスチャの全部を使う（SetOverlayTextureBounds の既定）
     panelTextureHeight_ = panelHeight;
     panelVisibleHeight_ = panelHeight;
@@ -243,6 +248,9 @@ void VrOverlay::createDashboard(int width, int height) {
         overlay->GetOverlayFlag(main, vr::VROverlayFlags_EnableControlBarClose, &closeEnabled);
     std::fprintf(stderr, "[VR] SetOverlayFlag(EnableControlBarClose) -> %s (read back: %s, %s)\n",
                  overlayErrorName(closeError), overlayErrorName(readError), closeEnabled ? "true" : "false");
+    // T05: thumbstick / trackpad scrolling over the tab (VREvent_ScrollSmooth; needs the Mouse input method)
+    checkOverlay("SetOverlayFlag(SendVRSmoothScrollEvents)",
+                 overlay->SetOverlayFlag(main, vr::VROverlayFlags_SendVRSmoothScrollEvents, true));
 
     std::string message;
     if (!settingsTexture_.create(vulkan_, width, height, message)) {
@@ -344,6 +352,35 @@ void VrOverlay::updatePlacement(const Config& config, double now) {
         return;
     }
     vr::IVROverlay* overlay = vr::VROverlay();
+    // T05: Detached = a fixed standing-space pose. Without one (never placed), it stays hidden until it's placed
+    if (config.attachment == Attachment::Detached) {
+        bool shown = config.visible && config.detachedPose.valid;
+        bool retry = false;
+        if (shown && (transformDirty_ || attachedDevice_ != kDetachedDevice || appliedDetached_ != config.detachedPose)) {
+            const vr::HmdMatrix34_t m = toHmdMatrix(config.detachedPose);
+            if (checkOverlay("SetOverlayTransformAbsolute",
+                             overlay->SetOverlayTransformAbsolute(panelHandle_, vr::TrackingUniverseStanding, &m))) {
+                attachedDevice_ = kDetachedDevice;
+                appliedDetached_ = config.detachedPose;
+                transformDirty_ = false;
+            } else {
+                shown = false;
+                retry = true;
+            }
+        }
+        const double alpha = wristFade_.update(false, shown, kDetachedDevice, 1.0, now);
+        retry |= presentation_.apply(
+            config.alpha * alpha,
+            [&](double value) {
+                return checkOverlay("SetOverlayAlpha", overlay->SetOverlayAlpha(panelHandle_, static_cast<float>(value)));
+            },
+            [&](bool show) {
+                return checkOverlay(show ? "ShowOverlay" : "HideOverlay",
+                                    show ? overlay->ShowOverlay(panelHandle_) : overlay->HideOverlay(panelHandle_));
+            });
+        nextPlacementAt_ = retry ? now + kPlacementRetrySec : std::numeric_limits<double>::infinity();
+        return;
+    }
     const bool wrist = config.attachment != Attachment::Head;
     vr::TrackedDeviceIndex_t device = vr::k_unTrackedDeviceIndex_Hmd;
     bool tracked = true;
@@ -468,9 +505,24 @@ VrEvents VrOverlay::pollEvents(bool includeSystem) {
         while (vr::VRSystem()->PollNextEvent(&event, sizeof(event))) {
             if (event.eventType == vr::VREvent_Quit) result.quit = true;
             if (event.eventType == vr::VREvent_SceneApplicationChanged) result.sceneAppChanged = true;
+            if (event.eventType == vr::VREvent_DashboardDeactivated) result.dashboardClosed = true;  // T05
         }
+    }
+    // T05: the HUD's own events. At the input rate while it takes mouse input (a Detached grab), else on the tick
+    if (includeSystem || panelInteractive_) {
         while (vr::VROverlay()->PollNextOverlayEvent(panelHandle_, &event, sizeof(event))) {
             if (event.eventType == vr::VREvent_ImageFailed) std::fprintf(stderr, "[VR] image load failed\n");
+            const bool down = event.eventType == vr::VREvent_MouseButtonDown;
+            if ((down || event.eventType == vr::VREvent_MouseButtonUp) && event.data.mouse.button == vr::VRMouseButton_Left) {
+                // The laser's controller. Some events may not name it: fall back to the dashboard's pointing device
+                uint32_t device = event.trackedDeviceIndex;
+                if (device == vr::k_unTrackedDeviceIndexInvalid || device == vr::k_unTrackedDeviceIndex_Hmd) {
+                    device = vr::VROverlay()->GetPrimaryDashboardDevice();
+                }
+                std::fprintf(stderr, "[detached] laser %s on the HUD (event device %u, using %u)\n",
+                             down ? "press" : "release", event.trackedDeviceIndex, device);
+                result.grab.push_back({down, device});
+            }
         }
     }
     if (dashboardHandle_ != 0) {
@@ -491,6 +543,12 @@ VrEvents VrOverlay::pollEvents(bool includeSystem) {
                     }
                     break;
                 case vr::VREvent_FocusLeave: result.pointer.push_back({PointerInput::Type::Leave, 0, 0}); break;
+                case vr::VREvent_ScrollSmooth: {  // T05
+                    PointerInput scroll {PointerInput::Type::Scroll, 0, 0};
+                    scroll.scrollDy = event.data.scroll.ydelta;
+                    result.pointer.push_back(scroll);
+                    break;
+                }
                 // ダッシュボードのアイコンにホバーしたときの「閉じる」（VROverlayFlags_EnableControlBarClose）。
                 // フラグを立てたこのオーバーレイにだけ VREvent_OverlayClosed が届く。
                 // SteamVR 自体の終了（VRSystem 側の VREvent_Quit）とは別のイベント
@@ -787,6 +845,34 @@ bool VrOverlay::submitPanel(const uint8_t* rgba, int width, int height, int colu
         lastPanelError_ = message;
     }
     return ok;
+}
+
+void VrOverlay::setPanelInteractive(bool interactive) {
+    if (!connected_ || panelHandle_ == 0 || interactive == panelInteractive_) return;
+    const vr::EVROverlayError error = vr::VROverlay()->SetOverlayInputMethod(
+        panelHandle_, interactive ? vr::VROverlayInputMethod_Mouse : vr::VROverlayInputMethod_None);
+    std::fprintf(stderr, "[detached] HUD input method -> %s: %s\n", interactive ? "Mouse" : "None", overlayErrorName(error));
+    // Refused: keep the old state, so the next call tries again
+    if (error == vr::VROverlayError_None) panelInteractive_ = interactive;
+}
+
+bool VrOverlay::devicePose(uint32_t device, vr::HmdMatrix34_t& pose) const {
+    if (!connected_ || device >= vr::k_unMaxTrackedDeviceCount) return false;
+    vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] {};
+    vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0.0f, poses, device + 1);
+    if (!poses[device].bPoseIsValid) return false;
+    pose = poses[device].mDeviceToAbsoluteTracking;
+    return true;
+}
+
+void VrOverlay::setDetachedTransform(const DetachedPose& pose) {
+    if (!connected_ || panelHandle_ == 0 || !pose.valid) return;
+    const vr::HmdMatrix34_t m = toHmdMatrix(pose);
+    if (checkOverlay("SetOverlayTransformAbsolute",
+                     vr::VROverlay()->SetOverlayTransformAbsolute(panelHandle_, vr::TrackingUniverseStanding, &m))) {
+        attachedDevice_ = kDetachedDevice;
+        appliedDetached_ = pose;
+    }
 }
 
 bool VrOverlay::submitSettings(const uint8_t* rgba) {

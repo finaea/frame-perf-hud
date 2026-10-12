@@ -8,8 +8,9 @@ frame-perf-hud is a fork of [frame-perf-overlay](https://github.com/sasaken1102r
 sasaken1102r (MIT, forked at `8baaf7e`). The plan is modular widgets you can turn on and off and drag around,
 a Windows companion app and session logs.
 
-**Status: early.** It still shows frame-perf-overlay's panel, unchanged. Underneath, every value now goes through
-a metric registry and a demand-driven scheduler. That means a sensor is only read while an enabled widget needs
+**Status: early.** The HUD is a grid of widgets in frame-perf-overlay's look. You arrange it from the SteamVR
+dashboard, and it can sit on your head, on a wrist, or at a fixed spot in the room. Underneath, every value goes
+through a metric registry and a demand-driven scheduler. That means a sensor is only read while an enabled widget needs
 it **and** someone is looking (the HUD is shown and the headset is on, or the dashboard tab is open). Hide the HUD
 or take the headset off, and nothing is read at all.
 
@@ -56,13 +57,37 @@ If upstream frame-perf-overlay is set to autostart, `install.sh` asks whether to
 HUDs. It only asks in a terminal. Without one (e.g. the in-app updater), it leaves it alone and prints the
 command instead.
 
-Options: `./install.sh --no-autostart` installs without enabling the service. `./install.sh --uninstall` removes
-everything except `~/.config/frame-perf-hud/`.
+Options: `./install.sh --no-autostart` installs without enabling the service.
+
+### Uninstall
+
+```sh
+cd ~/projects/frame-perf-hud
+./install.sh --uninstall
+```
+
+That stops it and removes everything listed above, plus the update checker's cache in
+`~/.cache/frame-perf-hud/`, except your settings in `~/.config/frame-perf-hud/` (it prints the command to delete
+those too). Session logs in `~/.local/state/frame-perf-hud/` go with it. If you disabled frame-perf-overlay during the install, turn it back on with
+`systemctl --user enable --now frame-perf-overlay.service`.
 
 ## Usage
 
 - **The HUD** shows up whenever SteamVR runs (with autostart on). It needs no input.
 - **Settings:** open the SteamVR dashboard and pick the **Frame Perf HUD** tab. Point with the laser and click.
+  The tab has two pages, switched at the top: **Layout** and **Placement**.
+- **Layout page:**
+  - Left: the HUD's columns, one card per widget. Press on a card, drag it, and let go where the pink marker shows.
+    That works within a column, into another one, or into the dashed **New column** lane. A column that ends up empty
+    goes away. Scroll with the thumbstick or trackpad when the columns are taller than the card.
+  - Right: **Widgets**. Tap one to add it (under the selected card, or at the end of the shortest column), or drag
+    it into a column. Ticked widgets are already on; Network can be added more than once. To remove a widget, drag
+    its card onto this card, or select it and press **Remove**.
+  - Tap a card to select it. Its settings show under the widgets: rows and "one row per name" for the process
+    lists, the adapter (Dongle / Home Wi-Fi) for Network.
+  - Every change is saved at once. If the companion PC app changed the layout in the meantime, the tab says so
+    and shows the newer layout. Do it again from there.
+- **Placement page:**
 
   | Control | What it does |
   |---|---|
@@ -71,12 +96,15 @@ everything except `~/.config/frame-perf-hud/`.
   | Opacity − / + | 10 % steps (20 % to 100 %) |
   | Clock: Off / 12h / 24h | The Time row in the General widget: hidden, 12-hour or 24-hour |
   | Reset | Back to the default show, attachment, position, facing, fade, clock, size and opacity |
-  | Attach to: Head / L hand / R hand | In front of your eyes, or on a controller like a wristwatch. Each hand keeps its own position and facing |
+  | Attach to: Head / L hand / R hand / Room | In front of your eyes, on a controller like a wristwatch, or pinned at a spot in the room (it stays there in games too). Each hand keeps its own position and facing |
+  | Bring it in front of me (room) | Put it 1 m in front of you at eye height, facing you. The first switch to Room does this too |
+  | Moving it (room) | While the dashboard is open, point the laser at the HUD itself, hold the trigger and move it. Let go to leave it there. Closing the dashboard while holding it counts as letting go |
   | Top L / Top R / Bottom L / Bottom C / Bottom R (head) | Move it to that corner of your view, facing you |
   | Default wrist position (hand) | Put that hand's HUD back to the standard place and facing |
-  | Nudge: Left / Right / Up / Down, Closer / Farther | Head: 2 cm (5 cm for closer / farther). Hand: 1 cm along the HUD's own axes |
+  | Nudge: Left / Right / Up / Down, Closer / Farther | Head: 2 cm (5 cm for closer / farther). Hand: 1 cm along the HUD's own axes. Room: 2 cm (5 cm) along the HUD's own axes |
   | Facing: Left / Right / Up / Down, Rotate L / R | Turn or spin the HUD by the chosen step (By 1° / By 5°) |
   | Face me / Face ahead (head) | Turn it to face your head, or back to parallel with your face |
+  | Face me (room) | Turn it where it is to face you, upright |
   | Fade on tilt, Fade angle (hand) | Fade the wrist HUD as its face turns away from you |
   | Autostart: On / Off | Enable or disable the systemd service (from the next SteamVR start) |
   | Quit app | Click twice within 3 seconds to quit |
@@ -97,6 +125,8 @@ Changes are picked up while it runs. [`contrib/config.example.json`](contrib/con
 its default. The keys are the same as frame-perf-overlay's, except:
 
 - `language`: `"en"` is the only value for now.
+- `attachment`: also `"detached"` (Room). `detached_pose` holds its spot: 12 numbers, a 3×4 matrix row by row in
+  SteamVR's standing space. Without it, the HUD is put in front of you the next time it starts.
 - `font` / `font_bold`: empty (the default) means the bundled Noto Sans. Set a path to use another font.
 - `update_interval_ms`: the HUD never redraws faster than 2 Hz, whatever this says.
 - `width_m`: the width of **one column** of widgets (default 0.2 m), so text keeps the same size whatever the

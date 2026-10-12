@@ -3,6 +3,8 @@
 
 #include "autostart.h"
 #include "config.h"
+#include "layout_editor.h"  // T05
+#include "link_ui.h"        // T05: PC pairing banner (ticket 06's state)
 #include "update_check.h"  // vendor/frame-updater/cpp（CMake の include dir で見つかる）
 
 #include <cstdint>
@@ -68,7 +70,18 @@ enum class SettingsAction {
     UpdateConfirmNo,    ///< 確認の「やめる」: 確認を取り消す
     UpdateRetry,        ///< 失敗のあとの「もう一度」（呼び出し側で扱う）
     UpdateDismiss,      ///< 「入れました」/「失敗しました」の表示を閉じる（呼び出し側で扱う）
+    // T05
+    PageLayout,      ///< show the layout editor (handled inside the panel)
+    PagePlacement,   ///< show the placement cards (handled inside the panel)
+    AttachDetached,  ///< pin the HUD in the room (the caller places it in front when it has no pose yet)
+    BringInFront,    ///< Detached: 1 m in front of the HMD (the caller does it: it needs the HMD pose)
+    PcAllow,         ///< pairing banner: allow SettingsPanel::bannerPcId() (the caller tells the link server)
+    PcDeny,          ///< pairing banner: deny it
+    PcForgetAll,     ///< footer: forget every allowed PC
 };
+
+/** T05: which page the dashboard tab shows. */
+enum class SettingsPage { Layout, Placement };
 
 /**
  * 操作を設定に反映する（Quit と None は何もしない）。位置と向きのボタンは、今の固定先（頭・左手・右手）の値を動かす。
@@ -101,7 +114,15 @@ public:
      * @param autostart 自動起動の今の状態
      * @param update 新しい版の確認・インストールの今の状態
      */
-    void render(const Config& config, const AutostartStatus& autostart, const frame_updater::UpdateStatus& update);
+    void render(const Config& config, const AutostartStatus& autostart, const frame_updater::UpdateStatus& update,
+                const LinkUiState& link = LinkUiState());
+
+    /**
+     * T05: hands the editor the current layout. Call before each batch of pointer events, so a press works on the
+     * layout the user sees (a PC may have changed it since the last draw).
+     * @return true if it differed from what the tab shows (redraw it)
+     */
+    bool syncLayout(const fph::Layout& layout) { return editor_.sync(layout); }
 
     /**
      * ポインターが動いた。
@@ -110,6 +131,33 @@ public:
      * @return 乗っているボタンが変わった（描き直しが要る）なら true
      */
     bool pointerMove(double x, double y);
+
+    /**
+     * T05: smooth scroll on the tab (VREvent_ScrollSmooth), over the editor's lanes.
+     * @param dy the event's ydelta
+     * @return true if a redraw is needed
+     */
+    bool scroll(double dy);
+
+    /** T05: takes the editor's queued edit (base version + edited layout). @return false if none */
+    bool takeLayoutCommit(uint32_t& baseVersion, fph::Layout& layout) { return editor_.takeCommit(baseVersion, layout); }
+
+    /** T05: how the edit taken last went (shown in the editor). */
+    void layoutCommitResult(LayoutEditor::CommitOutcome outcome) { editor_.commitResult(outcome); }
+
+    /** T05: @return true while the editor holds a press or a drag (poll the pointer at the fast rate) */
+    bool editorBusy() const { return editor_.busy(); }
+
+    /** T05: switches the page (tests, --dump-settings-png). */
+    void showPage(SettingsPage page) { page_ = page; }
+    /** T05: @return the page shown */
+    SettingsPage page() const { return page_; }
+
+    /** T05: @return the PC the pairing banner asks about (its id), "" when no banner is shown */
+    const std::string& bannerPcId() const { return bannerPcId_; }
+
+    /** T05: @return the editor (tests) */
+    const LayoutEditor& editor() const { return editor_; }
 
     /**
      * ボタンが押された。「アプリを終了」は 1 回目で確認の表示に変わり、kQuitConfirmSec 秒以内の 2 回目で Quit を返す。
@@ -121,10 +169,12 @@ public:
     SettingsAction pointerDown(double x, double y, double now);
 
     /**
-     * ボタンが離された。
+     * ボタンが離された。T05: also ends an editor drag (a drop may queue an edit: takeLayoutCommit).
+     * @param x 左端からの px
+     * @param y 上端からの px
      * @return 押している表示を消した（描き直しが要る）なら true
      */
-    bool pointerUp();
+    bool pointerUp(double x, double y);
 
     /**
      * ポインターがパネルから外れた。
@@ -185,7 +235,13 @@ private:
     cairo_t* cr_ = nullptr;
     std::vector<uint8_t> rgba_;
     std::vector<Button> buttons_;
-    bool wristLayout_ = false;  ///< 今のボタンの配置が手首用か（固定先が変わったら render() で置き直す）
+    /** T05: which set of card buttons is laid out (was upstream's wristLayout_ bool). */
+    enum class ButtonMode { Layout, Head, Wrist, Detached };
+    ButtonMode mode_ = ButtonMode::Head;  ///< 今のボタンの配置（固定先・ページが変わったら render() で置き直す）
+    SettingsPage page_ = SettingsPage::Layout;  ///< T05: the editor is the tab's first page
+    LayoutEditor editor_;                       ///< T05
+    std::string bannerPcId_;                    ///< T05: the PC the banner shows ("" = no banner)
+    bool forgetEnabled_ = false;                ///< T05: "Forget PCs" is pressable (some PC is allowed)
     SettingsAction hover_ = SettingsAction::None;
     bool autostartInstalled_ = true;  ///< 最後に描いたときユニットがあったか（無ければ自動起動のボタンは押せない）
     SettingsAction pressed_ = SettingsAction::None;
@@ -270,6 +326,17 @@ private:
     double drawHeader(const Pen& pen, const UiText& text, const Config& config) const;
 
     /**
+     * T05: the page switch (Layout | Placement) next to the title. Places its buttons, so not const.
+     * @return its right edge
+     */
+    double drawPageSwitch(const Pen& pen, const UiText& text, double left);
+
+    /**
+     * T05: "PC '<name>' wants to connect: Deny / Allow", in the update bar's place while a PC is pending.
+     */
+    void drawPairingBanner(const Pen& pen, const UiText& text, const LinkUiState::Pending& pc, double left, double right);
+
+    /**
      * 左のカード「パネル」（表示・大きさ・透明度・時計・既定に戻す）を描く。
      * @param pen 描画の道具
      * @param text 言語の表
@@ -302,7 +369,8 @@ private:
      * @param config 今の設定
      * @param autostart 自動起動の今の状態
      */
-    void drawFooter(const Pen& pen, const UiText& text, const Config& config, const AutostartStatus& autostart);
+    void drawFooter(const Pen& pen, const UiText& text, const Config& config, const AutostartStatus& autostart,
+                    const LinkUiState& link);
 
     /**
      * 見出しの行の、見出しと状態のピルの間に出す、新しい版の確認・インストールの帯（いつも見えている 1 行 ＋ 右のボタン）。

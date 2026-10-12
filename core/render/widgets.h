@@ -58,6 +58,13 @@ struct WidgetHistory {
 int widgetHeight(const WidgetInstance& w);
 
 /**
+ * T05: the card's title (what the editor labels it with).
+ * @param w the instance (a Network's title names its adapter)
+ * @return the title
+ */
+const char* widgetTitle(const WidgetInstance& w);
+
+/**
  * Draws the parts that only change with the layout or the theme: the card, the graph beds, the title.
  * @param pen drawing tools
  * @param x card left

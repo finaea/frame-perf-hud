@@ -43,6 +43,17 @@ const UiText kEnglish = {
     "Attach to", "Head", "L hand", "R hand", "Default wrist position", "%.0f cm from default",
     "Fade on tilt", "Fade angle", "%.0f–%.0f°",
     "Clock", "12h", "24h", "Local time",
+    // T05: dashboard pages, Detached mode, the layout editor, PC pairing
+    "Layout", "Placement", "Room", "Bring it in front of me",
+    "Point the laser at the HUD and hold the trigger to move it",
+    "Not placed yet",
+    "Layout", "Drag a widget to move it, tap it to change its settings", "New column", "Drop here to remove",
+    "Widgets", "Network", "soon",
+    "Tap a widget on the left to change it", "No settings", "Remove",
+    "Rows", "One row per name", "Adapter", "Dongle", "Home Wi-Fi",
+    "%u rows", ", by name",
+    "Saved", "Changed on a PC meanwhile, try again", "Couldn't save the layout",
+    "PC \"%s\" wants to connect", "Allow", "Deny", "Forget PCs (%zu)",
 };
 
 /** @return the value with no decimals */

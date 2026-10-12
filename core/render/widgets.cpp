@@ -962,6 +962,10 @@ int widgetHeight(const WidgetInstance& w) {
     return 0;
 }
 
+const char* widgetTitle(const WidgetInstance& w) {
+    return titleOf(w);
+}
+
 void drawWidgetStatic(const Pen& pen, double x, double y, const WidgetInstance& w) {
     staticCard(pen, x, y, widgetHeight(w));
     if (hasGraph(w.type)) staticGraphBed(pen, x, y);

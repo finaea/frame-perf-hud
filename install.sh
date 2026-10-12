@@ -7,11 +7,14 @@
 set -euo pipefail
 
 name="frame-perf-hud"
-old_name="frame-perf-overlay"  # the upstream app this is forked from
+# The upstream app this is forked from. FPH_OLD_UNIT only exists so the "disable it?" question can be tested
+# against a throwaway unit instead of the real one
+old_name="${FPH_OLD_UNIT:-frame-perf-overlay}"
 here="$(cd "$(dirname "$0")" && pwd)"
 config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
+cache_home="${XDG_CACHE_HOME:-$HOME/.cache}"
 bin="$HOME/.local/bin/$name"
 unit="$name.service"
 unit_dir="$config_home/systemd/user"
@@ -105,6 +108,8 @@ if [[ "$uninstall" == 1 ]]; then
     rm -f "$unit_dir/$unit" "$bin" "$desktop" "$data_home/$name/frame-update.sh"
     rm -rf "$font_dir"
     rmdir "$data_home/$name" 2>/dev/null || true  # only if empty
+    # The app's own state (session logs, debug dump) and the updater's cache (check results, downloads)
+    rm -rf "${state_dir:?}" "${cache_home:?}/$name"
     for size in $icon_sizes; do
         rm -f "$icons/${size}x${size}/apps/$name.png"
     done

@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "columns": [
+    [ { "type": "frame" }, { "type": "cpu" }, { "type": "gpu_ram" }, { "type": "general" }, { "type": "temp" } ],
+    [ { "type": "power" }, { "type": "battery" }, { "type": "network", "adapter": "dongle" }, { "type": "network", "adapter": "home" } ],
+    [ { "type": "cpu_items", "max_items": 50, "sum_same_name": false } ],
+    [ { "type": "ram_items", "max_items": 50, "sum_same_name": false } ]
+  ]
+}

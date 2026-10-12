@@ -3,12 +3,15 @@
 // Forked from frame-perf-overlay by sasaken1102r (MIT).
 #include "autostart.h"
 #include "config.h"
+#include "detached.h"  // T05
 #include "draw.h"
 #include "dump_metrics.h"  // T03
 #include "grid_renderer.h"  // T04
 #include "i18n.h"
 #include "json.h"  // T04: --layout
 #include "layout.h"  // T04
+#include "layout_authority.h"  // T06
+#include "link_agent.h"  // T06
 #include "metric_store.h"
 #include "paths.h"
 #include "scheduler.h"
@@ -64,14 +67,17 @@ constexpr double kMetricsTickSec = 0.5;          ///< metrics deadline: events, 
 constexpr double kMinPanelIntervalSec = 0.5;     ///< the panel never redraws faster than 2 Hz
 constexpr double kAutostartRefreshSec = 3.0;     ///< re-read the autostart state this often while the tab is visible
 constexpr double kPlacementCoalesceSec = 0.02;   ///< do a placement check this early if we're awake anyway
+constexpr double kGrabPollSec = 1.0 / 60.0;      ///< T05: while the laser holds the Detached HUD, it follows this often
 
 /** Command line. */
 struct Options {
     enum class Mode {
         Overlay, Print, DumpPng, DumpSettingsPng, DumpFrameTimings, DebugDump, ContrastReport, Help, Version,
-        DumpMetrics  // T03
+        DumpMetrics,  // T03
+        ServeLink     // T06
     };
     DumpMetricsOptions dumpMetrics;  // T03: --dump-metrics
+    ServeLinkOptions serveLink;      // T06: --serve-link
     Mode mode = Mode::Overlay;
     std::string configPath;
     std::string pngPath;
@@ -87,6 +93,8 @@ struct Options {
     bool forceSettingsVisible = false;   ///< diagnostics: run as if the dashboard tab were visible
     std::string previewAutostart;        ///< --dump-settings-png: draw autostart in this state
     std::string previewUpdate;           ///< --dump-settings-png: draw the update check in this state
+    std::string previewPage;             ///< T05 --dump-settings-png: "layout" (default) or "placement"
+    std::string previewPc;               ///< T05 --dump-settings-png: draw the pairing banner for this PC name
     bool fakeFrames = false;
     bool fakeWarnings = false;
     double fakeFps = 0.0;
@@ -146,14 +154,15 @@ double cpuSeconds() {
  * Sleeps in one poll() until the timeout, a signal, or the camera eventfd fires.
  * @param seconds timeout; +infinity waits until something happens
  * @param cameraFd the camera thread's eventfd, or -1 (a stub until ticket 10)
+ * @param linkFd T06: the link's UDP socket, or -1 (only wakes the loop; the loop drains it)
  * @return true if the camera eventfd fired
  */
-bool waitForWake(double seconds, int cameraFd = -1) {
+bool waitForWake(double seconds, int cameraFd = -1, int linkFd = -1) {
     if (gStopRequested || gToggleRequested || gDumpRequested) return false;
-    struct pollfd fds[2] = {{gWakeFd, POLLIN, 0}, {cameraFd, POLLIN, 0}};
+    struct pollfd fds[3] = {{gWakeFd, POLLIN, 0}, {cameraFd, POLLIN, 0}, {linkFd, POLLIN, 0}};
     int timeoutMs = -1;
     if (std::isfinite(seconds)) timeoutMs = static_cast<int>(std::ceil(std::max(0.0, seconds) * 1000.0));
-    const int n = ::poll(fds, 2, timeoutMs);
+    const int n = ::poll(fds, 3, timeoutMs);
     uint64_t value = 0;
     if (n > 0 && (fds[0].revents & POLLIN)) (void)!::read(gWakeFd, &value, sizeof(value));
     if (n > 0 && cameraFd >= 0 && (fds[1].revents & POLLIN)) {
@@ -214,6 +223,8 @@ void printUsage() {
         "      --preview-autostart S  draw autostart in this state (enabled / disabled / notinstalled / busy / failed)\n"
         "      --preview-update S     draw the update check in this state (uptodate / checking / available / manual /\n"
         "                             confirm / installing / installed / checkfailed / installfailed; default uptodate)\n"
+        "      --preview-page P       layout (default) or placement\n"
+        "      --preview-pc NAME      draw the \"PC wants to connect\" banner for NAME\n"
         "  --config PATH        config file (default ~/.config/frame-perf-hud/config.json)\n"
         "  --verbose            while running as an overlay, log the values every few seconds\n"
         "  --force-settings-visible  diagnostics: run as if the dashboard tab were visible (to measure the cost)\n"
@@ -227,6 +238,9 @@ void printUsage() {
         "  --contrast-report    print the WCAG contrast ratio of every text/background colour pair\n"
         "  --dump-frame-timings [S]  diagnostics: connect to SteamVR and print raw frame timings for S seconds\n"
         "                       (default 5). Read-only (Background app type), so it can run next to the overlay\n"
+        "  --serve-link --config FILE [--port N] [--seconds S]  debug: serve the PC link without the overlay\n"
+        "                       (no OpenVR, no single-instance lock; sources run only while a PC holds a lease).\n"
+        "                       Needs its own config file, never the live one\n"
         "  --version            print the version and exit\n");
 }
 
@@ -254,6 +268,10 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.mode = Options::Mode::DebugDump;
         } else if (arg == "--dump-metrics") {  // T03
             options.mode = Options::Mode::DumpMetrics;
+        } else if (arg == "--serve-link") {  // T06
+            options.mode = Options::Mode::ServeLink;
+        } else if (arg == "--port" && hasNext) {  // T06
+            options.serveLink.port = std::max(0, std::min(65535, std::atoi(argv[++i])));
         } else if (arg == "--widgets" && hasNext) {
             if (!parseWidgetList(argv[++i], options.dumpMetrics.widgets)) {
                 std::fprintf(stderr, "--widgets wants widget numbers 1-13, e.g. 1,7,9\n");
@@ -278,6 +296,10 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.previewAutostart = argv[++i];
         } else if (arg == "--preview-update" && hasNext) {
             options.previewUpdate = argv[++i];
+        } else if (arg == "--preview-page" && hasNext) {  // T05
+            options.previewPage = argv[++i];
+        } else if (arg == "--preview-pc" && hasNext) {  // T05
+            options.previewPc = argv[++i];
         } else if (arg == "--contrast-report") {
             options.mode = Options::Mode::ContrastReport;
         } else if (arg == "--force-settings-visible") {
@@ -695,7 +717,14 @@ int runDumpSettingsPng(const Options& options) {
     if (preview == "failed") autostartView = {AutostartStatus::State::Enabled, false, true};
     const frame_updater::UpdateStatus updateView = fakeUpdateStatus(options.previewUpdate);
     if (options.previewUpdate == "confirm") panel.armUpdateConfirmForPreview();
-    panel.render(config, autostartView, updateView);
+    // T05: which page, and a pending PC's banner
+    if (options.previewPage == "placement") panel.showPage(SettingsPage::Placement);
+    LinkUiState link;
+    if (!options.previewPc.empty()) {
+        link.pending.push_back({"00112233445566778899aabbccddeeff", options.previewPc});
+        link.knownPcs = 2;
+    }
+    panel.render(config, autostartView, updateView, link);
     if (!panel.writePng(options.pngPath)) {
         std::fprintf(stderr, "Couldn't write the PNG: %s\n", options.pngPath.c_str());
         return 1;
@@ -727,9 +756,27 @@ int runDumpFrameTimings(const Options& options) {
 }
 
 /** Applies a dashboard action to the config, to the HUD, and saves the config file. */
+/**
+ * T05: the Detached actions that need the HMD pose: "Bring it in front of me", Face me, and placing the HUD the first
+ * time it goes to the room (no saved pose yet).
+ * @return true if config.detachedPose changed
+ */
+bool applyDetachedAction(SettingsAction action, Config& config, const VrOverlay& vr) {
+    if (config.attachment != Attachment::Detached) return false;
+    const bool place = action == SettingsAction::BringInFront || !config.detachedPose.valid;
+    if (!place && action != SettingsAction::FaceMe) return false;
+    vr::HmdMatrix34_t hmd {};
+    if (!vr.devicePose(vr::k_unTrackedDeviceIndex_Hmd, hmd)) return false;  // no HMD pose: try again next time
+    const DetachedPose before = config.detachedPose;
+    config.detachedPose = place ? placeInFront(hmd) : faceTowards(config.detachedPose, hmd.m[0][3], hmd.m[1][3], hmd.m[2][3]);
+    return config.detachedPose != before;
+}
+
 void handleSettingsAction(SettingsAction action, Config& config, ConfigWatcher& watcher, VrOverlay& vr,
                           double angleStepDeg = 1.0) {
-    if (!applySettingsAction(action, config, angleStepDeg)) return;
+    bool changed = applySettingsAction(action, config, angleStepDeg);
+    changed |= applyDetachedAction(action, config, vr);  // T05
+    if (!changed) return;
     vr.applyConfig(config);
     std::string error;
     // T04: through the watcher, so an unreadable file is kept as config.json.bad instead of being overwritten
@@ -982,6 +1029,15 @@ int runOverlay(const Options& options) {
     SensorBridge bridge(sensors, &vr, store);
     bridge.registerSources(scheduler);
     applyLayout(config.layout, scheduler, bridge);  // T04: a widget off in the layout reads nothing
+    // T06: every live layout edit (LAYOUT_SET from a PC, the dashboard editor's drop) is a compare-and-set here
+    LayoutAuthority layoutAuthority(
+        config, [&watcher](const Config& c, std::string& error) { return watcher.save(c, error); },
+        [&](const fph::Layout& layout) {
+            renderer.setLayout(layout);
+            applyLayout(layout, scheduler, bridge);
+        });
+    // T06: the PC link (UDP). Its socket opens once SteamVR is connected; it sits in the main poll()
+    LinkService linkService(config, watcher, layoutAuthority, store, bridge);
     std::fprintf(stderr, "[layout] version %u, %zu widget(s) in %zu column(s), panel %dx%d\n", config.layout.version,
                  fph::enabledWidgets(config.layout).size(), config.layout.columns.size(),
                  renderer.geometry().textureWidth, renderer.geometry().textureHeight);
@@ -1016,6 +1072,7 @@ int runOverlay(const Options& options) {
     if (gStopRequested) return 0;
     std::fprintf(stderr, "[VR] Connected to SteamVR\n");
     bridge.refreshSceneApp(nowSeconds());  // T03: starting mid-game opens that game's session at once
+    linkService.start(nowSeconds());       // T06
     vr.applyConfig(config);
     if (vr.hasSettings()) {
         std::vector<uint8_t> thumbnail;
@@ -1035,6 +1092,25 @@ int runOverlay(const Options& options) {
     bool userQuit = false;
     RenderStats renderStats;  // T04: redraw cost, in the debug dump
     unsigned loopCount = 0;  // --verbose: loop iterations since the last log line
+    // T05: the laser holding the Detached HUD. If SteamVR quits (or SIGTERM) mid-grab, the pose isn't saved and the HUD
+    // comes back at its last saved spot: rare and harmless, so deliberately not handled
+    DetachedGrab grab;
+    bool dashboardOpen = false;      // T05: IsDashboardVisible, as of the last metrics tick
+    uint64_t linkUiRevision = ~0ull;  // T05: LinkUiState::revision last drawn
+    int scrollEventsLogged = 0;       // T05: scroll events logged since the dashboard opened
+    /** T05: ends a grab (laser released, dashboard closed, attach point changed) and saves where the HUD is. */
+    const auto releaseGrab = [&](const char* why) {
+        if (!grab.active()) return;
+        vr::HmdMatrix34_t device {};
+        if (vr.devicePose(grab.device(), device)) config.detachedPose = grab.follow(device);
+        grab.end();
+        vr.applyConfig(config);
+        std::string error;
+        if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
+        std::fprintf(stderr, "[detached] released (%s): saved at (%.3f, %.3f, %.3f)\n", why, config.detachedPose.m[0][3],
+                     config.detachedPose.m[1][3], config.detachedPose.m[2][3]);
+        settingsDirty = true;
+    };
     while (!gStopRequested && !userQuit) {
         ++loopCount;
         const double loopStart = nowSeconds();
@@ -1046,6 +1122,7 @@ int runOverlay(const Options& options) {
         // A toggle (SIGUSR1) is handled on whatever wake it caused: waitForWake() returns at once while the flag
         // is set, so leaving it for the next tick would spin
         settingsDirty |= handleToggleRequest(config, watcher, vr);
+        linkService.receive(loopStart);  // T06: drains the UDP socket (one EAGAIN read when nothing came)
         const bool metricsTick = loopStart >= nextMetricsTick;
         if (metricsTick) {
             nextMetricsTick = loopStart + kMetricsTickSec;
@@ -1070,7 +1147,9 @@ int runOverlay(const Options& options) {
             }
         }
         // ---- Input deadline: dashboard events only while the tab is visible; SteamVR events on the tick ----
-        const VrEvents events = metricsTick || settingsVisible ? vr.pollEvents(metricsTick) : VrEvents {};
+        // T05: also while the HUD takes the laser (Detached, dashboard open)
+        const VrEvents events =
+            metricsTick || settingsVisible || vr.panelInteractive() ? vr.pollEvents(metricsTick) : VrEvents {};
         // SteamVR itself quitting (VREvent_Quit) exits with 0. Close on the dashboard icon (VREvent_OverlayClosed)
         // is the user quitting, like Quit on the tab: exit code 3, so systemd doesn't restart us
         if (events.quit) break;
@@ -1086,10 +1165,25 @@ int runOverlay(const Options& options) {
         }
 
         // Pointer on the dashboard tab
-        if (!events.pointer.empty()) lastPointerEvent = loopStart;
+        if (!events.pointer.empty()) {
+            lastPointerEvent = loopStart;
+            // T05: a press works on the layout as it is now (a PC may have changed it)
+            settingsDirty |= settings.syncLayout(config.layout);
+        }
         for (const PointerInput& input : events.pointer) {
             switch (input.type) {
                 case PointerInput::Type::Move: settingsDirty |= settings.pointerMove(input.x, input.y); break;
+                case PointerInput::Type::Scroll: {  // T05
+                    const bool scrolled = settings.scroll(input.scrollDy);
+                    settingsDirty |= scrolled;
+                    if (scrollEventsLogged < 3) {  // the first few per dashboard open: sign and speed in the journal
+                        ++scrollEventsLogged;
+                        std::fprintf(stderr, "[editor] scroll event ydelta %+.3f -> %s (lanes offset %.0f px)\n",
+                                     input.scrollDy, scrolled ? "scrolled" : "nothing to scroll",
+                                     settings.editor().scrollY());
+                    }
+                    break;
+                }
                 case PointerInput::Type::Down: {
                     const SettingsAction action = settings.pointerDown(input.x, input.y, nowSeconds());
                     if (action == SettingsAction::Quit) {
@@ -1104,17 +1198,70 @@ int runOverlay(const Options& options) {
                         updater.install();  // returns at once; progress comes from the state file
                     } else if (action == SettingsAction::UpdateDismiss) {
                         updater.dismiss();
+                    } else if (action == SettingsAction::PcAllow || action == SettingsAction::PcDeny) {  // T05
+                        const std::string id = settings.bannerPcId();
+                        if (!id.empty()) {
+                            if (action == SettingsAction::PcAllow) linkService.server().allow(id);
+                            else linkService.server().deny(id);
+                            std::fprintf(stderr, "[link] %s PC %s from the dashboard\n",
+                                         action == SettingsAction::PcAllow ? "allowed" : "denied", id.c_str());
+                        }
+                    } else if (action == SettingsAction::PcForgetAll) {  // T05
+                        linkService.server().forgetAll();
+                        std::fprintf(stderr, "[link] forgot every allowed PC from the dashboard\n");
                     } else {
                         handleSettingsAction(action, config, watcher, vr, settings.angleStepDeg());
                     }
                     settingsDirty = true;
                     break;
                 }
-                case PointerInput::Type::Up: settingsDirty |= settings.pointerUp(); break;
+                case PointerInput::Type::Up: settingsDirty |= settings.pointerUp(input.x, input.y); break;
                 case PointerInput::Type::Leave: settingsDirty |= settings.pointerLeave(); break;
+            }
+            // T05: an editor drop / palette / settings change goes through the same compare-and-set as a PC's edit
+            uint32_t base = 0;
+            fph::Layout edited;
+            if (settings.takeLayoutCommit(base, edited)) {
+                const LayoutAuthority::Result r = layoutAuthority.trySetLayout(base, edited);
+                settings.layoutCommitResult(r.applied() ? LayoutEditor::CommitOutcome::Applied
+                                            : r.outcome == LayoutAuthority::Outcome::Stale
+                                                ? LayoutEditor::CommitOutcome::Stale
+                                                : LayoutEditor::CommitOutcome::Failed);
+                std::fprintf(stderr, "[editor] layout edit on version %u: %s (now version %u)%s%s\n", base,
+                             r.applied() ? "applied" : (r.outcome == LayoutAuthority::Outcome::Stale ? "stale" : "save failed"),
+                             r.version, r.error.empty() ? "" : ": ", r.error.c_str());
+                if (r.applied()) nextPanel = std::min(nextPanel, nowSeconds());  // show it on the HUD now
+                settingsDirty = true;
             }
         }
         if (userQuit) break;
+
+        // ---- T05: Detached grab. Press on the HUD = grab; it follows the laser until release ----
+        for (const GrabInput& g : events.grab) {
+            if (g.down && !grab.active() && vr.panelInteractive() && config.attachment == Attachment::Detached) {
+                vr::HmdMatrix34_t device {};
+                if (vr.devicePose(g.device, device) && grab.begin(g.device, device, config.detachedPose)) {
+                    std::fprintf(stderr, "[detached] grabbed with device %u\n", g.device);
+                }
+            } else if (!g.down) {
+                releaseGrab("laser released");
+            }
+        }
+        if (events.dashboardClosed) {
+            // Closing the dashboard mid-drag counts as a release; then the HUD stops taking the laser at once
+            releaseGrab("dashboard closed");
+            vr.setPanelInteractive(false);
+            dashboardOpen = false;
+            scrollEventsLogged = 0;
+            settingsDirty |= settings.pointerLeave();  // an editor drag in progress is cancelled
+        }
+        if (grab.active()) {
+            vr::HmdMatrix34_t device {};
+            if (vr.devicePose(grab.device(), device)) {
+                config.detachedPose = grab.follow(device);  // in memory; saved on release
+                vr.setDetachedTransform(config.detachedPose);
+            }
+        }
         if (metricsTick) {
             settingsDirty |= settings.tick(loopStart);  // "press again to quit" expiry
             settingsDirty |= autostart.poll();          // reap systemctl if it finished
@@ -1129,7 +1276,29 @@ int runOverlay(const Options& options) {
                              visibility.overlayVisible ? "visible" : "hidden",
                              options.forceSettingsVisible ? ", --force-settings-visible" : "");
             }
+            if (settingsVisible && !nowVisible) settingsDirty |= settings.pointerLeave();  // T05: cancel an editor drag
             settingsVisible = nowVisible;
+
+            // T05: the Detached HUD takes the laser only while the dashboard is open (never game input)
+            dashboardOpen = visibility.dashboardVisible;
+            if (!dashboardOpen) scrollEventsLogged = 0;
+            const bool detached = config.attachment == Attachment::Detached;
+            if (detached && !config.detachedPose.valid && applyDetachedAction(SettingsAction::None, config, vr)) {
+                // Room with no pose yet (first time, or a hand-edited file): put it in front once the HMD is tracked
+                vr.applyConfig(config);
+                std::string error;
+                if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
+                settingsDirty = true;
+            }
+            const bool interactive = dashboardOpen && detached && config.visible && config.detachedPose.valid;
+            if (!interactive) releaseGrab(dashboardOpen ? "attach point changed" : "dashboard closed");
+            vr.setPanelInteractive(interactive);
+            // T05: the pairing banner / Forget PCs count changed
+            const uint64_t linkRevision = linkService.server().uiState().revision;
+            if (linkRevision != linkUiRevision) {
+                linkUiRevision = linkRevision;
+                settingsDirty = true;
+            }
 
             // "Someone looking": recomputes the reference counts whenever a signal changes
             const int level = vr.hmdActivityLevel();
@@ -1141,7 +1310,7 @@ int runOverlay(const Options& options) {
             demand.hudShown = config.visible;
             demand.hmdInUse = hmdInUse(level);
             demand.editorOpen = settingsVisible;
-            demand.pcLease = false;  // stub until ticket 06
+            demand.pcLease = linkService.hasLease();  // T06
             demand.record = false;   // stub until ticket 11
             if (someoneLooking(demand) != someoneLooking(scheduler.demand())) {
                 std::fprintf(stderr, "[demand] %s\n", someoneLooking(demand)
@@ -1167,8 +1336,11 @@ int runOverlay(const Options& options) {
                 }
             }
         }
+        // T05: a layout changed elsewhere (a PC's LAYOUT_SET, a file reload) redraws the open tab at once, and cancels
+        // an editor drag made on the old version
+        if (settingsVisible) settingsDirty |= settings.syncLayout(config.layout);
         if (settingsVisible && (settingsDirty || !settingsWasVisible)) {
-            settings.render(config, autostart.status(), updater.status());
+            settings.render(config, autostart.status(), updater.status(), linkService.server().uiState());  // T05
             vr.submitSettings(settings.toRgba().data());
             settingsDirty = false;
         }
@@ -1178,6 +1350,8 @@ int runOverlay(const Options& options) {
         const double c0 = cpuSeconds();
         scheduler.runDue(nowSeconds());
         const double c1 = cpuSeconds();
+        // T06: leases expire, METRICS (+ new process lists) go to lease holders, after the reads above
+        if (metricsTick) linkService.tick(nowSeconds());
 
         // ---- HUD redraw (2 Hz at most). Only while it's shown and the headset is in use: nobody sees it
         // otherwise. The texture is converted and uploaded only when a pixel changed ----
@@ -1220,7 +1394,8 @@ int runOverlay(const Options& options) {
         if (gDumpRequested) {
             gDumpRequested = 0;
             writeDebugDump(scheduler, store, activityLevel, settingsVisible, nowSeconds(),
-                           bridge.debugText() + renderStats.text(renderer.geometry()));
+                           bridge.debugText() + renderStats.text(renderer.geometry()) +
+                               linkService.debugText(nowSeconds()));  // T06
         }
 
         // ---- Sleep until the earliest deadline ----
@@ -1232,11 +1407,14 @@ int runOverlay(const Options& options) {
                 now - lastPointerEvent < kSettingsActiveHoldSec ? kSettingsPollSec : kSettingsIdlePollSec;
             wakeAt = std::min(wakeAt, now + pollSec);
         }
+        // T05: the Detached HUD waits for a laser press while it takes the laser, and follows it smoothly while held
+        if (vr.panelInteractive()) wakeAt = std::min(wakeAt, now + (grab.active() ? kGrabPollSec : kSettingsPollSec));
         wakeAt = std::min(wakeAt, vr.nextPlacementAt());  // +infinity when no placement check is planned
-        waitForWake(wakeAt - now, cameraFd);  // the camera's texture upload goes here in ticket 10
+        waitForWake(wakeAt - now, cameraFd, linkService.fd());  // the camera's texture upload goes here in ticket 10
     }
 
     // Same cleanup for SIGTERM / SIGINT, SteamVR quitting, vrserver vanishing, and Quit
+    linkService.shutdown();  // T06: BYE to lease holders, so PCs go back to discovery at once
     vr.shutdown();
     std::fprintf(stderr, "[VR] Shut down\n");
     if (cameraFd >= 0) ::close(cameraFd);
@@ -1269,6 +1447,10 @@ int main(int argc, char** argv) {
         case Options::Mode::DumpMetrics:
             options.dumpMetrics.count = options.printCount;
             return runDumpMetrics(options.dumpMetrics, gStopRequested);
+        case Options::Mode::ServeLink:  // T06
+            options.serveLink.configPath = options.configPath;
+            if (options.secondsGiven) options.serveLink.seconds = options.dumpSeconds;
+            return runServeLink(options.serveLink, gStopRequested, gWakeFd);
         case Options::Mode::Overlay: break;
     }
     return runOverlay(options);

@@ -18,10 +18,23 @@ add_library(fph-core STATIC
   core/json.cpp             # T04: moved from headset/ (the layout is JSON on disk and on the link)
   core/layout.cpp           # T04
   core/atomic_file.cpp      # T04: temp + fsync + rename, POSIX and Windows
+  core/link_wire.cpp        # T06: the headset <-> PC wire format
+  core/layout_edit.cpp      # T05: move / insert / remove widgets, drop slots (headset editor, PC editor)
 )
 target_include_directories(fph-core PUBLIC core)
 if(NOT MSVC)
   target_compile_options(fph-core PRIVATE -Wall -Wextra)
+endif()
+
+# T06: a tiny link client (hello / watch / layout-get / layout-set / bye) for testing before the PC app.
+# Builds on Windows and Linux: cmake -S . -B build-cli -DFPH_BUILD_HEADSET=OFF; cmake --build build-cli --target fph-link-cli
+add_executable(fph-link-cli tools/fph_link_cli.cpp)
+target_link_libraries(fph-link-cli PRIVATE fph-core)
+if(WIN32)
+  target_link_libraries(fph-link-cli PRIVATE ws2_32)
+endif()
+if(NOT MSVC)
+  target_compile_options(fph-link-cli PRIVATE -Wall -Wextra)
 endif()
 
 # core/render/: the widgets and the grid renderer, shared by the headset and the PC app. Needs cairo + freetype
@@ -81,6 +94,11 @@ if(FPH_BUILD_HEADSET)
     headset/i18n.cpp
     headset/autostart.cpp
     headset/paths.cpp
+    headset/layout_authority.cpp  # T06: layout compare-and-set (link + dashboard editor)
+    headset/link_server.cpp       # T06: the PC link's protocol logic + UDP socket
+    headset/link_agent.cpp        # T06: the link wired into the agent, --serve-link
+    headset/detached.cpp          # T05: Detached mode maths
+    headset/layout_editor.cpp     # T05: the dashboard tab's layout editor
     vendor/frame-updater/cpp/update_check.cpp
   )
   target_include_directories(frame-perf-hud PRIVATE headset third_party/openvr vendor/frame-updater/cpp)
@@ -137,6 +155,18 @@ if(BUILD_TESTING)
   target_compile_options(core-layout-test PRIVATE -Wall -Wextra)
   add_test(NAME core-layout COMMAND core-layout-test)
 
+  # T05: layout edits (insert / move / remove, limits, drop slots)
+  add_executable(core-layout-edit-test tests/core_layout_edit_test.cpp)
+  target_link_libraries(core-layout-edit-test PRIVATE fph-core)
+  target_compile_options(core-layout-edit-test PRIVATE -Wall -Wextra)
+  add_test(NAME core-layout-edit COMMAND core-layout-edit-test)
+
+  # T06: link wire format (header, messages, METRICS split, BLOB reassembly)
+  add_executable(core-link-wire-test tests/core_link_wire_test.cpp)
+  target_link_libraries(core-link-wire-test PRIVATE fph-core)
+  target_compile_options(core-link-wire-test PRIVATE -Wall -Wextra)
+  add_test(NAME core-link-wire COMMAND core-link-wire-test)
+
   if(TARGET fph-render)
     # T04: grid geometry, 2048 cap, widget draw rules (renders PNGs into a temp dir)
     add_executable(render-grid-test tests/render_grid_test.cpp)
@@ -158,11 +188,50 @@ if(BUILD_TESTING)
       headset/i18n.cpp
       headset/wifi_link.cpp
       headset/paths.cpp
+      headset/detached.cpp       # T05
+      headset/layout_editor.cpp  # T05
     )
     target_include_directories(wrist-clock-test PRIVATE headset third_party/openvr vendor/frame-updater/cpp)
     target_compile_options(wrist-clock-test PRIVATE -Wall -Wextra)
     target_link_libraries(wrist-clock-test PRIVATE fph-render PkgConfig::LIBNL)
     add_test(NAME wrist-clock COMMAND wrist-clock-test)
+
+    # T05: the dashboard layout editor (drag / drop, palette, settings buttons) + Detached settings actions
+    add_executable(layout-editor-test
+      tests/layout_editor_test.cpp
+      headset/placement.cpp
+      headset/clock.cpp
+      headset/config.cpp
+      headset/settings_panel.cpp
+      headset/i18n.cpp
+      headset/wifi_link.cpp
+      headset/paths.cpp
+      headset/detached.cpp
+      headset/layout_editor.cpp
+    )
+    target_include_directories(layout-editor-test PRIVATE headset third_party/openvr vendor/frame-updater/cpp)
+    target_compile_options(layout-editor-test PRIVATE -Wall -Wextra)
+    target_link_libraries(layout-editor-test PRIVATE fph-render PkgConfig::LIBNL)
+    add_test(NAME layout-editor COMMAND layout-editor-test)
+
+    # T05: Detached pose maths (grab, place in front, face, nudge, rotate) + the config's detached_pose key
+    add_executable(detached-test
+      tests/detached_test.cpp
+      headset/detached.cpp
+      headset/placement.cpp
+      headset/config.cpp
+      headset/i18n.cpp
+      headset/paths.cpp
+    )
+    target_include_directories(detached-test PRIVATE headset third_party/openvr)
+    target_compile_options(detached-test PRIVATE -Wall -Wextra)
+    target_link_libraries(detached-test PRIVATE fph-core)
+    add_test(NAME detached COMMAND detached-test)
+
+    # T05: install.sh's "disable the old overlay?" question against a throwaway user unit (exit 77 = skipped)
+    add_test(NAME install-ask COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_ask_test.sh
+             ${CMAKE_CURRENT_SOURCE_DIR}/install.sh)
+    set_tests_properties(install-ask PROPERTIES SKIP_RETURN_CODE 77)
 
     # T04: config.json layout key (missing / broken files) and the atomic save under kill -9
     add_executable(config-layout-test
@@ -207,5 +276,19 @@ if(BUILD_TESTING)
     target_compile_options(t03-sources-test PRIVATE -Wall -Wextra)
     target_link_libraries(t03-sources-test PRIVATE PkgConfig::LIBNL PkgConfig::SYSTEMD)
     add_test(NAME t03-sources COMMAND t03-sources-test)
+
+    # T06: LinkServer protocol logic (fake host env), vrlink host IPs, LayoutAuthority, the "link" config key
+    add_executable(link-server-test
+      tests/link_server_test.cpp
+      headset/link_server.cpp
+      headset/layout_authority.cpp
+      headset/config.cpp
+      headset/i18n.cpp
+      headset/paths.cpp
+    )
+    target_include_directories(link-server-test PRIVATE headset)
+    target_compile_options(link-server-test PRIVATE -Wall -Wextra)
+    target_link_libraries(link-server-test PRIVATE fph-core)
+    add_test(NAME link-server COMMAND link-server-test)
   endif()
 endif()

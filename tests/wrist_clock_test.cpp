@@ -635,6 +635,7 @@ void controls(const std::string& directory) {
     FontSet fonts;
     fonts.load(paths::resolveFontPath(c.fontPath, false), paths::resolveFontPath(c.boldFontPath, true));
     SettingsPanel panel(fonts);
+    panel.showPage(SettingsPage::Placement);  // T05: the tab opens on the layout editor; these are the placement cards
     const AutostartStatus service {AutostartStatus::State::Enabled, false, false};
     CHECK(panel.width() == 1600 && panel.height() <= 760);
 
@@ -647,9 +648,11 @@ void controls(const std::string& directory) {
         {SettingsAction::ClockOff, 168, 425, 96, 68}, {SettingsAction::Clock12, 264, 425, 96, 68},
         {SettingsAction::Clock24, 360, 425, 96, 68}, {SettingsAction::Reset, 168, 504, 288, 68},
         // 位置: 固定先・十字・近く / 遠く
-        {SettingsAction::AttachHead, 630, 188, 410.0 / 3, 68},
-        {SettingsAction::AttachLeft, 630 + 410.0 / 3, 188, 410.0 / 3, 68},
-        {SettingsAction::AttachRight, 630 + 820.0 / 3, 188, 410.0 / 3, 68},
+        // T05: four parts now (Room = Detached)
+        {SettingsAction::AttachHead, 630, 188, 410.0 / 4, 68},
+        {SettingsAction::AttachLeft, 630 + 410.0 / 4, 188, 410.0 / 4, 68},
+        {SettingsAction::AttachRight, 630 + 820.0 / 4, 188, 410.0 / 4, 68},
+        {SettingsAction::AttachDetached, 630 + 1230.0 / 4, 188, 410.0 / 4, 68},
         {SettingsAction::MoveUp, 637, 425, 106, 68}, {SettingsAction::MoveLeft, 520, 504, 106, 68},
         {SettingsAction::MoveDown, 637, 504, 106, 68}, {SettingsAction::MoveRight, 754, 504, 106, 68},
         {SettingsAction::MoveNear, 870, 425, 170, 68}, {SettingsAction::MoveFar, 870, 504, 170, 68},
@@ -670,6 +673,11 @@ void controls(const std::string& directory) {
         {SettingsAction::FadeOn, 1292, 425, 130, 68}, {SettingsAction::FadeOff, 1422, 425, 130, 68},
         {SettingsAction::FadeAngleDown, 1264, 504, 84, 68}, {SettingsAction::FadeAngleUp, 1468, 504, 84, 68},
     };
+    // T05 Room (Detached)
+    const std::vector<ExpectedButton> detachedOnly = {
+        {SettingsAction::BringInFront, 520, 267, 520, 68},
+        {SettingsAction::FaceMe, 1104, 425, 448, 68},
+    };
 
     for (const Language language : {Language::En}) {
         c = Config();
@@ -686,7 +694,7 @@ void controls(const std::string& directory) {
         CHECK(panel.writePng(directory + "/head-" + code + ".png"));
         // 左手・右手: 同じ場所の十字と向きのボタンのまま、位置のボタンといちばん下の段だけ変わる
         for (const SettingsAction attach : {SettingsAction::AttachLeft, SettingsAction::AttachRight}) {
-            CHECK(panel.pointerDown(attach == SettingsAction::AttachLeft ? 835 : 972, 222, 2) == attach);
+            CHECK(panel.pointerDown(attach == SettingsAction::AttachLeft ? 780 : 885, 222, 2) == attach);
             CHECK(applySettingsAction(attach, c));
             panel.pointerLeave();
             panel.render(c, service, {});
@@ -698,6 +706,18 @@ void controls(const std::string& directory) {
             panel.render(c, service, {});
             CHECK(panel.writePng(directory + "/" + (attach == SettingsAction::AttachLeft ? "left-" : "right-") + code + ".png"));
         }
+        // T05 Room: Bring it in front + Face me; the nudge / turn cross stays where it was
+        CHECK(panel.pointerDown(990, 222, 2) == SettingsAction::AttachDetached);
+        CHECK(applySettingsAction(SettingsAction::AttachDetached, c));
+        panel.pointerLeave();
+        panel.render(c, service, {});
+        checkButtons(panel, common, 3);
+        checkButtons(panel, detachedOnly, 3);
+        CHECK(panel.pointerDown(600, 380, 3) == SettingsAction::None);   // no head presets
+        CHECK(panel.pointerDown(1340, 504, 3) == SettingsAction::None);  // no fade angle
+        panel.pointerLeave();
+        panel.render(c, service, {});
+        CHECK(panel.writePng(directory + "/room-" + code + ".png"));
         // 頭に戻すと、頭のボタンに戻る
         CHECK(applySettingsAction(SettingsAction::AttachHead, c));
         panel.render(c, service, {});
@@ -721,7 +741,7 @@ void controls(const std::string& directory) {
     update.installable = true;
     c.attachment = Attachment::LeftWrist;
     panel.render(c, service, update);
-    CHECK(panel.pointerDown(960, 222, 6) == SettingsAction::AttachRight);
+    CHECK(panel.pointerDown(885, 222, 6) == SettingsAction::AttachRight);
     CHECK(panel.pointerDown(400, 459, 6) == SettingsAction::Clock24);
     panel.armUpdateConfirmForPreview();
     panel.render(c, service, update);

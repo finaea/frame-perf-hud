@@ -14,10 +14,17 @@
 
 /** ダッシュボードの設定パネルへのポインター操作（座標は画像の左上が原点の px）。 */
 struct PointerInput {
-    enum class Type { Move, Down, Up, Leave };
+    enum class Type { Move, Down, Up, Leave, Scroll };  // T05: Scroll (VREvent_ScrollSmooth)
     Type type;
     double x = 0.0;
     double y = 0.0;
+    double scrollDy = 0.0;  ///< T05: Scroll's ydelta
+};
+
+/** T05: the laser pressing / releasing on the HUD itself (only while it takes mouse input: Detached + dashboard open). */
+struct GrabInput {
+    bool down = false;     ///< true = press, false = release
+    uint32_t device = 0;   ///< the pointing device (vr::TrackedDeviceIndex_t)
 };
 
 /**
@@ -41,6 +48,8 @@ struct VrEvents {
     bool closeRequested = false;        ///< ダッシュボードのアイコンの「閉じる」が押された（VREvent_OverlayClosed）
     std::vector<PointerInput> pointer;  ///< 設定パネルへの操作（届いた順）
     bool sceneAppChanged = false;       ///< VREvent_SceneApplicationChanged arrived: re-query the scene app
+    std::vector<GrabInput> grab;        ///< T05: laser presses on the HUD (Detached grab)
+    bool dashboardClosed = false;       ///< T05: VREvent_DashboardDeactivated arrived
 };
 
 /** The app drawing the scene (IVRApplications). */
@@ -229,7 +238,33 @@ public:
      */
     bool submitSettings(const uint8_t* rgba);
 
+    /**
+     * T05: lets the laser hit the HUD (input method Mouse) or not (None). Mouse only while the dashboard is open and
+     * the HUD is Detached, so the HUD never takes game input. A new overlay (reconnect) starts at None.
+     * @param interactive Mouse if true
+     */
+    void setPanelInteractive(bool interactive);
+
+    /** T05: @return true while the HUD takes mouse input */
+    bool panelInteractive() const { return panelInteractive_; }
+
+    /**
+     * T05: a device's standing-space pose, now.
+     * @param device tracked device index (0 = HMD)
+     * @param pose the pose
+     * @return false if not connected or the pose isn't valid
+     */
+    bool devicePose(uint32_t device, vr::HmdMatrix34_t& pose) const;
+
+    /**
+     * T05: moves the Detached HUD at once (while a grab is held), without waiting for updatePlacement.
+     * @param pose the standing-space pose
+     */
+    void setDetachedTransform(const DetachedPose& pose);
+
 private:
+    bool panelInteractive_ = false;  ///< T05: the HUD's input method is Mouse
+    DetachedPose appliedDetached_;   ///< T05: the room pose last given to SetOverlayTransformAbsolute
     bool connected_ = false;
     uint32_t attachedDevice_ = 0xffffffff;  ///< 変換を渡してある機器（0xffffffff = vr::k_unTrackedDeviceIndexInvalid = まだ）
     bool transformDirty_ = true;            ///< 変換を渡し直す必要がある（設定が変わった・前回断られた）

@@ -175,6 +175,7 @@ const char* attachmentName(Attachment attachment) {
     switch (attachment) {
         case Attachment::LeftWrist: return "left_wrist";
         case Attachment::RightWrist: return "right_wrist";
+        case Attachment::Detached: return "detached";  // T05
         case Attachment::Head: break;
     }
     return "head";
@@ -220,7 +221,8 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
     warnUnknownKeys(root,
                     {"visible", "update_check", "language", "attachment", "position", "rotation", "left_wrist",
                      "right_wrist", "wrist_fade", "wrist_fade_end_deg", "clock_format", "width_m", "alpha",
-                     "update_interval_ms", "graph_seconds", "font", "font_bold", "thresholds", "layout"},
+                     "update_interval_ms", "graph_seconds", "font", "font_bold", "thresholds", "layout",
+                     "detached_pose", "link"},  // T05, T06
                     "", warnings);
     readBool(root, "visible", config.visible, warnings);
     readBool(root, "update_check", config.updateCheck, warnings);
@@ -233,8 +235,21 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
         config.attachment = Attachment::LeftWrist;
     } else if (attachment == "right_wrist") {
         config.attachment = Attachment::RightWrist;
+    } else if (attachment == "detached") {  // T05
+        config.attachment = Attachment::Detached;
     } else if (attachment != "head") {
-        warnings.push_back("attachment must be \"head\", \"left_wrist\" or \"right_wrist\"");
+        warnings.push_back("attachment must be \"head\", \"left_wrist\", \"right_wrist\" or \"detached\"");
+    }
+    // T05: the room pose, 12 numbers (3×4, row-major). Anything else is ignored and the HUD is re-placed in front
+    if (const JsonValue* pose = root.get("detached_pose")) {
+        bool ok = pose->type == JsonValue::Type::Array && pose->items.size() == 12;
+        for (size_t i = 0; ok && i < 12; ++i) ok = pose->items[i].isNumber() && std::isfinite(pose->items[i].number);
+        if (ok) {
+            for (size_t i = 0; i < 12; ++i) config.detachedPose.m[i / 4][i % 4] = pose->items[i].number;
+            config.detachedPose.valid = true;
+        } else {
+            warnings.push_back("detached_pose must be 12 numbers (a 3x4 matrix, row by row); it will be placed again");
+        }
     }
     if (const JsonValue* position = root.get("position")) {
         if (position->isObject()) {
@@ -289,6 +304,41 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
             warnings.push_back(layoutError + ": using the default layout");
         }
     }
+    // T06: the PC link. A bad entry is skipped with a warning; the rest still counts
+    if (const JsonValue* link = root.get("link")) {
+        if (link->isObject()) {
+            warnUnknownKeys(*link, {"port", "headset_id", "allowed_pcs"}, "link.", warnings);
+            readInt(*link, "port", 1024, 65535, config.link.port, warnings);
+            readString(*link, "headset_id", config.link.headsetId, warnings);
+            const auto isHexId = [](const std::string& s) {
+                return s.size() == 32 && s.find_first_not_of("0123456789abcdef") == std::string::npos;
+            };
+            if (!config.link.headsetId.empty() && !isHexId(config.link.headsetId)) {
+                warnings.push_back("link.headset_id must be 32 lowercase hex chars; a new one will be made");
+                config.link.headsetId.clear();
+            }
+            if (const JsonValue* pcs = link->get("allowed_pcs")) {
+                if (pcs->type == JsonValue::Type::Array) {
+                    for (const JsonValue& pc : pcs->items) {
+                        LinkConfig::AllowedPc entry;
+                        const JsonValue* id = pc.get("id");
+                        const JsonValue* name = pc.get("name");
+                        if (id == nullptr || !id->isString() || !isHexId(id->text)) {
+                            warnings.push_back("link.allowed_pcs: an entry without a valid \"id\" was skipped");
+                            continue;
+                        }
+                        entry.id = id->text;
+                        if (name != nullptr && name->isString()) entry.name = name->text;
+                        config.link.allowedPcs.push_back(entry);
+                    }
+                } else {
+                    warnings.push_back("link.allowed_pcs must be [ {\"id\": ..., \"name\": ...}, ... ]");
+                }
+            }
+        } else {
+            warnings.push_back("link must be { ... }");
+        }
+    }
     out = config;
     return true;
 }
@@ -304,6 +354,39 @@ std::string jsonNumber(double value) {
     char text[32];
     std::snprintf(text, sizeof(text), "%.4g", value);
     return text;
+}
+
+/** T06: the "link" object (with its trailing comma). PC names come off the network: control chars are dropped. */
+std::string linkJson(const LinkConfig& link) {
+    const auto quote = [](const std::string& text) {
+        std::string out = "\"";
+        for (const char c : text) {
+            if (static_cast<unsigned char>(c) < 0x20) continue;
+            if (c == '"' || c == '\\') out += '\\';
+            out += c;
+        }
+        return out + "\"";
+    };
+    std::string out = "  \"link\": {\n    \"port\": " + std::to_string(link.port) + ",\n    \"headset_id\": " +
+                      quote(link.headsetId) + ",\n    \"allowed_pcs\": [";
+    for (size_t i = 0; i < link.allowedPcs.size(); ++i) {
+        out += std::string(i ? "," : "") + "\n      { \"id\": " + quote(link.allowedPcs[i].id) +
+               ", \"name\": " + quote(link.allowedPcs[i].name) + " }";
+    }
+    return out + (link.allowedPcs.empty() ? "]\n  },\n" : "\n    ]\n  },\n");
+}
+
+/** T05: the "detached_pose" line (with its trailing comma), or "" when the HUD was never placed in the room. */
+std::string detachedJson(const DetachedPose& pose) {
+    if (!pose.valid) return "";
+    std::string out = "  \"detached_pose\": [";
+    for (int i = 0; i < 12; ++i) {
+        char text[32];
+        // 6 digits: a rotation saved with 4 would drift visibly from orthonormal over a few saves
+        std::snprintf(text, sizeof(text), "%s%.6g", i ? ", " : "", pose.m[i / 4][i % 4] + 0.0);
+        out += text;
+    }
+    return out + "],\n";
 }
 
 /**
@@ -344,6 +427,7 @@ bool saveConfig(const std::string& path, const Config& config, std::string& erro
         << ", \"roll\": " << jsonNumber(config.rollDeg) << " },\n"
         << "  \"left_wrist\": " << poseJson(config.leftWrist) << ",\n"
         << "  \"right_wrist\": " << poseJson(config.rightWrist) << ",\n"
+        << detachedJson(config.detachedPose)  // T05: "" until placed
         << "  \"wrist_fade\": " << (config.wristFade ? "true" : "false") << ",\n"
         << "  \"wrist_fade_end_deg\": " << jsonNumber(config.wristFadeEndDeg) << ",\n"
         << "  \"clock_format\": " << config.clockFormat << ",\n"
@@ -375,6 +459,7 @@ bool saveConfig(const std::string& path, const Config& config, std::string& erro
         << "    \"controller_warn_pct\": " << jsonNumber(th.controllerWarnPct) << ",\n"
         << "    \"controller_crit_pct\": " << jsonNumber(th.controllerCritPct) << "\n"
         << "  },\n"
+        << linkJson(config.link)  // T06
         << "  \"layout\": " << fph::layoutToJson(config.layout, 2) << "\n"
         << "}\n";
 

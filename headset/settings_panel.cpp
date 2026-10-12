@@ -1,6 +1,7 @@
 // 設定パネルの実装。
 #include "settings_panel.h"
 
+#include "detached.h"  // T05
 #include "draw.h"
 #include "i18n.h"
 #include "placement.h"
@@ -59,6 +60,11 @@ constexpr double kFooterY = kCardY + kCardH + kCardGap;
 constexpr int kHeight = static_cast<int>(kFooterY + kButtonH + 54);  // 下に 1 行の説明
 constexpr double kFooterSegmentW = 240;
 constexpr double kQuitW = 230;
+// T05: the Layout page: the lanes on the left, the palette on the right (same height as the placement cards)
+constexpr double kEditorCardW = 1000;
+constexpr double kPaletteCardX = kPad + kEditorCardW + kCardGap;
+constexpr double kPageSwitchW = 300;
+constexpr double kForgetW = 260;
 
 constexpr double kNudgeM = 0.02;       // 頭: 上下左右の微調整（m）
 constexpr double kDepthStepM = 0.05;   // 頭: 前後の微調整（m）
@@ -276,7 +282,7 @@ bool sameDisplaySettings(const Config& a, const Config& b) {
            a.posY == b.posY && a.posZ == b.posZ && a.yawDeg == b.yawDeg && a.pitchDeg == b.pitchDeg &&
            a.rollDeg == b.rollDeg && !(a.leftWrist != b.leftWrist) && !(a.rightWrist != b.rightWrist) &&
            a.wristFade == b.wristFade && a.wristFadeEndDeg == b.wristFadeEndDeg && a.clockFormat == b.clockFormat &&
-           a.widthM == b.widthM && a.alpha == b.alpha;
+           a.widthM == b.widthM && a.alpha == b.alpha && a.detachedPose == b.detachedPose;
 }
 
 }  // namespace
@@ -284,14 +290,48 @@ bool sameDisplaySettings(const Config& a, const Config& b) {
 bool applySettingsAction(SettingsAction action, Config& config, double angleStepDeg) {
     const Config before = config;
     // 位置と向きのボタンは、今の固定先の値を動かす（頭は posX など、手首はその手の WristPose）
-    const bool wrist = config.attachment != Attachment::Head;
+    const bool wrist = config.attachment == Attachment::LeftWrist || config.attachment == Attachment::RightWrist;
     WristPose& pose = selectedWrist(config);
+    // T05: Detached moves / turns the room pose along the HUD's own axes (like the wrist). Face me and Bring it in
+    // front need the HMD pose, so the caller does those
+    if (config.attachment == Attachment::Detached) {
+        DetachedPose& room = config.detachedPose;
+        bool moves = true;  // a move / turn button: never falls through to the head's pose below
+        switch (action) {
+            case SettingsAction::MoveLeft: room = nudgeDetached(room, 0, -kDetachedNudgeM); break;
+            case SettingsAction::MoveRight: room = nudgeDetached(room, 0, kDetachedNudgeM); break;
+            case SettingsAction::MoveUp: room = nudgeDetached(room, 1, kDetachedNudgeM); break;
+            case SettingsAction::MoveDown: room = nudgeDetached(room, 1, -kDetachedNudgeM); break;
+            case SettingsAction::MoveNear: room = nudgeDetached(room, 2, kDetachedDepthStepM); break;
+            case SettingsAction::MoveFar: room = nudgeDetached(room, 2, -kDetachedDepthStepM); break;
+            case SettingsAction::PitchUp: room = rotateDetached(room, 0, angleStepDeg); break;
+            case SettingsAction::PitchDown: room = rotateDetached(room, 0, -angleStepDeg); break;
+            case SettingsAction::YawLeft: room = rotateDetached(room, 1, -angleStepDeg); break;
+            case SettingsAction::YawRight: room = rotateDetached(room, 1, angleStepDeg); break;
+            case SettingsAction::RollLeft: room = rotateDetached(room, 2, angleStepDeg); break;
+            case SettingsAction::RollRight: room = rotateDetached(room, 2, -angleStepDeg); break;
+            case SettingsAction::FaceMe:  // the caller turns it with the HMD pose
+            case SettingsAction::FaceForward:
+            case SettingsAction::PresetLeftBottom:
+            case SettingsAction::PresetCenterBottom:
+            case SettingsAction::PresetRightBottom:
+            case SettingsAction::PresetLeftTop:
+            case SettingsAction::PresetRightTop:
+            case SettingsAction::PresetWrist: break;
+            default: moves = false; break;
+        }
+        if (moves) {
+            if (!before.detachedPose.valid) config.detachedPose = before.detachedPose;  // nothing to move yet
+            return config.detachedPose != before.detachedPose;
+        }
+    }
     switch (action) {
         case SettingsAction::ShowOn: config.visible = true; break;
         case SettingsAction::ShowOff: config.visible = false; break;
         case SettingsAction::AttachHead: config.attachment = Attachment::Head; break;
         case SettingsAction::AttachLeft: config.attachment = Attachment::LeftWrist; break;
         case SettingsAction::AttachRight: config.attachment = Attachment::RightWrist; break;
+        case SettingsAction::AttachDetached: config.attachment = Attachment::Detached; break;  // T05
         case SettingsAction::PresetLeftBottom:
         case SettingsAction::PresetCenterBottom:
         case SettingsAction::PresetRightBottom:
@@ -407,12 +447,20 @@ bool applySettingsAction(SettingsAction action, Config& config, double angleStep
         case SettingsAction::UpdateDismiss:
         case SettingsAction::AngleStep1:  // 刻みは設定パネルの中だけで覚える（設定ファイルは変えない）
         case SettingsAction::AngleStep5:
+        case SettingsAction::PageLayout:  // T05: the page is the panel's own state
+        case SettingsAction::PagePlacement:
+        case SettingsAction::BringInFront:  // T05: these need the HMD pose / the link server: the caller does them
+        case SettingsAction::PcAllow:
+        case SettingsAction::PcDeny:
+        case SettingsAction::PcForgetAll:
         case SettingsAction::None: break;
     }
     return !sameDisplaySettings(config, before);
 }
 
-SettingsPanel::SettingsPanel(const FontSet& fonts) : fonts_(fonts) {
+SettingsPanel::SettingsPanel(const FontSet& fonts)
+    : fonts_(fonts),
+      editor_({kPad, kCardY, kEditorCardW, kCardH}, {kPaletteCardX, kCardY, kWidth - kPad - kPaletteCardX, kCardH}) {
     surface_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, kWidth, kHeight);
     cr_ = cairo_create(surface_);
     cairo_font_options_t* options = cairo_font_options_create();
@@ -448,6 +496,11 @@ void SettingsPanel::layoutButtons() {
         }
     };
 
+    // T05: the Layout page's cards are the editor's; only the header and the footer have buttons here
+    if (mode_ == ButtonMode::Layout) return;
+    const bool wristLayout = mode_ == ButtonMode::Wrist;
+    const bool detached = mode_ == ButtonMode::Detached;
+
     // 左のカード「パネル」: 表示・大きさ・透明度・時計・既定に戻す
     segmented(kRowControlX, rowY(0), kSegmentW, {SettingsAction::ShowOn, SettingsAction::ShowOff});
     add(SettingsAction::SizeDown, kRowControlX, rowY(1), kStepButtonW, kButtonH);
@@ -460,9 +513,13 @@ void SettingsPanel::layoutButtons() {
 
     // 真ん中のカード「位置」: いちばん上に固定先
     segmented(kPosInnerX + kAttachLabelW, rowY(0), kPosInnerW - kAttachLabelW,
-              {SettingsAction::AttachHead, SettingsAction::AttachLeft, SettingsAction::AttachRight});
+              {SettingsAction::AttachHead, SettingsAction::AttachLeft, SettingsAction::AttachRight,
+               SettingsAction::AttachDetached});
     const double col[3] = {kPosInnerX, kPosInnerX + kPresetW + kGap, kPosInnerX + 2 * (kPresetW + kGap)};
-    if (wristLayout_) {
+    if (detached) {
+        // T05 Room: one wide "Bring it in front of me"; the row below is the laser hint
+        add(SettingsAction::BringInFront, kPosInnerX, rowY(1), kPosInnerW, kButtonH);
+    } else if (wristLayout) {
         // 手首: 位置のボタンは「手首の標準の位置」だけ（1 段ぶちぬき）
         add(SettingsAction::PresetWrist, kPosInnerX, rowY(1), kPosInnerW, kButtonH);
     } else {
@@ -492,7 +549,10 @@ void SettingsPanel::layoutButtons() {
     add(SettingsAction::PitchDown, facingCol[1], rowY(1), kFacingArrowW, kButtonH);
     add(SettingsAction::YawRight, facingCol[2], rowY(1), kFacingArrowW, kButtonH);
     segmented(kFacingInnerX, rowY(2), kFacingInnerW, {SettingsAction::AngleStep1, SettingsAction::AngleStep5});
-    if (wristLayout_) {
+    if (detached) {
+        // T05 Room: turn it to face the HMD (upright)
+        add(SettingsAction::FaceMe, kFacingInnerX, rowY(3), kFacingInnerW, kButtonH);
+    } else if (wristLayout) {
         // 手首: 傾けると消す（オン / オフ）と、消える角度（− 値 ＋）。見出しは左、ボタンは右詰め
         const double right = kFacingInnerX + kFacingInnerW;
         segmented(right - kSegmentW, rowY(3), kSegmentW, {SettingsAction::FadeOn, SettingsAction::FadeOff});
@@ -559,6 +619,13 @@ std::string SettingsPanel::labelOf(SettingsAction action, const UiText& text) co
         case SettingsAction::UpdateConfirmNo: return text.updateConfirmNo;
         case SettingsAction::UpdateRetry: return text.updateRetry;
         case SettingsAction::UpdateDismiss: return text.updateDismiss;
+        case SettingsAction::PageLayout: return text.pageLayout;
+        case SettingsAction::PagePlacement: return text.pagePlacement;
+        case SettingsAction::AttachDetached: return text.attachRoom;
+        case SettingsAction::BringInFront: return text.bringInFront;
+        case SettingsAction::PcAllow: return text.pcAllow;
+        case SettingsAction::PcDeny: return text.pcDeny;
+        case SettingsAction::PcForgetAll: return "";  // drawn with its count in drawFooter
         case SettingsAction::None: break;
     }
     return "";
@@ -568,21 +635,42 @@ SettingsAction SettingsPanel::hitTest(double x, double y) const {
     for (const auto& b : buttons_) {
         const bool isAutostart = b.action == SettingsAction::AutostartOn || b.action == SettingsAction::AutostartOff;
         if (isAutostart && !autostartInstalled_) continue;  // ユニットが無いときは押せない
+        if (b.action == SettingsAction::PcForgetAll && !forgetEnabled_) continue;  // T05: no PC to forget
         if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b.action;
     }
     return SettingsAction::None;
 }
 
 bool SettingsPanel::pointerMove(double x, double y) {
-    const SettingsAction now = hitTest(x, y);
-    if (now == hover_) return false;
+    // T05: the editor gets every move on its page (a drag may run over the header and the footer)
+    const bool editor = page_ == SettingsPage::Layout && editor_.pointerMove(x, y);
+    const SettingsAction now = editor_.busy() ? SettingsAction::None : hitTest(x, y);
+    if (now == hover_) return editor;
     hover_ = now;
     return true;
 }
 
+bool SettingsPanel::scroll(double dy) {
+    return page_ == SettingsPage::Layout && editor_.scroll(dy);
+}
+
 SettingsAction SettingsPanel::pointerDown(double x, double y, double now) {
     hover_ = hitTest(x, y);
+    // T05: off the header / footer buttons, the Layout page's press goes to the editor
+    if (hover_ == SettingsAction::None && page_ == SettingsPage::Layout) {
+        quitArmed_ = false;
+        updateConfirmArmed_ = false;
+        editor_.pointerDown(x, y);
+        return SettingsAction::None;
+    }
     pressed_ = hover_;
+    if (pressed_ == SettingsAction::PageLayout || pressed_ == SettingsAction::PagePlacement) {
+        page_ = pressed_ == SettingsAction::PageLayout ? SettingsPage::Layout : SettingsPage::Placement;
+        editor_.pointerLeave();
+        quitArmed_ = false;
+        updateConfirmArmed_ = false;
+        return SettingsAction::None;
+    }
     if (pressed_ == SettingsAction::Quit) {
         // 誤って押しても終わらないよう、1 回目は確認の表示にするだけ
         if (quitArmed_ && now <= quitArmedUntil_) return SettingsAction::Quit;
@@ -610,14 +698,16 @@ SettingsAction SettingsPanel::pointerDown(double x, double y, double now) {
     return pressed_;
 }
 
-bool SettingsPanel::pointerUp() {
-    if (pressed_ == SettingsAction::None) return false;
+bool SettingsPanel::pointerUp(double x, double y) {
+    const bool editor = editor_.pointerUp(x, y);  // T05: a drop or a tap in the editor
+    if (pressed_ == SettingsAction::None) return editor;
     pressed_ = SettingsAction::None;
     return true;
 }
 
 bool SettingsPanel::pointerLeave() {
-    const bool changed = hover_ != SettingsAction::None || pressed_ != SettingsAction::None;
+    // T05: the laser left the tab (or the dashboard closed) mid-drag: cancel it, commit nothing
+    const bool changed = editor_.pointerLeave() || hover_ != SettingsAction::None || pressed_ != SettingsAction::None;
     hover_ = SettingsAction::None;
     pressed_ = SettingsAction::None;
     return changed;
@@ -804,7 +894,14 @@ void SettingsPanel::drawPositionCard(const Pen& pen, const UiText& text, const C
     // （ボタンはパネル自身の軸で動かすので、コントローラーの座標の数字はボタンと合わず、パネルの軸の数字は向きを
     // 変えるだけで変わってしまう。距離なら向きによらず、どれだけ動かしたかが分かる）
     std::string where;
-    if (wristLayout_) {
+    if (mode_ == ButtonMode::Detached) {
+        // T05 Room: the standing-space position (where the floor's origin is SteamVR's)
+        const DetachedPose& room = config.detachedPose;
+        where = room.valid ? std::string(text.positionNow) + "  " + text.posX + " " + signedCm(room.m[0][3]) + "  " +
+                                 text.posY + " " + signedCm(room.m[1][3]) + "  " + text.posZ + " " +
+                                 signedCm(room.m[2][3]) + " cm"
+                           : std::string(text.roomNotPlaced);
+    } else if (mode_ == ButtonMode::Wrist) {
         char distance[96];
         std::snprintf(distance, sizeof(distance), text.wristOffsetFormat,
                       std::round(wristDistanceFromStandard(selectedWrist(config)) * 100.0) + 0.0);
@@ -819,12 +916,21 @@ void SettingsPanel::drawPositionCard(const Pen& pen, const UiText& text, const C
     // 固定先: 見出し（左）と 3 択（右）
     const double attachSize = fitSize(pen, text.rowAttachment, 24, 16, kAttachLabelW - 12, false);
     pen.text(kPosInnerX, centerBaseline(rowY(0), kButtonH, attachSize), text.rowAttachment, attachSize, kTextMuted);
-    const int attach = config.attachment == Attachment::LeftWrist ? 1 : (config.attachment == Attachment::RightWrist ? 2 : 0);
-    drawSegmented(pen, text, {SettingsAction::AttachHead, SettingsAction::AttachLeft, SettingsAction::AttachRight},
+    const int attach = config.attachment == Attachment::LeftWrist    ? 1
+                       : config.attachment == Attachment::RightWrist ? 2
+                       : config.attachment == Attachment::Detached   ? 3
+                                                                     : 0;
+    drawSegmented(pen, text,
+                  {SettingsAction::AttachHead, SettingsAction::AttachLeft, SettingsAction::AttachRight,
+                   SettingsAction::AttachDetached},
                   attach, true);
 
     // 位置のボタン（今その位置なら ✓）
-    if (wristLayout_) {
+    if (mode_ == ButtonMode::Detached) {
+        drawButton(pen, text, SettingsAction::BringInFront, false, 24);
+        const double hintSize = fitSize(pen, text.detachedHint, 20, 13, kPosInnerW, false);
+        pen.text(kPosInnerX, centerBaseline(rowY(2), kButtonH, hintSize), text.detachedHint, hintSize, kTextMuted);
+    } else if (mode_ == ButtonMode::Wrist) {
         drawButton(pen, text, SettingsAction::PresetWrist, matchesWristPreset(selectedWrist(config)), 24);
     } else {
         for (const auto& preset : kPresets) drawButton(pen, text, preset.action, matchesPreset(preset, config), 24);
@@ -845,7 +951,7 @@ void SettingsPanel::drawFacingCard(const Pen& pen, const UiText& text, const Con
     double yaw = config.yawDeg;
     double pitch = config.pitchDeg;
     double roll = config.rollDeg;
-    if (wristLayout_) {
+    if (mode_ == ButtonMode::Wrist) {
         const WristPose& pose = selectedWrist(config);
         yaw = pose.yaw;
         pitch = pose.pitch;
@@ -854,8 +960,11 @@ void SettingsPanel::drawFacingCard(const Pen& pen, const UiText& text, const Con
     const std::string now = std::string(text.facingNow) + "  " + text.yawName + " " + signedDegrees(yaw) + "  " +
                             text.pitchName + " " + signedDegrees(pitch) + "  " + text.rollName + " " +
                             signedDegrees(roll);
-    const double nowSize = fitSize(pen, now, 18, 12, kFacingInnerW - titleW - 16, false);
-    pen.text(kFacingInnerX + kFacingInnerW, kCardY + 40, now, nowSize, kTextMuted, false, true);
+    // T05: a room pose has no yaw / pitch / roll of its own (the buttons turn it about its own axes)
+    if (mode_ != ButtonMode::Detached) {
+        const double nowSize = fitSize(pen, now, 18, 12, kFacingInnerW - titleW - 16, false);
+        pen.text(kFacingInnerX + kFacingInnerW, kCardY + 40, now, nowSize, kTextMuted, false, true);
+    }
 
     for (const SettingsAction action :
          {SettingsAction::YawLeft, SettingsAction::YawRight, SettingsAction::PitchUp, SettingsAction::PitchDown}) {
@@ -865,7 +974,9 @@ void SettingsPanel::drawFacingCard(const Pen& pen, const UiText& text, const Con
     drawButton(pen, text, SettingsAction::RollRight, false, 24, +1);
     drawSegmented(pen, text, {SettingsAction::AngleStep1, SettingsAction::AngleStep5}, angleStepDeg_ == 5.0 ? 1 : 0,
                   true);
-    if (wristLayout_) {
+    if (mode_ == ButtonMode::Detached) {
+        drawButton(pen, text, SettingsAction::FaceMe, false, 24);
+    } else if (mode_ == ButtonMode::Wrist) {
         // 傾けると消す（オン / オフ）と、消える角度（薄くなり始める角度〜消えきる角度）
         const double right = kFacingInnerX + kFacingInnerW;
         const char* labels[2] = {text.rowWristFade, text.rowFadeAngle};
@@ -890,7 +1001,7 @@ void SettingsPanel::drawFacingCard(const Pen& pen, const UiText& text, const Con
 }
 
 void SettingsPanel::drawFooter(const Pen& pen, const UiText& text, const Config& /*config*/,
-                               const AutostartStatus& autostart) {
+                               const AutostartStatus& autostart, const LinkUiState& link) {
     const double y = kFooterY;
     const double labelSize = 20;
     double x = kPad;
@@ -912,8 +1023,25 @@ void SettingsPanel::drawFooter(const Pen& pen, const UiText& text, const Config&
     drawSegmented(pen, text, {SettingsAction::AutostartOn, SettingsAction::AutostartOff}, selected,
                   installed && !autostart.busy);
 
-    // 終了（赤い枠の控えめなボタン。確認中は赤い塗り）
+    // T05: Forget PCs (N), left of Quit. Greyed out with nothing to forget
     const double quitX = kWidth - kPad - kQuitW;
+    {
+        const double fx = quitX - 24 - kForgetW;
+        forgetEnabled_ = link.knownPcs > 0;
+        placeFooterButton(SettingsAction::PcForgetAll, fx, y, kForgetW, kButtonH);
+        const bool hot = forgetEnabled_ && (hover_ == SettingsAction::PcForgetAll || pressed_ == SettingsAction::PcForgetAll);
+        pen.color(hot ? kControlHover : kControl);
+        pen.roundedRect(fx, y, kForgetW, kButtonH, kButtonH / 2);
+        cairo_fill(pen.cr);
+        if (forgetEnabled_) strokeRounded(pen, fx, y, kForgetW, kButtonH, kButtonH / 2, kBorder, 2);
+        char label[64];
+        std::snprintf(label, sizeof(label), text.forgetPcsFormat, link.knownPcs);
+        const double size = fitSize(pen, label, 22, 14, kForgetW - 28, true);
+        textCentered(pen, fx + kForgetW / 2, centerBaseline(y, kButtonH, size), label, size,
+                     forgetEnabled_ ? kText : kTextDisabled, true);
+    }
+
+    // 終了（赤い枠の控えめなボタン。確認中は赤い塗り）
     placeFooterButton(SettingsAction::Quit, quitX, y, kQuitW, kButtonH);
     const bool quitHover = hover_ == SettingsAction::Quit || pressed_ == SettingsAction::Quit;
     pen.color(quitArmed_ ? kDanger : (quitHover ? kControlHover : kQuitFill));
@@ -1106,16 +1234,52 @@ void SettingsPanel::drawUpdateBar(const Pen& pen, const UiText& text, const Conf
     }
 }
 
+double SettingsPanel::drawPageSwitch(const Pen& pen, const UiText& text, double left) {
+    placeFooterButton(SettingsAction::PageLayout, left, kHeaderY + (kHeaderH - kButtonH) / 2, kPageSwitchW / 2, kButtonH);
+    placeFooterButton(SettingsAction::PagePlacement, left + kPageSwitchW / 2, kHeaderY + (kHeaderH - kButtonH) / 2,
+                      kPageSwitchW / 2, kButtonH);
+    drawSegmented(pen, text, {SettingsAction::PageLayout, SettingsAction::PagePlacement},
+                  page_ == SettingsPage::Layout ? 0 : 1, true);
+    return left + kPageSwitchW;
+}
+
+void SettingsPanel::drawPairingBanner(const Pen& pen, const UiText& text, const LinkUiState::Pending& pc, double left,
+                                      double right) {
+    // The update bar's buttons must not stay hittable under the banner
+    for (const SettingsAction a :
+         {SettingsAction::UpdateCheckNow, SettingsAction::UpdateInstall, SettingsAction::UpdateConfirmYes,
+          SettingsAction::UpdateConfirmNo, SettingsAction::UpdateRetry, SettingsAction::UpdateDismiss}) {
+        buttons_.erase(std::remove_if(buttons_.begin(), buttons_.end(), [a](const Button& b) { return b.action == a; }),
+                      buttons_.end());
+    }
+    drawCard(pen, left, kHeaderY, right - left, kHeaderH, 16, kCard, kWarn, 2);
+    const double btnY = kHeaderY + (kHeaderH - kButtonH) / 2;
+    const double w = 150;
+    placeFooterButton(SettingsAction::PcAllow, right - 8 - w, btnY, w, kButtonH);
+    placeFooterButton(SettingsAction::PcDeny, right - 8 - 2 * w - 12, btnY, w, kButtonH);
+    char line[192];
+    std::snprintf(line, sizeof(line), text.pcWantsFormat, pc.name.c_str());
+    const double maxW = right - 8 - 2 * w - 12 - 16 - (left + kCardPad);
+    const double size = fitSize(pen, line, 22, 13, maxW, true);
+    pen.text(left + kCardPad, centerBaseline(kHeaderY, kHeaderH, size), line, size, kText, true);
+    drawButton(pen, text, SettingsAction::PcDeny, false, 22, 0, false);
+    drawButton(pen, text, SettingsAction::PcAllow, true, 22, 0, false);
+}
+
 void SettingsPanel::render(const Config& config, const AutostartStatus& autostart,
-                            const frame_updater::UpdateStatus& update) {
+                            const frame_updater::UpdateStatus& update, const LinkUiState& link) {
     const Pen pen {cr_, &fonts_};
     const UiText& t = uiText(config.language);
-    // 固定先が頭と手首のあいだで変わったら、3 つのカードのボタンを置き直す（下の段と更新の帯はこのあと置き直す）
-    const bool wrist = config.attachment != Attachment::Head;
-    if (wrist != wristLayout_) {
-        wristLayout_ = wrist;
+    // 固定先・ページが変わったら、カードのボタンを置き直す（下の段と更新の帯はこのあと置き直す）
+    const ButtonMode mode = page_ == SettingsPage::Layout                ? ButtonMode::Layout
+                            : config.attachment == Attachment::Head     ? ButtonMode::Head
+                            : config.attachment == Attachment::Detached ? ButtonMode::Detached
+                                                                        : ButtonMode::Wrist;
+    if (mode != mode_) {
+        mode_ = mode;
         layoutButtons();
     }
+    editor_.sync(config.layout);
 
     // 地（不透明。コントラスト比は不透明な地で計算している）
     cairo_save(cr_);
@@ -1130,11 +1294,27 @@ void SettingsPanel::render(const Config& config, const AutostartStatus& autostar
     // 下 = 言語・自動起動・終了と説明
     const double pillX = drawHeader(pen, t, config);
     const double titleRight = kPad + pen.measure(t.settingsTitle, 34, true);
-    drawUpdateBar(pen, t, config, update, titleRight + 28, pillX - 20);
-    drawPanelCard(pen, t, config);
-    drawPositionCard(pen, t, config);
-    drawFacingCard(pen, t, config);
-    drawFooter(pen, t, config, autostart);
+    // T05: page switch after the title; a pending PC takes the update bar's place
+    const double barLeft = drawPageSwitch(pen, t, titleRight + 24) + 20;
+    if (!link.pending.empty()) {
+        bannerPcId_ = link.pending.front().id;
+        drawPairingBanner(pen, t, link.pending.front(), barLeft, pillX - 20);
+    } else {
+        bannerPcId_.clear();
+        buttons_.erase(std::remove_if(buttons_.begin(), buttons_.end(),
+                                      [](const Button& b) {
+                                          return b.action == SettingsAction::PcAllow || b.action == SettingsAction::PcDeny;
+                                      }),
+                       buttons_.end());
+        drawUpdateBar(pen, t, config, update, barLeft, pillX - 20);
+    }
+    if (page_ == SettingsPage::Placement) {
+        drawPanelCard(pen, t, config);
+        drawPositionCard(pen, t, config);
+        drawFacingCard(pen, t, config);
+    }
+    drawFooter(pen, t, config, autostart, link);
+    if (page_ == SettingsPage::Layout) editor_.render(pen, t);  // last: a dragged card is drawn over everything
 
     cairo_surface_flush(surface_);
 }

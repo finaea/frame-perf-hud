@@ -131,6 +131,37 @@ struct UiText {
     const char* clock12;          ///< 12 時間制のボタン
     const char* clock24;          ///< 24 時間制のボタン
     const char* clockLabel;       ///< 性能パネルの時計の見出し
+    // ---- T05: dashboard pages, Detached mode, the layout editor, PC pairing ----
+    const char* pageLayout;          ///< page switch: the layout editor
+    const char* pagePlacement;       ///< page switch: attach point, position, size, ...
+    const char* attachRoom;          ///< attach point: Detached (pinned in the room)
+    const char* bringInFront;        ///< Detached: put it 1 m in front of the HMD
+    const char* detachedHint;        ///< Detached: how to move it with the laser
+    const char* roomNotPlaced;       ///< Detached: no pose yet
+    const char* editorTitle;         ///< layout card title
+    const char* editorHint;          ///< layout card hint
+    const char* editorNewColumn;     ///< the empty lane on the right
+    const char* editorDropToRemove;  ///< palette card while a widget is dragged over it
+    const char* paletteTitle;        ///< palette card title
+    const char* paletteNetwork;      ///< palette chip for Network (the cards name the adapter)
+    const char* paletteSoon;         ///< a palette chip that isn't available yet
+    const char* selectedNone;        ///< no widget selected
+    const char* noSettings;          ///< the selected widget has no settings
+    const char* removeWidget;        ///< remove the selected widget
+    const char* rowRows;             ///< process lists: rows shown
+    const char* rowSameName;         ///< process lists: one row per process name
+    const char* rowAdapter;          ///< Network: which adapter
+    const char* adapterDongle;
+    const char* adapterHome;
+    const char* rowsFormat;          ///< card detail: "%u rows"
+    const char* summedSuffix;        ///< card detail after rowsFormat when summed by name
+    const char* layoutSaved;         ///< status after an applied edit
+    const char* layoutStale;         ///< status after a rejected (stale) edit
+    const char* layoutSaveFailed;    ///< status after a failed save
+    const char* pcWantsFormat;       ///< pairing banner (%s = the PC's name)
+    const char* pcAllow;
+    const char* pcDeny;
+    const char* forgetPcsFormat;     ///< footer button (%zu = allowed PCs)
 };
 
 /**
