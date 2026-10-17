@@ -29,6 +29,8 @@ struct Known {
 constexpr Known kKnown[] = {
     // 2026-10-11 19:55, Jack restarted from the Steam menu
     {0x02, 0x80, "Hard reset", "Normal restart"},
+    // 2026-10-15, Jack shut down normally; powered on with the power key on 2026-10-17 12:54
+    {0x02, 0x80, "KPDPWR_N", "Normal shutdown"},
 };
 
 constexpr int kMaxEntries = 20000;  ///< kernel messages read at most (the qcom-pon lines come in the first second)
@@ -160,10 +162,19 @@ std::string lastPowerOff(const std::string& stateDir, std::string& log) {
         std::string error;
         if (file && parseJson(text.str(), root, error)) {
             const JsonValue* id = root.get("boot_id");
-            const JsonValue* reason = root.get("text");
-            if (id != nullptr && id->isString() && id->text == boot && !boot.empty() && reason != nullptr &&
-                reason->isString()) {
-                return reason->text;  // read once this boot already
+            const JsonValue* regs = root.get("regs");
+            const JsonValue* trigger = root.get("trigger");
+            // Read once this boot already: decode the cached registers again, so a decode row added since applies
+            // at once. A cache from before "regs" was written falls through and reads the journal one more time
+            if (id != nullptr && id->isString() && id->text == boot && !boot.empty() && regs != nullptr &&
+                regs->isObject()) {
+                PonReport cached;
+                for (const auto& r : regs->members) {
+                    if (r.second.isNumber()) cached.regs[r.first] = static_cast<uint32_t>(r.second.number);
+                }
+                if (trigger != nullptr && trigger->isString()) cached.trigger = trigger->text;
+                if (const JsonValue* type = root.get("type")) cached.type = type->isString() ? type->text : "";
+                return decode(cached);
             }
         }
     }
@@ -186,8 +197,14 @@ std::string lastPowerOff(const std::string& stateDir, std::string& log) {
     }
     log = "last power-off: " + text + " (" + regs + "; trigger \"" + report.trigger + "\", type \"" + report.type +
           "\")";
-    std::string json = "{\n  \"boot_id\": \"" + boot + "\",\n  \"text\": \"" + text + "\",\n  \"raw\": \"" + regs +
-                       "; trigger " + report.trigger + "; type " + report.type + "\"\n}\n";
+    // "regs" + "trigger" are what a later start decodes; "text" is for people reading the file
+    std::string regsJson;
+    for (const auto& r : report.regs) {
+        regsJson += (regsJson.empty() ? "" : ", ") + std::string("\"") + r.first + "\": " + std::to_string(r.second);
+    }
+    std::string json = "{\n  \"boot_id\": \"" + boot + "\",\n  \"text\": \"" + text + "\",\n  \"regs\": { " +
+                       regsJson + " },\n  \"trigger\": \"" + report.trigger + "\",\n  \"type\": \"" + report.type +
+                       "\"\n}\n";
     std::string saveError;
     if (!fph::atomicWriteFile(path, json, saveError)) log += "; can't remember it: " + saveError;
     return text;

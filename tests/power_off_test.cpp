@@ -1,8 +1,12 @@
 // T11: the power-off reason decoder (headset/power_off): pure parse + decode against captured kernel lines.
-// Never reads the real journal.
+// Never reads the real journal (the cache test reads only its own temp file and /proc's boot id).
 #include "power_off.h"
 
+#include <unistd.h>
+
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -38,8 +42,8 @@ PonReport normalRestart() {
                      line("PON_WARM_RESET_REASON1 0x02"), line("PON: trigger: Hard reset")});
 }
 
-/** 2026-10-17 12:54 boot: cause not confirmed yet. */
-PonReport unknownBoot() {
+/** 2026-10-17 12:54 boot: Jack shut down normally on 10-15, powered on with the power key. */
+PonReport normalShutdown() {
     return parseAll({line("PON_PON_REASON1 0x80"), line("PON_WARM_RESET_REASON1 0x02"), line("PON_ON_REASON 0x80"),
                      line("PON_POFF_REASON1 0x02"), line("PON_OFF_REASON1 0x00000080"),
                      line("PON_PBS_FAULT_REASON1 0x00000000"), line("PON: type: PON reset seq"),
@@ -66,8 +70,8 @@ void parsesNormalRestart() {
     CHECK(decode(full) == "Normal restart");
 }
 
-void parsesUnknownBoot() {
-    const PonReport r = unknownBoot();
+void parsesNormalShutdown() {
+    const PonReport r = normalShutdown();
     CHECK(r.trigger == "KPDPWR_N");
     CHECK(r.type == "PON reset seq");
     CHECK(r.regs.at("PON_POFF_REASON1") == 0x02);
@@ -78,9 +82,9 @@ void parsesUnknownBoot() {
     // the register's own name is kept whole ("PON_PON_REASON1" holds "PON_" twice)
     CHECK(r.regs.count("PON_PON_REASON1") == 1);
     CHECK(r.regs.count("PON_REASON1") == 0);
-    // not in the table: the raw registers, trigger included
+    // same off registers as the restart; the power-key trigger tells them apart
     CHECK(rawText(r) == "POFF 0x02 OFF 0x80 KPDPWR_N");
-    CHECK(decode(r) == "POFF 0x02 OFF 0x80 KPDPWR_N");
+    CHECK(decode(r) == "Normal shutdown");
     CHECK(decode(r).size() <= 31);
 }
 
@@ -132,6 +136,29 @@ void resultFitsAShortString() {
     CHECK(decode(r).size() <= 31);
 }
 
+// A boot read before a decode row existed: the cached registers are decoded again at start (no journal read), so
+// the new row applies without waiting for the next boot
+void cachedRegistersAreDecodedAgain() {
+    const std::string boot = currentBootId();
+    CHECK(!boot.empty());
+    char dirTemplate[] = "/tmp/fph-poweroff-XXXXXX";
+    const char* dir = mkdtemp(dirTemplate);
+    CHECK(dir != nullptr);
+    if (dir == nullptr || boot.empty()) return;
+    const std::string path = std::string(dir) + "/power_off.json";
+    {
+        std::ofstream f(path);
+        f << "{\n  \"boot_id\": \"" << boot << "\",\n  \"text\": \"POFF 0x02 OFF 0x80 KPDPWR_N\",\n"
+          << "  \"regs\": { \"PON_OFF_REASON1\": 128, \"PON_POFF_REASON1\": 2 },\n"
+          << "  \"trigger\": \"KPDPWR_N\",\n  \"type\": \"PON reset seq\"\n}\n";
+    }
+    std::string log;
+    CHECK(lastPowerOff(dir, log) == "Normal shutdown");
+    CHECK(log.empty());  // the cache was used: no journal read, nothing logged
+    std::remove(path.c_str());
+    rmdir(dir);
+}
+
 void parsesHexCaseAndSpacing() {
     PonReport r;
     CHECK(parseLine(line("PON_POFF_REASON1 0X0A  "), r));
@@ -144,7 +171,8 @@ void parsesHexCaseAndSpacing() {
 
 int main() {
     parsesNormalRestart();
-    parsesUnknownBoot();
+    parsesNormalShutdown();
+    cachedRegistersAreDecodedAgain();
     ignoresOtherLines();
     decodeNeedsTheWholeMatch();
     resultFitsAShortString();
