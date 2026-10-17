@@ -1,4 +1,4 @@
-// 設定ファイル用の小さな JSON パーサ（読み込み専用）。
+// 設定ファイル用の小さな JSON パーサと、書き出し用の文字列エスケープ。
 #pragma once
 
 #include <string>
@@ -43,3 +43,11 @@ struct JsonValue {
  * @return 成功したら true
  */
 bool parseJson(const std::string& source, JsonValue& out, std::string& error);
+
+/**
+ * 文字列を JSON の "..." にする。" と \ に加えて制御文字（0x00-0x1f）も \u00XX にする
+ * （そのまま書くと壊れた JSON になり、次の読み込みに失敗する）。
+ * @param text 文字列（UTF-8。0x20 以上のバイトはそのまま）
+ * @return エスケープ済みの "..."
+ */
+std::string jsonString(const std::string& text);

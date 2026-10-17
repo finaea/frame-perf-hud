@@ -396,20 +396,6 @@ std::string detachedJson(const DetachedPose& pose) {
     return out + "],\n";
 }
 
-/**
- * 文字列を JSON の "..." にする。
- * @param text 文字列
- * @return エスケープ済みの "..."
- */
-std::string jsonString(const std::string& text) {
-    std::string out = "\"";
-    for (const char c : text) {
-        if (c == '"' || c == '\\') out += '\\';
-        out += c;
-    }
-    return out + "\"";
-}
-
 }  // namespace
 
 bool saveConfig(const std::string& path, const Config& config, std::string& error) {

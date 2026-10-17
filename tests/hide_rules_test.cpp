@@ -312,11 +312,30 @@ void testExecKeepsPidButNotVerdict() {
 
 }  // namespace
 
+void testEscapedFieldsRoundTrip() {
+    const std::string nasty = std::string("\t\n\x01") + "\"q\"\\";
+    HideRule rule;
+    rule.name = "n" + nasty;
+    rule.cgroup = "/c" + nasty;
+    rule.note = "note" + nasty;
+    const std::string json = hideRulesToJson({rule});
+    std::vector<HideRule> parsed;
+    std::string error;
+    CHECK(parseHideRules(json, parsed, error));
+    CHECK(parsed.size() == 1);
+    if (parsed.size() == 1) {
+        CHECK(parsed[0].name == rule.name);
+        CHECK(parsed[0].cgroup == rule.cgroup);
+        CHECK(parsed[0].note == rule.note);
+    }
+}
+
 int main(int argc, char** argv) {
     const std::string fixtures = argc > 1 ? argv[1] : "tests/fixtures";
     testGlob();
     testRuleMatches();
     testSeedAndParse();
+    testEscapedFieldsRoundTrip();
     testRefresh();
     testRefreshThrottle();
     testDefaultsAgainstFrameList(fixtures);

@@ -297,3 +297,20 @@ bool parseJson(const std::string& source, JsonValue& out, std::string& error) {
     Parser parser(source);
     return parser.parseDocument(out, error);
 }
+
+std::string jsonString(const std::string& text) {
+    constexpr char kHex[] = "0123456789abcdef";
+    std::string out = "\"";
+    out.reserve(text.size() + 2);
+    for (const unsigned char c : text) {
+        if (c < 0x20) {
+            out += "\\u00";
+            out += kHex[c >> 4];
+            out += kHex[c & 15];
+        } else {
+            if (c == '"' || c == '\\') out += '\\';
+            out += static_cast<char>(c);
+        }
+    }
+    return out + "\"";
+}

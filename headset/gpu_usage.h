@@ -24,14 +24,18 @@ public:
     size_t clientCount() const { return clients_.size(); }
 
 private:
+    friend struct GpuUsageTestAccess;
+
     static constexpr double kRescanSec = 30.0;  ///< /proc を走査し直す間隔（ダッシュボードが開いていると 1 回最大 20ms かかるので長め）
 
     /** 1 つの DRM クライアント（dup された fd は同じ client-id なので 1 つにまとめる）。 */
     struct Client {
         std::string fdinfoPath;  ///< /proc/<pid>/fdinfo/<fd>
         uint64_t lastBusyNs = 0;
+        uint64_t scanBusyNs = 0;
         bool haveLast = false;
-        bool dormant = false;  ///< 走査の時点で一度も GPU を使っていない（次の走査まで読まない）
+        bool dormant = false;   ///< 走査の時点で一度も GPU を使っていない（次の走査まで読まない）
+        bool haveScan = false;  ///< 今回の走査で読んだ値（直後の update() で同じ fdinfo を読み直さない）
     };
 
     std::map<long, Client> clients_;  ///< drm-client-id → クライアント
@@ -39,7 +43,7 @@ private:
     double lastTime_ = -1.0;
 
     /** /proc を走査して /dev/dri/ 以下 を開いている fd を探し直す（前回の値は client-id で引き継ぐ）。 */
-    void rescan();
+    void rescan(const char* procRoot = "/proc");
 
     /**
      * fdinfo を読んで client-id と GPU の働いた時間を取り出す。

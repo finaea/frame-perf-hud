@@ -154,6 +154,24 @@ if(FPH_BUILD_HEADSET)
     INSTALL_RPATH "${OPENVR_LIB_DIR}"
   )
 
+  # Release size (upstream's PR #2, without its -Os): per-function sections so the linker drops what's unused,
+  # plus LTO. On the agent and the static libs it pulls in, or gc/LTO miss most of the code. Not the helper.
+  option(FPH_OPTIMIZE_SIZE "Release headset agent: --gc-sections and LTO" ON)
+  if(FPH_OPTIMIZE_SIZE)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT FPH_IPO_SUPPORTED OUTPUT FPH_IPO_ERROR)
+    if(NOT FPH_IPO_SUPPORTED)
+      message(STATUS "LTO not supported here, --gc-sections only: ${FPH_IPO_ERROR}")
+    endif()
+    foreach(target frame-perf-hud fph-core fph-session fph-render)
+      target_compile_options(${target} PRIVATE "$<$<CONFIG:Release>:-ffunction-sections;-fdata-sections>")
+      if(FPH_IPO_SUPPORTED)
+        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+      endif()
+    endforeach()
+    target_link_options(frame-perf-hud PRIVATE $<$<CONFIG:Release>:-Wl,--gc-sections>)
+  endif()
+
   install(TARGETS frame-perf-hud RUNTIME DESTINATION bin)
 
   # T09: the camera helper. Plain C, no libraries, kept tiny: installed once with sudo (install-camera-helper.sh)
@@ -194,6 +212,14 @@ if(BUILD_TESTING)
   target_link_libraries(core-processes-demand-test PRIVATE fph-core)
   target_compile_options(core-processes-demand-test PRIVATE -Wall -Wextra)
   add_test(NAME core-processes-demand COMMAND core-processes-demand-test)
+
+  # jsonString escaping + round trip through parseJson
+  add_executable(core-json-test tests/core_json_test.cpp)
+  target_link_libraries(core-json-test PRIVATE fph-core)
+  if(NOT MSVC)
+    target_compile_options(core-json-test PRIVATE -Wall -Wextra)
+  endif()
+  add_test(NAME core-json COMMAND core-json-test)
 
   # T04: layout model, JSON round trip, atomic save
   add_executable(core-layout-test tests/core_layout_test.cpp)
@@ -459,6 +485,12 @@ if(BUILD_TESTING)
     target_compile_options(profile-store-test PRIVATE -Wall -Wextra)
     target_link_libraries(profile-store-test PRIVATE fph-core)
     add_test(NAME profile-store COMMAND profile-store-test)
+
+    # GPU usage: fdinfo scan reuse, counter reset, dormant clients (fake /proc tree)
+    add_executable(gpu-usage-test tests/gpu_usage_test.cpp headset/gpu_usage.cpp)
+    target_include_directories(gpu-usage-test PRIVATE headset)
+    target_compile_options(gpu-usage-test PRIVATE -Wall -Wextra)
+    add_test(NAME gpu-usage COMMAND gpu-usage-test)
   endif()
 endif()
 

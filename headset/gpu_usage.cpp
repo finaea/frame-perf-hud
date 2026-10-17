@@ -28,7 +28,7 @@ bool GpuUsage::readFdinfo(const std::string& path, long& clientId, uint64_t& bus
     return true;
 }
 
-void GpuUsage::rescan() {
+void GpuUsage::rescan(const char* procRoot) {
     // 読み慣れた使用中のクライアントは fdinfo を読み直さない（ゲームの fdinfo はドライバがメモリを数えるので
     // 1 回 1.6ms ほどかかる）。fd が別のものに使い回されていたら update() の読み直しで気づいて外れる
     std::map<std::string, long> knownActive;
@@ -37,11 +37,11 @@ void GpuUsage::rescan() {
     }
     std::map<long, Client> found;
     const uid_t me = ::getuid();
-    DIR* proc = ::opendir("/proc");
+    DIR* proc = ::opendir(procRoot);
     if (proc == nullptr) return;
     while (const dirent* entry = ::readdir(proc)) {
         if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
-        const std::string base = std::string("/proc/") + entry->d_name;
+        const std::string base = std::string(procRoot) + '/' + entry->d_name;
         // 他のユーザーの fdinfo は読めないので、自分のプロセスだけ見る
         struct stat st {};
         if (::stat(base.c_str(), &st) != 0 || st.st_uid != me) continue;
@@ -68,6 +68,8 @@ void GpuUsage::rescan() {
             client.fdinfoPath = path;
             // 一度も GPU を使っていないクライアント（49 個中 39 個ほど）は、次の走査まで読み直さない
             client.dormant = busyNs == 0;
+            client.scanBusyNs = busyNs;
+            client.haveScan = true;
             const auto old = clients_.find(clientId);
             if (old != clients_.end() && !old->second.dormant) {
                 // 前から読んでいたクライアントは前回の値を引き継ぐ（差分が途切れないように）
@@ -99,11 +101,16 @@ double GpuUsage::update(double now) {
             ++it;
             continue;
         }
-        long clientId = 0;
-        uint64_t busyNs = 0;
-        if (!readFdinfo(it->second.fdinfoPath, clientId, busyNs) || clientId != it->first) {
-            it = clients_.erase(it);  // 閉じられた（fd 番号が別のものに再利用された場合も含む）
-            continue;
+        // 走査で読んだばかりのクライアントはその値を使う（ゲームの fdinfo は 1 回 1.6ms ほどかかる）
+        uint64_t busyNs = it->second.scanBusyNs;
+        if (it->second.haveScan) {
+            it->second.haveScan = false;
+        } else {
+            long clientId = 0;
+            if (!readFdinfo(it->second.fdinfoPath, clientId, busyNs) || clientId != it->first) {
+                it = clients_.erase(it);  // 閉じられた（fd 番号が別のものに再利用された場合も含む）
+                continue;
+            }
         }
         if (it->second.haveLast && busyNs >= it->second.lastBusyNs) {
             deltaNs += busyNs - it->second.lastBusyNs;
@@ -116,7 +123,7 @@ double GpuUsage::update(double now) {
     const double elapsed = lastTime_ < 0 ? 0.0 : now - lastTime_;
     lastTime_ = now;
     if (!anyDelta || elapsed <= 0.0) return std::numeric_limits<double>::quiet_NaN();
-    // 注: 走査のあいだに新しく GPU を使い始めたクライアントの分は、次の走査（最大 10 秒後）から数える
+    // 注: 走査のあいだに新しく GPU を使い始めたクライアントの分は、次の走査（最大 30 秒後）から数える
     // 目安の値: 複数のクライアントの仕事が GPU 上で重なると合計が経過時間を超えることがあるので 100% で止める
     return std::clamp(100.0 * static_cast<double>(deltaNs) / (elapsed * 1e9), 0.0, 100.0);
 }

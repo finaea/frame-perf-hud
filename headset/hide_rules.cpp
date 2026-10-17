@@ -9,19 +9,6 @@
 #include <fstream>
 #include <iterator>
 
-namespace {
-
-std::string quoted(const std::string& s) {
-    std::string out = "\"";
-    for (const char c : s) {
-        if (c == '"' || c == '\\') out += '\\';
-        out += c;
-    }
-    return out + "\"";
-}
-
-}  // namespace
-
 bool globMatch(const std::string& pattern, const std::string& text) {
     // Iterative, with one backtrack point at the last '*' (enough for '*' and '?')
     size_t p = 0, t = 0, star = std::string::npos, mark = 0;
@@ -107,9 +94,9 @@ std::string hideRulesToJson(const std::vector<HideRule>& rules) {
     for (size_t i = 0; i < rules.size(); ++i) {
         const HideRule& r = rules[i];
         std::string line;
-        if (!r.name.empty()) line += "\"name\": " + quoted(r.name);
-        if (!r.cgroup.empty()) line += (line.empty() ? "" : ", ") + std::string("\"cgroup\": ") + quoted(r.cgroup);
-        if (!r.note.empty()) line += (line.empty() ? "" : ", ") + std::string("\"note\": ") + quoted(r.note);
+        if (!r.name.empty()) line += "\"name\": " + jsonString(r.name);
+        if (!r.cgroup.empty()) line += (line.empty() ? "" : ", ") + std::string("\"cgroup\": ") + jsonString(r.cgroup);
+        if (!r.note.empty()) line += (line.empty() ? "" : ", ") + std::string("\"note\": ") + jsonString(r.note);
         out += "    {" + line + "}" + (i + 1 < rules.size() ? "," : "") + "\n";
     }
     return out + "  ]\n}\n";

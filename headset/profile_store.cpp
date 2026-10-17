@@ -12,23 +12,6 @@ namespace {
 
 constexpr const char* kPrefix = "profile-";
 
-std::string jsonString(const std::string& text) {
-    std::string out = "\"";
-    for (const unsigned char c : text) {
-        if (c == '"' || c == '\\') {
-            out += '\\';
-            out += static_cast<char>(c);
-        } else if (c < 0x20) {
-            char buffer[8];
-            std::snprintf(buffer, sizeof(buffer), "\\u%04x", c);
-            out += buffer;
-        } else {
-            out += static_cast<char>(c);
-        }
-    }
-    return out + "\"";
-}
-
 /** @return N of "profile-N", 0 if the id isn't one */
 int idNumber(const std::string& id) {
     if (id.rfind(kPrefix, 0) != 0 || id.size() == 8 || id.size() > 10) return 0;

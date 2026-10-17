@@ -193,6 +193,22 @@ void testBrokenConfigKeptAsBad() {
     CHECK(readFile(path + ".bad") == original);
 }
 
+// ---- 4. control chars / quotes in the font paths survive save -> load ----
+
+void testFontPathEscaping() {
+    Config config;
+    config.fontPath = std::string("a\tb\nc\x01") + "d";
+    config.boldFontPath = R"(q"uote\back\slash")";
+    const std::string path = tempDir + "/escape.json";
+    std::string error;
+    CHECK(saveConfig(path, config, error));
+    Config loaded;
+    std::vector<std::string> warnings;
+    CHECK(loadConfig(path, loaded, warnings, error));
+    CHECK(loaded.fontPath == config.fontPath);
+    CHECK(loaded.boldFontPath == config.boldFontPath);
+}
+
 int main() {
     char pattern[] = "/tmp/fph-t04-tests/cfg-XXXXXX";
     makeDirectories("/tmp/fph-t04-tests");
@@ -205,6 +221,7 @@ int main() {
     testLoad();
     testKillDuringSave();
     testBrokenConfigKeptAsBad();
+    testFontPathEscaping();
     const std::string cleanup = "rm -rf '" + tempDir + "'";
     if (std::system(cleanup.c_str()) != 0) std::printf("(could not remove %s)\n", tempDir.c_str());
     if (failures == 0) std::printf("config-layout-test: all passed\n");
