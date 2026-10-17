@@ -44,7 +44,6 @@ enum class SourceId : uint8_t {
     CpuLoad,      ///< /proc/stat
     CpuClock,     ///< cpufreq scaling_cur_freq
     GpuClock,     ///< devfreq cur_freq
-    GpuBusy,      ///< DRM fdinfo of own-uid processes
     Ram,          ///< /proc/meminfo
     Temps,        ///< thermal_zone*/temp
     BoardTemps,   ///< vadc iio board temperatures
@@ -118,7 +117,7 @@ constexpr uint16_t kCpuCluster0MaxMhz = 224;  ///< 224-227: scaling_max_freq of 
 constexpr uint16_t kCpuCluster0HwMaxMhz = 228;  ///< 228-231: cpuinfo_max_freq of cluster 0-3 (T04: "capped" = max < this)
 constexpr uint16_t kCpuClusterSlots = 4;
 // GPU & RAM (widget 3)
-constexpr uint16_t kGpuBusyPct = 300;
+constexpr uint16_t kGpuBusyPct = 300;  ///< GPU load (frame GPU ms × app fps), see core/gpu_load.h
 constexpr uint16_t kGpuClockMhz = 301;
 constexpr uint16_t kGpuMaxClockMhz = 302;
 constexpr uint16_t kRamUsedGib = 303;

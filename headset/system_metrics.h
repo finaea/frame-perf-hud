@@ -8,7 +8,7 @@
 #include "sensors.h"
 
 /**
- * Registers a reader for each system source: CpuLoad, CpuClock, GpuClock, GpuBusy, Ram, Temps, BoardTemps,
+ * Registers a reader for each system source: CpuLoad, CpuClock, GpuClock, Ram, Temps, BoardTemps,
  * Throttle, Fan, Power, Battery, Uptime, SelfCost.
  * @param scheduler where to register
  * @param sensors discover() already called; must outlive the scheduler

@@ -49,7 +49,7 @@ struct WidgetContext {
 
 /** Graph history one widget instance keeps between redraws. */
 struct WidgetHistory {
-    History a;  ///< main series (fps, vph W, CPU °C, GPU busy %)
+    History a;  ///< main series (fps, vph W, CPU °C, GPU load %)
     History b;  ///< second series (GPU °C)
     History c;  ///< R2 Frame: worst CPU frame time per read (ms)
     History d;  ///< R2 Frame: worst GPU frame time per read (ms)

@@ -16,7 +16,7 @@ constexpr uint32_t kTick = 500;  // the 2 Hz metrics deadline
 
 // T02: system sensor intervals, from the tech plan's source table (headset agent › sources)
 constexpr uint32_t kCpuMs = 500;      // /proc/stat, cpufreq
-constexpr uint32_t kGpuMs = 1000;     // devfreq clock, DRM fdinfo busy
+constexpr uint32_t kGpuMs = 1000;     // devfreq clock
 constexpr uint32_t kRamMs = 2000;
 constexpr uint32_t kThermalMs = 2000;  // thermal zones, vadc board temps, throttle, fan
 constexpr uint32_t kPowerMs = 2000;    // max34417 updates every 1.5-2 s
@@ -64,7 +64,9 @@ const std::vector<MetricDef> kRegistry = {
     {metric::kCpuCluster0HwMaxMhz + 2, "cpu.cluster2_hw_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
     {metric::kCpuCluster0HwMaxMhz + 3, "cpu.cluster3_hw_max_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
     // GPU & RAM
-    {metric::kGpuBusyPct, "gpu.busy_pct", "%", W::GpuRam, S::GpuBusy, kGpuMs, T::F32},
+    // GPU load = frame GPU ms × app fps, written by the FrameTiming reader (core/gpu_load.h). Its source is FrameTiming,
+    // so a GPU & RAM widget alone keeps frame timing read. Name kept: the link, session logs and old PC apps use it
+    {metric::kGpuBusyPct, "gpu.busy_pct", "%", W::GpuRam, S::FrameTiming, kTick, T::F32},
     {metric::kGpuClockMhz, "gpu.clock_mhz", "MHz", W::GpuRam, S::GpuClock, kGpuMs, T::F32},
     {metric::kGpuMaxClockMhz, "gpu.max_clock_mhz", "MHz", W::GpuRam, S::GpuClock, kGpuMs, T::F32},
     {metric::kRamUsedGib, "ram.used_gib", "GiB", W::GpuRam, S::Ram, kRamMs, T::F32},
@@ -373,7 +375,6 @@ const char* sourceName(SourceId source) {
         case SourceId::CpuLoad: return "cpu_load";
         case SourceId::CpuClock: return "cpu_clock";
         case SourceId::GpuClock: return "gpu_clock";
-        case SourceId::GpuBusy: return "gpu_busy";
         case SourceId::Ram: return "ram";
         case SourceId::Temps: return "temps";
         case SourceId::BoardTemps: return "board_temps";

@@ -100,7 +100,6 @@ if(FPH_BUILD_HEADSET)
     headset/vr_overlay.cpp
     headset/vk_texture.cpp
     headset/settings_panel.cpp
-    headset/gpu_usage.cpp
     headset/wifi_link.cpp
     headset/process_scan.cpp  # T03
     headset/hide_rules.cpp    # R2: Hide system rules (hide_rules.json)
@@ -220,6 +219,14 @@ if(BUILD_TESTING)
     target_compile_options(core-json-test PRIVATE -Wall -Wextra)
   endif()
   add_test(NAME core-json COMMAND core-json-test)
+
+  # gpu.busy_pct from frame timing: formula, registry / demand contract
+  add_executable(core-gpu-load-test tests/core_gpu_load_test.cpp)
+  target_link_libraries(core-gpu-load-test PRIVATE fph-core)
+  if(NOT MSVC)
+    target_compile_options(core-gpu-load-test PRIVATE -Wall -Wextra)
+  endif()
+  add_test(NAME core-gpu-load COMMAND core-gpu-load-test)
 
   # T04: layout model, JSON round trip, atomic save
   add_executable(core-layout-test tests/core_layout_test.cpp)
@@ -348,7 +355,6 @@ if(BUILD_TESTING)
       headset/sensors.cpp
       headset/sensor_math.cpp
       headset/system_metrics.cpp
-      headset/gpu_usage.cpp
       headset/wifi_link.cpp
     )
     target_include_directories(system-sources-test PRIVATE headset core)
@@ -485,12 +491,6 @@ if(BUILD_TESTING)
     target_compile_options(profile-store-test PRIVATE -Wall -Wextra)
     target_link_libraries(profile-store-test PRIVATE fph-core)
     add_test(NAME profile-store COMMAND profile-store-test)
-
-    # GPU usage: fdinfo scan reuse, counter reset, dormant clients (fake /proc tree)
-    add_executable(gpu-usage-test tests/gpu_usage_test.cpp headset/gpu_usage.cpp)
-    target_include_directories(gpu-usage-test PRIVATE headset)
-    target_compile_options(gpu-usage-test PRIVATE -Wall -Wextra)
-    add_test(NAME gpu-usage COMMAND gpu-usage-test)
   endif()
 endif()
 

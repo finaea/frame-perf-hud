@@ -629,7 +629,7 @@ void testIntervals() {
         double sec;
     } plan[] = {
         {SourceId::CpuLoad, 0.5},    {SourceId::CpuClock, 0.5}, {SourceId::GpuClock, 1.0},
-        {SourceId::GpuBusy, 1.0},    {SourceId::Ram, 2.0},      {SourceId::Temps, 2.0},
+        {SourceId::FrameTiming, 0.5}, {SourceId::Ram, 2.0},      {SourceId::Temps, 2.0},
         {SourceId::BoardTemps, 2.0}, {SourceId::Throttle, 2.0}, {SourceId::Fan, 2.0},
         {SourceId::Power, 2.0},      {SourceId::Battery, 2.0},  {SourceId::Uptime, 1.0},
         {SourceId::SelfCost, 2.0},

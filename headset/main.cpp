@@ -6,6 +6,7 @@
 #include "detached.h"  // T05
 #include "draw.h"
 #include "dump_metrics.h"  // T03
+#include "gpu_load.h"
 #include "grid_renderer.h"  // T04
 #include "i18n.h"
 #include "json.h"  // T04: --layout
@@ -392,8 +393,8 @@ void printSample(const SensorSample& s) {
     std::printf("  CPU      usage %s%% (max core %s%%)  fastest cluster %s MHz  big core %s MHz\n",
                 fmt(s.cpuUsagePct, 1).c_str(), fmt(s.cpuMaxCorePct, 1).c_str(), fmt(s.cpuFreqMHz, 0).c_str(),
                 fmt(s.cpuBigFreqMHz, 0).c_str());
-    std::printf("  GPU      busy %s%% (estimate)  %s MHz (max %s MHz)\n", fmt(s.gpuBusyPct, 1).c_str(),
-                fmt(s.gpuFreqMHz, 0).c_str(), fmt(s.gpuMaxFreqMHz, 0).c_str());
+    // No GPU load here: it comes from SteamVR's frame timing, which --print doesn't read
+    std::printf("  GPU      %s MHz (max %s MHz)\n", fmt(s.gpuFreqMHz, 0).c_str(), fmt(s.gpuMaxFreqMHz, 0).c_str());
     std::printf("  Temp     CPU %s °C  GPU %s °C  DDR %s °C  battery %s °C\n", fmt(s.cpuTempC, 1).c_str(),
                 fmt(s.gpuTempC, 1).c_str(), fmt(s.ddrTempC, 1).c_str(), fmt(s.batteryTempC, 1).c_str());
     std::printf("           display %s °C  exhaust %s °C  heatsink %s °C   thermal limit CPU %s / GPU %s\n",
@@ -490,6 +491,7 @@ void storeFakeFrame(fph::MetricStore& st, const FrameStats& f, double now) {
     st.setI32(kFrameDropped, static_cast<int32_t>(f.dropped), now);
     st.setEnum(kFrameThrottled, static_cast<uint32_t>(f.throttledFrames), now);
     st.setI32(kFrameCount, static_cast<int32_t>(f.frames), now);
+    st.setF32(kGpuBusyPct, fph::estimateGpuLoadPct(f.gpuMs, f.appFps), now);
 }
 
 /** Fake controller batteries (left charging). low = the low-battery picture (right hand not connected). */

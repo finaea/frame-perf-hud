@@ -28,7 +28,7 @@ struct WidgetText {
     const char* maxCore;  ///< followed by %
     const char* capped;   ///< cluster clock capped below the hardware max (Playtime); followed by that max (GHz)
     // GPU & RAM
-    const char* gpuBusyEstimate;
+    const char* gpuLoad;  ///< after the big %: frame GPU ms × app fps, not the whole GPU (core/gpu_load.h)
     const char* clock;
     const char* ram;
     // Power

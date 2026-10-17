@@ -73,7 +73,7 @@ const std::vector<ContrastPair>& contrastPairs() {
         {"Perf panel: throttled badge text (yellow fill)", kOnAccent, kWarn, ContrastKind::Text},
         {"Perf panel: thermal throttle badge text (red fill)", kOnAccent, kDanger, ContrastKind::Text},
         {"Perf panel: fps / power / CPU temp line (graph bg)", kAccent, kBg, ContrastKind::Ui},
-        {"Perf panel: fps line (over GPU usage fill)", kAccent, kGpuFill, ContrastKind::Ui},
+        {"Perf panel: fps line (over GPU load fill)", kAccent, kGpuFill, ContrastKind::Ui},
         {"Perf panel: GPU temp line (graph bg)", kGpu, kBg, ContrastKind::Ui},
         {"Perf panel: yellow threshold line (graph bg)", kWarn, kBg, ContrastKind::Ui},
         {"Perf panel: red threshold line (graph bg)", kDanger, kBg, ContrastKind::Ui},

@@ -19,7 +19,7 @@ struct Thresholds {
     double powerCritW = 16.0;
     double cpuWarnPct = 85.0;      ///< CPU load (busiest core, %)
     double cpuCritPct = 97.0;
-    double gpuWarnPct = 85.0;      ///< GPU busy estimate (%)
+    double gpuWarnPct = 85.0;      ///< GPU load (%): frame GPU ms × app fps
     double gpuCritPct = 95.0;
     double wifiWarnDbm = -70.0;    ///< link signal (dBm); at or below this it changes colour
     double wifiCritDbm = -78.0;

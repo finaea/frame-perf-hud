@@ -52,7 +52,7 @@ captured inside the headset. The numbers are sample values.
 |---|---|---|---|
 | Frame | The app's frame rate and the display refresh rate (e.g. `72 fps / 72Hz`) | Reprojection ratio and dropped frames. CPU and GPU frame time (average and worst) | Frame rate with the refresh rate as a dotted line, and below it CPU and GPU frame-time graphs (the worst frame of each half second) against a dotted frame budget. A yellow badge shows when SteamVR holds the app at half (or a third) of the refresh rate |
 | CPU | Overall load and the busiest core | One bar per core, the clock of each cluster, and a note when a cluster is capped below its hardware maximum | |
-| GPU & RAM | GPU load (an estimate) | GPU clock and maximum, memory used and total | GPU load |
+| GPU & RAM | GPU load: the GPU time per frame SteamVR measures × the app's frame rate (see below) | GPU clock and maximum, memory used and total | GPU load |
 | Power | Power drawn from the main supply rail (W) | Its voltage, the sum of the measured rails, then every rail with its power and voltage, and what no rail accounts for | Main rail power |
 | Battery | The battery's real gauge percentage | Power flowing in or out, charge and capacity, time to full or empty, health and cycles, the charger's mode and charge current, and with a USB-C charger what it offers against what arrives | |
 | Temp | CPU temperature (hottest core) | GPU, memory, battery, NPU, cameras, video block, display, exhaust, heat sink and four board spots, fan speed | CPU and GPU, with the warning threshold. A red badge appears while heat throttles the CPU or GPU |
@@ -65,6 +65,11 @@ captured inside the headset. The numbers are sample values.
 | Eye camera | | The eye cameras, live. Needs the camera helper | |
 
 Numbers over a threshold turn yellow, then red past a second one. The thresholds are in the settings file.
+
+**GPU load** counts only the VR app and the SteamVR compositor, not other programs using the GPU, so it isn't the
+GPU usage of the whole headset. It's capped at 100 % when GPU work overlaps, and shows N/A while no app is
+submitting frames. The kernel's per-process GPU counters aren't used: on SteamOS 0.5.6 they're broken or miss most
+of a heavy game's work. Half-Life: Alyx at 72 Hz (58.6 fps, 16.5 ms) reads about 97 %.
 
 ![Warning colours (sample values)](docs/images/panel-warnings-en.png)
 

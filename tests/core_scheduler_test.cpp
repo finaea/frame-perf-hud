@@ -25,7 +25,7 @@ using S = SourceId;
 const std::vector<MetricDef> kDefs = {
     {1, "cpu.a", "", W::Cpu, S::CpuLoad, 500, WireType::F32},
     {2, "cpu.items", "", W::CpuItems, S::CpuLoad, 1000, WireType::F32},
-    {3, "gpu.busy", "", W::GpuRam, S::GpuBusy, 2000, WireType::F32},
+    {3, "gpu.busy", "", W::GpuRam, S::GpuClock, 2000, WireType::F32},
     {4, "ram.used", "", W::GpuRam, S::Ram, 2000, WireType::F32},
     {5, "ram.total", "", W::GpuRam, S::Ram, 1000, WireType::F32},
 };
@@ -46,7 +46,7 @@ struct Rig {
             c.lastCpuResumed = resumed;
             c.cpuResumed.push_back(resumed);
         });
-        sched.addSource(S::GpuBusy, [this](double, bool) { ++c.gpu; });
+        sched.addSource(S::GpuClock, [this](double, bool) { ++c.gpu; });
         sched.addSource(S::Ram, [this](double, bool) { ++c.ram; });
     }
     /** Runs the scheduler on a 500 ms tick for the given number of ticks. */
@@ -76,7 +76,7 @@ void testEnableDisable() {
     r.look();
     r.sched.setEnabledWidgets({W::Cpu});
     CHECK(r.sched.refCount(S::CpuLoad) == 1);
-    CHECK(r.sched.refCount(S::GpuBusy) == 0);
+    CHECK(r.sched.refCount(S::GpuClock) == 0);
     r.run(4);
     CHECK(r.c.cpu == 4);  // 500 ms source, 500 ms ticks
     CHECK(r.sched.readCount(S::CpuLoad) == 4);
@@ -170,7 +170,7 @@ void testResumed() {
 void testIntervals() {
     Rig r;
     CHECK(std::fabs(r.sched.interval(S::CpuLoad) - 0.5) < 1e-9);  // shortest of 500 / 1000
-    CHECK(std::fabs(r.sched.interval(S::GpuBusy) - 2.0) < 1e-9);
+    CHECK(std::fabs(r.sched.interval(S::GpuClock) - 2.0) < 1e-9);
     CHECK(std::fabs(r.sched.interval(S::Ram) - 1.0) < 1e-9);       // shortest of 2000 / 1000
     CHECK(r.sched.interval(S::Fan) == 0.0);                        // no metric uses it
 
@@ -311,7 +311,7 @@ void testPinnedSourceReadsWithNobodyLooking() {
     Rig r;  // no widgets, no demand at all
     r.sched.setPinnedSources({S::CpuLoad});
     CHECK(r.sched.refCount(S::CpuLoad) == 1);
-    CHECK(r.sched.refCount(S::GpuBusy) == 0);
+    CHECK(r.sched.refCount(S::GpuClock) == 0);
     CHECK(r.sched.refCount(S::Ram) == 0);
     r.run(4);
     CHECK(r.c.cpu == 4);  // its own 500 ms interval
@@ -344,14 +344,14 @@ void testPinDoesNotMakeAnyoneLooking() {
     r.sched.setEnabledWidgets({W::Cpu, W::GpuRam});
     r.sched.setPinnedSources({S::CpuLoad});
     CHECK(r.sched.refCount(S::CpuLoad) == 1);  // the pin only; the widget isn't counted while nobody looks
-    CHECK(r.sched.refCount(S::GpuBusy) == 0);
+    CHECK(r.sched.refCount(S::GpuClock) == 0);
     CHECK(r.sched.refCount(S::Ram) == 0);
     r.run(4);
     CHECK(r.c.cpu == 4 && r.c.gpu == 0 && r.c.ram == 0);
 
     r.look();  // now the widgets count, and the pin stacks on top
     CHECK(r.sched.refCount(S::CpuLoad) == 2);
-    CHECK(r.sched.refCount(S::GpuBusy) == 1);
+    CHECK(r.sched.refCount(S::GpuClock) == 1);
     r.sched.setPinnedSources({});
     CHECK(r.sched.refCount(S::CpuLoad) == 1);
     r.sched.setDemand(DemandInputs {});

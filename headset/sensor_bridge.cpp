@@ -1,5 +1,6 @@
 #include "sensor_bridge.h"
 
+#include "gpu_load.h"
 #include "system_metrics.h"
 #include "vr_overlay.h"
 
@@ -67,7 +68,7 @@ void SensorBridge::readFrameTiming(double now) {
     static constexpr uint16_t kIds[] = {
         metric::kFrameAppFps,   metric::kFrameDisplayHz,      metric::kFrameGpuMs,   metric::kFrameCpuMs,
         metric::kFrameGpuMaxMs, metric::kFrameCpuMaxMs,       metric::kFrameReprojectedPct,
-        metric::kFrameDropped,  metric::kFrameThrottled,      metric::kFrameCount,
+        metric::kFrameDropped,  metric::kFrameThrottled,      metric::kFrameCount,   metric::kGpuBusyPct,
     };
     // Batched: VrOverlay::readFrameStats aggregates every frame since the previous call
     const FrameStats f = vr_ != nullptr ? vr_->readFrameStats() : FrameStats();
@@ -87,6 +88,9 @@ void SensorBridge::readFrameTiming(double now) {
     store_.setF32(metric::kFrameCpuMs, f.haveTimes ? f.cpuMs : kNoValue, now, noTimes);
     store_.setF32(metric::kFrameGpuMaxMs, f.haveTimes ? f.gpuMaxMs : kNoValue, now, noTimes);
     store_.setF32(metric::kFrameCpuMaxMs, f.haveTimes ? f.cpuMaxMs : kNoValue, now, noTimes);
+    // GPU load (upstream 187252c): the fdinfo counters it came from are broken on SteamOS 0.5.6
+    store_.setF32(metric::kGpuBusyPct, f.haveTimes ? fph::estimateGpuLoadPct(f.gpuMs, f.appFps) : kNoValue, now,
+                  noTimes);
 }
 
 void SensorBridge::readControllers(double now) {
@@ -116,7 +120,6 @@ SensorSample SensorBridge::sample() const {
     s.cpuBigFreqMHz = f(metric::kCpuBigCoreClockMhz);
     s.gpuFreqMHz = f(metric::kGpuClockMhz);
     s.gpuMaxFreqMHz = f(metric::kGpuMaxClockMhz);
-    s.gpuBusyPct = f(metric::kGpuBusyPct);
     s.cpuTempC = f(metric::kTempCpuC);
     s.gpuTempC = f(metric::kTempGpuC);
     s.ddrTempC = f(metric::kTempDdrC);

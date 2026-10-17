@@ -545,10 +545,6 @@ void Sensors::readGpuClock(SensorSample& sample) {
     sample.gpuMaxFreqMHz = gpuMaxFreqMHz_;
 }
 
-void Sensors::readGpuBusy(SensorSample& sample, double now) {
-    sample.gpuBusyPct = gpuUsage_.update(now);
-}
-
 void Sensors::readThermal(SensorSample& sample) {
     long long v = 0;
     sample.cpuTempC = maxTempC(cpuTemps_);

@@ -27,7 +27,7 @@ const WidgetText& widgetText() {
         "max core ",
         "capped from ",
         // GPU & RAM
-        "busy (estimate)",
+        "load",
         "Clock ",
         "RAM ",
         // Power

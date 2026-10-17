@@ -624,7 +624,7 @@ void drawGpuRam(const Pen& pen, double x, double y, const WidgetContext& ctx, co
     if (ok(ctx, kGpuBusyPct)) {
         const double w = drawBigValue(pen, cx + 14, top + 52, num(busy, 0), "%",
                                       colorOf(levelOf(busy, th.gpuWarnPct, th.gpuCritPct)));
-        pen.text(cx + 14 + w + 6, top + 52, t.gpuBusyEstimate, 13, kTextMuted);
+        pen.text(cx + 14 + w + 6, top + 52, t.gpuLoad, 13, kTextMuted);
     } else {
         drawBigValue(pen, cx + 14, top + 52, "--", "%", kTextMuted);
         pen.text(cx + 14 + 60, top + 52, naText(ctx, kGpuBusyPct), 12, kTextMuted);

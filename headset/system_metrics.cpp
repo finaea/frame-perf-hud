@@ -226,16 +226,6 @@ void registerSystemSources(fph::Scheduler& scheduler, Sensors& sensors, fph::Met
         st.setF32(metric::kGpuClockMhz, s.gpuFreqMHz, now);
         st.setF32(metric::kGpuMaxClockMhz, s.gpuMaxFreqMHz, now);
     });
-    scheduler.addSource(SourceId::GpuBusy, [&st, &se](double now, bool resumed) {
-        SensorSample s;
-        se.readGpuBusy(s, now);
-        // A delta too: the first value after a pause would be the average over the pause
-        if (resumed) {
-            st.setNa(metric::kGpuBusyPct, Reason::NotSampledYet, now);
-        } else {
-            st.setF32(metric::kGpuBusyPct, s.gpuBusyPct, now);
-        }
-    });
     scheduler.addSource(SourceId::Ram, [&st, &se](double now, bool) {
         SensorSample s;
         se.readMemory(s);

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **GPU load replaces GPU usage.** On SteamOS 0.5.6 (kernel 6.18) the kernel's GPU counter that GPU usage came from
+  (`drm-engine-gpu` in DRM fdinfo) is broken and grows by months per second, so GPU usage sat at 100 %. Its
+  neighbour `drm-cycles-gpu` misses most of a heavy game (about 4 % in Half-Life: Alyx). GPU & RAM now shows GPU
+  load instead: the GPU time per frame SteamVR measures × the app's frame rate, capped at 100 %. It counts the VR
+  app and the compositor only, and is N/A while no app submits frames. The metric (`gpu.busy_pct`) and the
+  `gpu_warn_pct` / `gpu_crit_pct` thresholds keep their names, so session logs and older PC apps still read it.
+  Ported from frame-perf-overlay (sasaken1102r, `187252c`).
+- The fdinfo reader is gone, and with it a `/proc` scan of up to 20 ms every 30 s. `--print` no longer shows a GPU
+  figure, since it doesn't read SteamVR.
+
 ## 0.4.0 — 2026-10-17
 
 The first release of frame-perf-hud. It's a fork of

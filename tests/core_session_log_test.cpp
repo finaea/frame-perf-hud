@@ -1317,7 +1317,29 @@ void columnStatsEmptyMerge() {
 
 }  // namespace
 
+// gpu.busy_pct (now written by the FrameTiming reader) stays a session-log column and carries its value
+void gpuLoadColumnKeepsValue() {
+    const std::vector<LogColumn>& all = sessionLogColumns();
+    size_t at = all.size();
+    for (size_t i = 0; i < all.size(); ++i) {
+        if (all[i].id == metric::kGpuBusyPct) at = i;
+    }
+    CHECK(at < all.size());
+    if (at == all.size()) return;
+    CHECK(all[at].kind == LogKind::Gauge);
+    CHECK(all[at].histMax == 100.0f);
+
+    MetricStore store;
+    CHECK(std::isnan(sampleColumns(store, all, 10.0)[at]));  // not sampled yet
+    store.setF32(metric::kGpuBusyPct, 96.5, 10.0);
+    CHECK(near(sampleColumns(store, all, 10.5)[at], 96.5));
+    CHECK(std::isnan(sampleColumns(store, all, 14.0)[at]));  // the source stopped: a gap, not the last value
+    store.setNa(metric::kGpuBusyPct, Reason::NoFrames, 15.0);
+    CHECK(std::isnan(sampleColumns(store, all, 15.0)[at]));
+}
+
 int main() {
+    gpuLoadColumnKeepsValue();
     detourMergesIntoOneSession();
     twoGamesAreTwoSessions();
     endAllEndsParkedThenCurrent();

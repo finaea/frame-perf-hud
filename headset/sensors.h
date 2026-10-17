@@ -1,7 +1,6 @@
 // /proc と /sys からの読み取り（読むだけ。書き込みは一切しない）。
 #pragma once
 
-#include "gpu_usage.h"
 #include "sensor_math.h"
 #include "wifi_link.h"
 
@@ -43,7 +42,6 @@ struct SensorSample {
     // GPU
     double gpuFreqMHz = kNoValue;
     double gpuMaxFreqMHz = kNoValue;
-    double gpuBusyPct = kNoValue;      ///< GPU 使用率の目安（DRM fdinfo の drm-engine-gpu から）
     // 温度（℃）
     double cpuTempC = kNoValue;        ///< cpu*-thermal / cpuss*-thermal の最大
     double gpuTempC = kNoValue;        ///< gpuss-*-thermal の最大
@@ -136,8 +134,6 @@ public:
     void readCpuClocks(SensorSample& sample);
     /** devfreq → gpuFreqMHz, gpuMaxFreqMHz. */
     void readGpuClock(SensorSample& sample);
-    /** DRM fdinfo → gpuBusyPct (a delta since the previous call). */
-    void readGpuBusy(SensorSample& sample, double now);
     /** /proc/meminfo → memUsedGiB, memTotalGiB. */
     void readMemory(SensorSample& sample);
     /** thermal_zone → cpuTempC, gpuTempC, ddrTempC, npuTempC, cameraTempC, videoTempC. */
@@ -195,7 +191,6 @@ private:
     Source displayTemp_, exhaustTemp_, heatsinkTemp_;  ///< iio の温度（m℃）
     std::vector<Source> cpuCooling_;                   ///< cooling_device（cpufreq-cpu*）の cur_state
     std::vector<Source> gpuCooling_;                   ///< cooling_device（devfreq-*gpu）の cur_state
-    GpuUsage gpuUsage_;
     WifiLink wifiLink_;
 
     sensor_math::CpuTicks prevCpu_;    ///< /proc/stat の前回値（[0] が全体、以降コアごと）
