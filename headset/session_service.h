@@ -29,10 +29,13 @@ public:
     void start(bool crashRecorder, fph::MetricStore& store, double now);
 
     /**
-     * Call every loop pass; it acts once a second.
+     * Call every loop pass; it acts once per clock second, on the first pass in it.
      * @param looking someone is looking (only then are the columns sampled: a paused source is a gap, not data)
      */
     void tick(double now, bool looking, const fph::SessionInfo& session, const fph::MetricStore& store);
+    /** tick() with the clock second given (tests drive it with their own). */
+    void tickAt(double now, int64_t unixNow, bool looking, const fph::SessionInfo& session,
+                const fph::MetricStore& store);
 
     /** Record on / off (Record also counts as someone looking: the caller puts it in the demand). */
     void setRecord(bool on, const fph::SessionInfo& session, double now);
@@ -64,7 +67,6 @@ private:
     int64_t recordStartUnix_ = 0;
     crashrec::CrashRecorder crash_;
     LogsUiState ui_;
-    double lastTick_ = -1e9;
     int64_t lastUnix_ = 0;
     std::vector<std::string> hudCard_;
     double hudCardUntil_ = 0;

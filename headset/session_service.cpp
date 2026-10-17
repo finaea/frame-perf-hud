@@ -69,9 +69,13 @@ std::vector<fph::SourceId> SessionService::pinnedSources() const {
 }
 
 void SessionService::tick(double now, bool looking, const fph::SessionInfo& session, const fph::MetricStore& store) {
-    if (now - lastTick_ < 0.95) return;  // the loop's 2 Hz tick: every other pass
-    lastTick_ = now;
-    const int64_t unixNow = static_cast<int64_t>(std::time(nullptr));
+    tickAt(now, static_cast<int64_t>(std::time(nullptr)), looking, session, store);
+}
+
+void SessionService::tickAt(double now, int64_t unixNow, bool looking, const fph::SessionInfo& session,
+                            const fph::MetricStore& store) {
+    // Once per clock second, on the first loop pass in it. The loop passes at least twice a second, so every second
+    // gets its row even when passes run late; the old 0.95 s stopwatch gate skipped every other second then
     if (unixNow == lastUnix_) return;
     lastUnix_ = unixNow;
     log_.observe(session, unixNow);
