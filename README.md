@@ -16,12 +16,13 @@ room, where it can also be curved around the viewer.
 Everything is set from a **Frame Perf HUD** tab in the SteamVR dashboard, with four pages: Placement, Layout,
 Profiles and Logs.
 
-<!-- dashboard pages, to add once taken on the Frame with this version (see "Development"):
-![The Logs page of the dashboard tab](docs/images/dashboard-logs-en.png)
-![The Layout page of the dashboard tab](docs/images/dashboard-layout-en.png)
-![The Profiles page of the dashboard tab](docs/images/dashboard-profiles-en.png)
 ![The Placement page of the dashboard tab](docs/images/dashboard-placement-en.png)
--->
+
+![The Layout page of the dashboard tab](docs/images/dashboard-layout-en.png)
+
+![The Profiles page of the dashboard tab (sample profiles)](docs/images/dashboard-profiles-en.png)
+
+![The Logs page of the dashboard tab (sample values)](docs/images/dashboard-logs-en.png)
 
 ![The Windows app](docs/images/pc-window-layout.png)
 
@@ -387,10 +388,11 @@ The images in this README come from the apps themselves:
 # On the headset (or any Linux build with the headset parts), without SteamVR
 ./build/frame-perf-hud --dump-png panel.png --seconds 30 --fake-frames
 ./build/frame-perf-hud --dump-png warnings.png --seconds 30 --fake-warnings --fake-throttle
-./build/frame-perf-hud --dump-settings-png dashboard-layout-en.png --preview-page layout
-./build/frame-perf-hud --dump-settings-png dashboard-profiles-en.png --preview-page profiles
-./build/frame-perf-hud --dump-settings-png dashboard-logs-en.png --preview-page logs
-./build/frame-perf-hud --dump-settings-png dashboard-placement-en.png --preview-page placement
+# the dashboard pages with default settings (a --config path that doesn't exist means defaults)
+./build/frame-perf-hud --config /tmp/none.json --dump-settings-png dashboard-placement-en.png --preview-page placement
+./build/frame-perf-hud --config /tmp/none.json --dump-settings-png dashboard-layout-en.png --preview-page layout
+./build/frame-perf-hud --config /tmp/none.json --dump-settings-png dashboard-profiles-en.png --preview-page profiles
+./build/frame-perf-hud --config /tmp/none.json --dump-settings-png dashboard-logs-en.png --preview-page logs
 ```
 
 ```bat
