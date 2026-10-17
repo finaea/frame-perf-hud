@@ -199,6 +199,26 @@ void drawCheck(cairo_t* cr, double cx, double cy, double s, Color c);
  */
 void drawDisc(cairo_t* cr, double cx, double cy, double r, Color c);
 
+/** R3: one part of a segmented pill. */
+struct PillPart {
+    std::string label;
+    bool pressed = false;  ///< held down (the selected part fills darker)
+    bool hovered = false;
+};
+
+/**
+ * R3: the dashboard's segmented pill (Autostart On | Off, Record, ...), shared by the dashboard and both layout
+ * editors so every toggle looks the same: a bordered pill, the parts splitting its width evenly (that's also each
+ * part's hit area), the selected part filled in the accent with a ✓.
+ * @param parts left to right
+ * @param selected index of the selected part (-1 = none)
+ * @param usable false = drawn faded, no border
+ * @param size label size (shrinks to fit)
+ * @param scale insets and the border × this (the PC's DPI scale; 1 on the headset)
+ */
+void drawSegmentedPill(const Pen& pen, double x, double y, double w, double h, const std::vector<PillPart>& parts,
+                       int selected, bool usable, double size = 24, double scale = 1.0);
+
 /**
  * cairo の画像（乗算済み ARGB）を OpenVR 用の非乗算済み RGBA に変換する。
  * @param surface cairo の画像（CAIRO_FORMAT_ARGB32）

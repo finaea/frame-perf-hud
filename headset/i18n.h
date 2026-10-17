@@ -139,13 +139,16 @@ struct UiText {
     const char* detachedHint;        ///< Detached: how to move it with the laser
     const char* roomNotPlaced;       ///< Detached: no pose yet
     const char* rowCurve;            ///< R2 Detached: the curvature row
-    const char* curveSteps[4];       ///< R2 Detached: Config::detachedCurve 0..3 (flat → strong)
     const char* editorTitle;         ///< layout card title
     const char* editorHint;          ///< layout card hint
     const char* editorNewColumn;     ///< the empty lane on the right
     const char* editorDropToRemove;  ///< palette card while a widget is dragged over it
     const char* paletteTitle;        ///< palette card title
     const char* paletteNetwork;      ///< palette chip for Network (the cards name the adapter)
+    const char* paletteCpuItems;     ///< R3: short palette chip labels (the full titles shrank unreadably)
+    const char* paletteRamItems;
+    const char* paletteHeadsetCamera;
+    const char* paletteEyeCamera;
     const char* paletteSoon;         ///< a palette chip that isn't available yet
     const char* selectedNone;        ///< no widget selected
     const char* noSettings;          ///< the selected widget has no settings

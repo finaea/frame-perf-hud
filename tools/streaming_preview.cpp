@@ -69,24 +69,33 @@ int main(int argc, char** argv) {
             if (scenario == 3)
                 setPcStreamNa(store, Reason::NoSteamVr, 1);
         }
-        Layout layout;
-        layout.columns.resize(1);
-        WidgetInstance w;
-        w.type = WidgetType::Streaming;
-        layout.columns[0].widgets = {w};
-        GridRenderer renderer(fonts);
-        renderer.setLayout(layout);
-        WidgetContext ctx;
-        ctx.store = &store;
-        ctx.now = 1;
-        renderer.render(ctx);
-        const char* names[] = {"streaming-no-pc.png", "streaming-simulated.png", "streaming-mismatch.png",
-                               "streaming-no-steamvr.png"};
-        const auto path = (std::filesystem::u8path(argv[1]) / names[scenario]).u8string();
-        if (!renderer.writePng(path))
-            return 1;
-        std::printf("Wrote simulated preview %s card=%d panel=%d\n", path.c_str(), renderer.geometry().slots[0].h,
-                    renderer.geometry().height);
+        for (unsigned compact = 0; compact < 2; ++compact) {  // R3: the full card and the Compact one
+            Layout layout;
+            layout.columns.resize(1);
+            WidgetInstance w;
+            w.type = WidgetType::Streaming;
+            w.compact = compact != 0;
+            layout.columns[0].widgets = {w};
+            GridRenderer renderer(fonts);
+            renderer.setLayout(layout);
+            WidgetContext ctx;
+            ctx.store = &store;
+            ctx.now = 1;
+            renderer.render(ctx);
+            const char* names[] = {"streaming-no-pc", "streaming-simulated", "streaming-mismatch",
+                                   "streaming-no-steamvr"};
+            const std::string stem = std::string(names[scenario]) + (compact ? "-compact" : "");
+            const auto path = (std::filesystem::u8path(argv[1]) / (stem + ".png")).u8string();
+            if (!renderer.writePng(path))
+                return 1;
+            pc::PanelView panel(fonts);
+            panel.setLayout(layout);
+            const auto pcPath = (std::filesystem::u8path(argv[1]) / (stem + "-pc.png")).u8string();
+            if (cairo_surface_write_to_png(panel.render(ctx, 1), pcPath.c_str()) != CAIRO_STATUS_SUCCESS)
+                return 1;
+            std::printf("Wrote simulated preview %s card=%d panel=%d PC=%d\n", path.c_str(),
+                        renderer.geometry().slots[0].h, renderer.geometry().height, panel.geometry().height);
+        }
     }
     for (unsigned plugged = 0; plugged < 2; ++plugged) {
         MetricStore store;

@@ -2,6 +2,8 @@
 #define _USE_MATH_DEFINES  // M_PI on MSVC (the PC app builds core/ too)
 #include "draw.h"
 
+#include "theme.h"  // R3: the segmented pill's colours
+
 #include <cairo-ft.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -195,6 +197,47 @@ void drawDisc(cairo_t* cr, double cx, double cy, double r, Color c) {
     cairo_new_sub_path(cr);
     cairo_arc(cr, cx, cy, r, 0, 2 * M_PI);
     cairo_fill(cr);
+}
+
+void drawSegmentedPill(const Pen& pen, double x, double y, double w, double h, const std::vector<PillPart>& parts,
+                       int selected, bool usable, double size, double scale) {
+    if (parts.empty()) return;
+    cairo_t* cr = pen.cr;
+    const double r = h / 2;
+    // 地のピル。押せるときは枠（3:1 以上）で部品の形を見せる。押せないときは枠なし
+    pen.color(kControl);
+    pen.roundedRect(x, y, w, h, r);
+    cairo_fill(cr);
+    if (usable) strokeRounded(pen, x, y, w, h, r, kBorder, 2 * scale);
+
+    const double inset = 5 * scale;
+    const double part = (w - inset * 2) / static_cast<double>(parts.size());
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const double sx = x + inset + part * static_cast<double>(i);
+        const double sy = y + inset;
+        const double sh = h - inset * 2;
+        const bool pressed = usable && parts[i].pressed;
+        const bool hovered = usable && parts[i].hovered;
+        const bool isSelected = selected == static_cast<int>(i);
+        if (isSelected) {
+            // 選択中の部分: アクセントの塗り（押している間は少し濃く）＋ ✓ ＋ 太字。押せないときは薄く残す
+            pen.color(pressed ? kAccentPressed : kAccent, usable ? 1.0 : 0.35);
+            pen.roundedRect(sx, sy, part, sh, sh / 2);
+            cairo_fill(cr);
+        } else if (pressed || hovered) {
+            pen.color(kControlHover);
+            pen.roundedRect(sx, sy, part, sh, sh / 2);
+            cairo_fill(cr);
+        }
+        const std::string& label = parts[i].label;
+        const Color textColor = !usable ? kTextDisabled : (isSelected ? kOnAccent : kText);
+        const double checkW = isSelected ? size * 0.9 : 0;
+        const double labelSize = fitSize(pen, label, size, size * 0.7, part - 20 * scale - checkW, isSelected);
+        const double textW = pen.measure(label, labelSize, isSelected) + checkW;
+        const double tx = sx + (part - textW) / 2;
+        if (isSelected) drawCheck(cr, tx + checkW * 0.4, sy + sh / 2, size * 0.72, usable ? kOnAccent : kTextDisabled);
+        pen.text(tx + checkW, centerBaseline(sy, sh, labelSize), label, labelSize, textColor, isSelected);
+    }
 }
 
 void surfaceToRgba(cairo_surface_t* surface, std::vector<uint8_t>& out) {

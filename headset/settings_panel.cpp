@@ -297,7 +297,7 @@ bool sameDisplaySettings(const Config& a, const Config& b) {
            a.rollDeg == b.rollDeg && !(a.leftWrist != b.leftWrist) && !(a.rightWrist != b.rightWrist) &&
            a.wristFade == b.wristFade && a.wristFadeEndDeg == b.wristFadeEndDeg && a.clockFormat == b.clockFormat &&
            a.widthM == b.widthM && a.alpha == b.alpha && a.detachedPose == b.detachedPose &&
-           a.detachedCurve == b.detachedCurve &&  // R2
+           a.detachedCurveDeg == b.detachedCurveDeg &&  // R3
            a.crashRecorder == b.crashRecorder;  // T11
 }
 
@@ -439,11 +439,11 @@ bool applySettingsAction(SettingsAction action, Config& config, double angleStep
         case SettingsAction::FadeAngleUp:
             config.wristFadeEndDeg = std::clamp(config.wristFadeEndDeg + kFadeAngleStepDeg, 35.0, 90.0);
             break;
-        case SettingsAction::CurveDown:  // R2
-            config.detachedCurve = std::clamp(config.detachedCurve - 1, 0, kDetachedCurveSteps - 1);
+        case SettingsAction::CurveDown:  // R3: 10° steps, 0..90°
+            config.detachedCurveDeg = clampCurveDeg(config.detachedCurveDeg - kDetachedCurveStepDeg);
             break;
         case SettingsAction::CurveUp:
-            config.detachedCurve = std::clamp(config.detachedCurve + 1, 0, kDetachedCurveSteps - 1);
+            config.detachedCurveDeg = clampCurveDeg(config.detachedCurveDeg + kDetachedCurveStepDeg);
             break;
         case SettingsAction::SizeDown: config.widthM = std::clamp(roundMm(config.widthM - 0.02), 0.06, 1.0); break;
         case SettingsAction::SizeUp: config.widthM = std::clamp(roundMm(config.widthM + 0.02), 0.06, 1.0); break;
@@ -872,48 +872,12 @@ void SettingsPanel::drawSegmented(const Pen& pen, const UiText& text, std::initi
         parts.push_back(b);
     }
     if (parts.empty()) return;
-    cairo_t* cr = pen.cr;
+    // R3: drawn by the shared pill (core/render/draw.h), the one the layout editors use too
+    std::vector<PillPart> pill;
+    for (const Button* b : parts) pill.push_back({labelOf(b->action, text), pressed_ == b->action, hover_ == b->action});
     const double x = parts.front()->x;
-    const double y = parts.front()->y;
-    const double w = parts.back()->x + parts.back()->w - x;
-    const double h = parts.front()->h;
-    const double r = h / 2;
-    // 地のピル。押せるときは枠（3:1 以上）で部品の形を見せる。押せないときは枠なし
-    pen.color(kControl);
-    pen.roundedRect(x, y, w, h, r);
-    cairo_fill(cr);
-    if (usable) strokeRounded(pen, x, y, w, h, r, kBorder, 2);
-
-    const double inset = 5;
-    const double part = (w - inset * 2) / static_cast<double>(parts.size());
-    const double size = 24;
-    for (size_t i = 0; i < parts.size(); ++i) {
-        const SettingsAction action = parts[i]->action;
-        const double sx = x + inset + part * static_cast<double>(i);
-        const double sy = y + inset;
-        const double sh = h - inset * 2;
-        const bool pressed = usable && pressed_ == action;
-        const bool hovered = usable && hover_ == action;
-        const bool isSelected = selected == static_cast<int>(i);
-        if (isSelected) {
-            // 選択中の部分: アクセントの塗り（押している間は少し濃く）＋ ✓ ＋ 太字。押せないときは薄く残す
-            pen.color(pressed ? kAccentPressed : kAccent, usable ? 1.0 : 0.35);
-            pen.roundedRect(sx, sy, part, sh, sh / 2);
-            cairo_fill(cr);
-        } else if (pressed || hovered) {
-            pen.color(kControlHover);
-            pen.roundedRect(sx, sy, part, sh, sh / 2);
-            cairo_fill(cr);
-        }
-        const std::string label = labelOf(action, text);
-        const Color textColor = !usable ? kTextDisabled : (isSelected ? kOnAccent : kText);
-        const double checkW = isSelected ? size * 0.9 : 0;
-        const double labelSize = fitSize(pen, label, size, size * 0.7, part - 20 - checkW, isSelected);
-        const double textW = pen.measure(label, labelSize, isSelected) + checkW;
-        const double tx = sx + (part - textW) / 2;
-        if (isSelected) drawCheck(cr, tx + checkW * 0.4, sy + sh / 2, size * 0.72, usable ? kOnAccent : kTextDisabled);
-        pen.text(tx + checkW, centerBaseline(sy, sh, labelSize), label, labelSize, textColor, isSelected);
-    }
+    drawSegmentedPill(pen, x, parts.front()->y, parts.back()->x + parts.back()->w - x, parts.front()->h, pill, selected,
+                      usable);
 }
 
 void SettingsPanel::drawButton(const Pen& pen, const UiText& text, SettingsAction action, bool selected,
@@ -1094,11 +1058,12 @@ void SettingsPanel::drawFacingCard(const Pen& pen, const UiText& text, const Con
                   true);
     if (mode_ == ButtonMode::Detached) {
         drawButton(pen, text, SettingsAction::FaceMe, false, 24);
-        // R2: Curve  − Flat / Slight / Medium / Strong +
+        // R3: Curve  − 40° +  (the arc the whole HUD wraps)
         const double right = kFacingInnerX + kFacingInnerW;
         const double labelSize = fitSize(pen, text.rowCurve, 24, 16, kFacingInnerW - kControlW - 12, false);
         pen.text(kFacingInnerX, centerBaseline(rowY(4), kButtonH, labelSize), text.rowCurve, labelSize, kTextMuted);
-        const char* value = text.curveSteps[std::clamp(config.detachedCurve, 0, kDetachedCurveSteps - 1)];
+        char value[16];
+        std::snprintf(value, sizeof(value), "%d°", clampCurveDeg(config.detachedCurveDeg));
         const double valueSize = fitSize(pen, value, 28, 18, kValueW - 20, true);
         textCentered(pen, right - kStepButtonW - kValueW / 2, centerBaseline(rowY(4), kButtonH, valueSize), value,
                      valueSize, kText, true);

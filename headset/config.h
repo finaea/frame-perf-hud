@@ -89,7 +89,7 @@ struct Config {
     WristPose leftWrist;            ///< 左手に固定するときの位置と向き
     WristPose rightWrist;           ///< 右手に固定するときの位置と向き
     DetachedPose detachedPose;      ///< T05: where the HUD sits in the room ("detached_pose")
-    int detachedCurve = 0;          ///< R2: Detached only, 0 = flat .. 3 = strong ("detached_curve"; detachedCurveRadiusM)
+    int detachedCurveDeg = 0;       ///< R3: Detached only, the arc the HUD wraps: 0 (flat)..90°, 10° steps ("detached_curve_deg")
     bool wristFade = true;          ///< 手首のとき、パネルの面が目から外れるほど薄くして消す
     double wristFadeEndDeg = 75.0;  ///< 消えきる角度（度、35〜90）。その 30° 手前から薄くなり始める
     int clockFormat = 24;           ///< 性能パネルの時計（0 = 出さない、12 = 12 時間制、24 = 24 時間制。本体の時刻）

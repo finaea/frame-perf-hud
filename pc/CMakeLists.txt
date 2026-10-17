@@ -18,6 +18,7 @@ add_library(fph-pc-lib STATIC
   pc_editor.cpp
   camera_feed.cpp  # T10: camera BLOBs -> pictures in the camera widgets
   session_logs.cpp  # T11: the PC copy of the session logs, Save
+  pc_pages.cpp      # R3: the window's Layout | Profiles | Logs tabs
   # The headset's UI strings, so the PC editor says exactly what the dashboard editor says (platform-free)
   ${CMAKE_SOURCE_DIR}/headset/i18n.cpp
   log.cpp
@@ -25,11 +26,13 @@ add_library(fph-pc-lib STATIC
   udp_socket.cpp
   single_instance.cpp
   platform.cpp
+  updater.cpp  # Release G: the self-updater (WinHTTP + BCrypt, both part of Windows)
 )
 target_include_directories(fph-pc-lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(fph-pc-lib PRIVATE ${CMAKE_SOURCE_DIR}/headset)  # i18n.h only
 target_include_directories(fph-pc-lib PRIVATE ${CMAKE_SOURCE_DIR}/third_party/openvr)
-target_link_libraries(fph-pc-lib PUBLIC fph-core fph-session fph-render ws2_32 iphlpapi shell32 advapi32 ole32)
+target_link_libraries(fph-pc-lib PUBLIC fph-core fph-session fph-render ws2_32 iphlpapi shell32 advapi32 ole32
+  winhttp bcrypt)
 # T10: TurboJPEG decodes the headset's camera frames (static, from the vcpkg manifest)
 find_package(libjpeg-turbo CONFIG REQUIRED)
 target_link_libraries(fph-pc-lib PUBLIC
@@ -67,6 +70,9 @@ if(BUILD_TESTING)
   endforeach()
   # FPH_PNG_DIR: pc-editor-test also writes screenshots of the palette and the cards
   target_compile_definitions(pc-editor-test PRIVATE FPH_FONT_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
+  target_include_directories(pc-editor-test PRIVATE ${CMAKE_SOURCE_DIR}/headset)  # i18n.h: the chip labels
+  # pc-pages-test draws the tabs offscreen with the real fonts
+  target_compile_definitions(pc-pages-test PRIVATE FPH_FONT_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
 endif()
 
 # pc\build.cmd builds this: the exe and the PC tests (core's tests still pass -Wall -Wextra unguarded, which cl rejects)
@@ -78,6 +84,11 @@ add_dependencies(fph-pc-all fph-streaming-probe)
 add_executable(fph-streaming-preview ${CMAKE_SOURCE_DIR}/tools/streaming_preview.cpp)
 target_compile_definitions(fph-streaming-preview PRIVATE FPH_FONT_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
 target_link_libraries(fph-streaming-preview PRIVATE fph-pc-lib)
+# R3: offline pictures of the Profiles / Logs tabs (made-up headset state)
+add_executable(fph-pc-pages-preview ${CMAKE_SOURCE_DIR}/tools/pc_pages_preview.cpp)
+target_compile_definitions(fph-pc-pages-preview PRIVATE FPH_FONT_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
+target_link_libraries(fph-pc-pages-preview PRIVATE fph-pc-lib)
+add_dependencies(fph-pc-all fph-pc-pages-preview)
 if(BUILD_TESTING)
   foreach(test_src ${FPH_PC_TESTS})
     get_filename_component(test_name ${test_src} NAME_WE)

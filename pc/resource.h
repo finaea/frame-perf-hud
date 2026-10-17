@@ -10,3 +10,9 @@
 #define IDC_INFO 203
 #define IDC_FORGET 204
 #define IDC_CAMERA_FPS 205  // T10
+#define IDC_UPDATE_CHECK 206   // Release G: check for updates (switch)
+#define IDC_UPDATE_NOW 207     // Release G: Check now
+#define IDC_UPDATE_STATUS 208  // Release G: the updater's state, refreshed while the dialog is open
+
+#define IDD_RENAME 210      // R3: a headset profile's new name
+#define IDC_RENAME_EDIT 211

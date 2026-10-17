@@ -48,6 +48,9 @@ void testArc() {
     CHECK(near(camtiles::overlayCurvature(2 * M_PI, 1.0), 1.0, 1e-6));
     CHECK(camtiles::curvatureRadius(1.2, 0.0) == 0.0);
     CHECK(camtiles::curvatureRadius(1.2, -0.5) == 0.0);
+    // R3: the Detached curve is an arc in degrees (curvature = deg / 360), so R = W / angle
+    CHECK(near(camtiles::curvatureRadius(0.4, 0.25f), 0.4 / (M_PI / 2), 1e-5));  // 90°: ≈ 0.2546
+    CHECK(near(camtiles::curvatureRadius(0.4, static_cast<float>(40.0 / 360.0)), 0.4 / (40.0 * M_PI / 180.0), 1e-5));
     for (const double w : {0.3, 1.2, 2.0})
         for (const double r : {0.6, 1.0, 2.0}) {
             if (w / (2 * M_PI * r) > 1.0) continue;
@@ -115,6 +118,16 @@ void testPlaceTile() {
         CHECK(p.curvature == 0.0f);
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < 3; ++j) CHECK(p.offset.m[i][j] == (i == j ? 1.0f : 0.0f));
+    }
+    // R3: a 0° Detached curve (curvature 0.0f) places exactly like the flat panel
+    {
+        PanelPlacement zero = panel;
+        zero.curvature = 0.0f;
+        const fph::cam::Rect r {100, 50, 200, 100};
+        const TilePlacement a = placeTile(r, g, panel), b = placeTile(r, g, zero);
+        CHECK(a.curvature == 0.0f && b.curvature == 0.0f && a.widthM == b.widthM);
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 4; ++j) CHECK(a.offset.m[i][j] == b.offset.m[i][j]);
     }
     // Flat with a UI scale: visible rows are in scaled px, so visibleH = 600 / 0.75 = 800 unscaled
     {

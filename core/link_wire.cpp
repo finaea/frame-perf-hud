@@ -39,6 +39,9 @@ const char* packetTypeName(PacketType type) {
         case PacketType::LayoutAck: return "LAYOUT_ACK";
         case PacketType::LayoutReject: return "LAYOUT_REJECT";
         case PacketType::Bye: return "BYE";
+        case PacketType::ControlState: return "CONTROL_STATE";    // R3
+        case PacketType::ControlAction: return "CONTROL_ACTION";
+        case PacketType::ControlResult: return "CONTROL_RESULT";
     }
     return "?";
 }
@@ -725,6 +728,132 @@ bool decodeLayoutAck(const uint8_t* payload, size_t size, LayoutAck& out) {
         })) {
         return false;
     }
+    out = m;
+    return true;
+}
+
+// ---- R3: CONTROL_* ----
+
+bool ControlState::sameContent(const ControlState& o) const {
+    return layoutVersion == o.layoutVersion && flags == o.flags && maxProfiles == o.maxProfiles &&
+           activeId == o.activeId && profiles == o.profiles && status == o.status && recordStatus == o.recordStatus &&
+           crashStatus == o.crashStatus && powerOff == o.powerOff;
+}
+
+const char* controlOutcomeName(ControlOutcome outcome) {
+    switch (outcome) {
+        case ControlOutcome::Done: return "done";
+        case ControlOutcome::NeedsConfirm: return "needs_confirm";
+        case ControlOutcome::Failed: return "failed";
+        case ControlOutcome::NotAllowed: return "not_allowed";
+        case ControlOutcome::UnknownSubscriber: return "unknown_subscriber";
+        case ControlOutcome::Unsupported: return "unsupported";
+    }
+    return "?";
+}
+
+bool controlActionConfirmed(const ControlAction& action, bool unsaved, uint32_t currentVersion) {
+    const bool confirmed = (action.flags & kControlConfirmed) != 0;
+    switch (action.kind) {
+        case ControlKind::ProfileDelete: return confirmed;
+        case ControlKind::ProfileUse:
+        case ControlKind::ProfileReset: return !unsaved || (confirmed && action.layoutVersion == currentVersion);
+        default: return true;
+    }
+}
+
+std::vector<uint8_t> encodeControlState(const ControlState& m) {
+    Writer w;
+    w.u32(m.revision);
+    w.u32(m.layoutVersion);
+    w.u8(m.flags);
+    w.u8(m.maxProfiles);
+    w.str8(m.activeId, 15);
+    const size_t count = std::min(m.profiles.size(), kMaxControlProfiles);
+    w.u8(static_cast<uint8_t>(count));
+    for (size_t i = 0; i < count; ++i) {
+        w.str8(m.profiles[i].id, 15);
+        w.str8(m.profiles[i].name, 31);
+    }
+    w.str8(m.status, 127);
+    w.str8(m.recordStatus, 127);
+    w.str8(m.crashStatus, 63);
+    w.str8(m.powerOff, 31);
+    return std::move(w.bytes());
+}
+
+bool decodeControlState(const uint8_t* payload, size_t size, ControlState& out) {
+    Reader r(payload, size);
+    ControlState m;
+    m.revision = r.u32();
+    m.layoutVersion = r.u32();
+    m.flags = r.u8();
+    m.maxProfiles = r.u8();
+    m.activeId = r.str8();
+    const uint8_t count = r.u8();
+    if (r.failed() || count > kMaxControlProfiles) return false;
+    for (uint8_t i = 0; i < count; ++i) {
+        ControlProfile p;
+        p.id = r.str8();
+        p.name = r.str8();
+        m.profiles.push_back(p);
+    }
+    m.status = r.str8();
+    m.recordStatus = r.str8();
+    m.crashStatus = r.str8();
+    m.powerOff = r.str8();
+    if (r.failed()) return false;  // trailing bytes = a newer headset's fields: fine
+    out = m;
+    return true;
+}
+
+std::vector<uint8_t> encodeControlAction(const ControlAction& m) {
+    Writer w;
+    w.id(m.pcId);
+    w.u32(m.requestId);
+    w.u8(static_cast<uint8_t>(m.kind));
+    w.u8(m.flags);
+    w.u32(m.layoutVersion);
+    w.str8(m.profileId, 15);
+    w.str8(m.text, 31);
+    return std::move(w.bytes());
+}
+
+bool decodeControlAction(const uint8_t* payload, size_t size, ControlAction& out) {
+    Reader r(payload, size);
+    ControlAction m;
+    m.pcId = r.id();
+    m.requestId = r.u32();
+    m.kind = static_cast<ControlKind>(r.u8());
+    m.flags = r.u8();
+    m.layoutVersion = r.u32();
+    m.profileId = r.str8();
+    m.text = r.str8();
+    if (r.failed()) return false;
+    out = m;
+    return true;
+}
+
+std::vector<uint8_t> encodeControlResult(const ControlResult& m) {
+    Writer w;
+    w.u32(m.requestId);
+    w.u8(static_cast<uint8_t>(m.outcome));
+    w.u32(m.layoutVersion);
+    w.str8(m.message, 127);
+    return std::move(w.bytes());
+}
+
+bool decodeControlResult(const uint8_t* payload, size_t size, ControlResult& out) {
+    Reader r(payload, size);
+    ControlResult m;
+    m.requestId = r.u32();
+    const uint8_t outcome = r.u8();
+    m.layoutVersion = r.u32();
+    m.message = r.str8();
+    if (r.failed()) return false;
+    // a newer headset's outcome: read it as a failure with its message rather than dropping the answer
+    m.outcome = outcome <= static_cast<uint8_t>(ControlOutcome::Unsupported) ? static_cast<ControlOutcome>(outcome)
+                                                                             : ControlOutcome::Failed;
     out = m;
     return true;
 }

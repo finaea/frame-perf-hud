@@ -836,7 +836,8 @@ void testSettingsButtons() {
     for (const W type : {W::Frame, W::Power, W::Battery, W::Temp, W::Streaming, W::Network, W::Cpu, W::CpuItems, W::RamItems}) {
         Rig rig(make({{type}}));
         rig.tap(rig.centre({0, 0}));
-        const bool compact = type == W::Frame || type == W::Power || type == W::Battery || type == W::Temp;
+        const bool compact = type == W::Frame || type == W::Power || type == W::Battery || type == W::Temp ||
+                             type == W::Streaming;  // R3
         const bool hide = type == W::CpuItems || type == W::RamItems;
         CHECK(rig.hasSetting(Setting::CompactOn) == compact && rig.hasSetting(Setting::CompactOff) == compact);
         CHECK(rig.hasSetting(Setting::HideSystemOn) == hide && rig.hasSetting(Setting::HideSystemOff) == hide);
@@ -1298,27 +1299,30 @@ void testApplyDetachedActions() {
     CHECK(c.detachedPose == kept && c.posX != posX);
 }
 
-// R2: the curve buttons step Config::detachedCurve 0..3, and report a change only when it moved
+// R3: the curve buttons step Config::detachedCurveDeg by 10° over 0..90, and report a change only when it moved
 void testApplyCurveActions() {
     Config c;
-    CHECK(c.detachedCurve == 0);
+    CHECK(c.detachedCurveDeg == 0);
     CHECK(!applySettingsAction(SettingsAction::CurveDown, c));  // already flat
-    CHECK(c.detachedCurve == 0);
-    for (int want = 1; want <= 3; ++want) {
+    CHECK(c.detachedCurveDeg == 0);
+    for (int want = 10; want <= 90; want += 10) {
         CHECK(applySettingsAction(SettingsAction::CurveUp, c));
-        CHECK(c.detachedCurve == want);
+        CHECK(c.detachedCurveDeg == want);
     }
     CHECK(!applySettingsAction(SettingsAction::CurveUp, c));  // clamped at the top
-    CHECK(c.detachedCurve == 3);
-    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurve == 2);
-    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurve == 1);
-    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurve == 0);
+    CHECK(c.detachedCurveDeg == 90);
+    for (int want = 80; want >= 0; want -= 10) {
+        CHECK(applySettingsAction(SettingsAction::CurveDown, c));
+        CHECK(c.detachedCurveDeg == want);
+    }
     CHECK(!applySettingsAction(SettingsAction::CurveDown, c));
-    // Out-of-range values (hand-set) come back into range
-    c.detachedCurve = 9;
-    CHECK(applySettingsAction(SettingsAction::CurveUp, c) && c.detachedCurve == 3);
-    c.detachedCurve = -4;
-    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurve == 0);
+    // Hand-set values come back onto the 10° grid / into range
+    c.detachedCurveDeg = 37;
+    CHECK(applySettingsAction(SettingsAction::CurveUp, c) && c.detachedCurveDeg == 50);  // 47 -> 50
+    c.detachedCurveDeg = 200;
+    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurveDeg == 90);  // 190 -> 90
+    c.detachedCurveDeg = -4;
+    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurveDeg == 0);  // -14 -> 0
 }
 
 // Review fix: sync() says whether the tab must redraw, so a PC's edit (no pointer event) refreshes the open tab
@@ -1345,6 +1349,172 @@ void testShrinkClampsScroll() {
     CHECK(rig.ed.scrollY() == 0.0);
     checkFitsWithoutScrolling(rig);
     CHECK(rig.cardRect({0, 0}).y == lane.y + 8);  // the first card sits at the top, not clipped above it
+}
+
+// R3: every two-way setting is one pill over two adjacent halves (the two Setting rects)
+void testPills() {
+    struct Pill {
+        W type;
+        Setting on, off;
+        bool (*isOn)(const WidgetInstance&);  ///< the field the left half sets
+    };
+    const Pill pills[] = {
+        {W::RamItems, Setting::SameNameOn, Setting::SameNameOff, [](const WidgetInstance& w) { return w.sumSameName; }},
+        {W::CpuItems, Setting::HideSystemOn, Setting::HideSystemOff, [](const WidgetInstance& w) { return w.hideSystem; }},
+        {W::Frame, Setting::CompactOn, Setting::CompactOff, [](const WidgetInstance& w) { return w.compact; }},
+        {W::Network, Setting::AdapterHome, Setting::AdapterDongle,
+         [](const WidgetInstance& w) { return w.adapter == NetAdapter::Home; }},
+        {W::HeadsetCamera, Setting::FullSizeOn, Setting::FullSizeOff,
+         [](const WidgetInstance& w) { return w.cameraFullSize; }},
+    };
+    for (const Pill& pill : pills) {
+        Rig rig(make({{pill.type}}));
+        rig.tap(rig.centre({0, 0}));
+        EditorRect a {}, b {};
+        for (const auto& s : rig.ed.settingButtons()) {
+            if (s.first == pill.on) a = s.second;
+            if (s.first == pill.off) b = s.second;
+        }
+        // Network lists Dongle first (the left half), Home second
+        if (pill.type == W::Network) std::swap(a, b);
+        CHECK(a.w > 0 && b.w > 0);
+        CHECK(a.y == b.y && a.h == b.h && a.w == b.w);
+        CHECK(a.x + a.w == b.x);
+        for (const EditorRect& r : {a, b}) {
+            CHECK(r.x >= kPaletteCard.x && r.x + r.w <= kPaletteCard.x + kPaletteCard.w);
+            CHECK(r.y + r.h <= kPaletteCard.y + kPaletteCard.h);
+            for (const auto& chip : rig.ed.chips()) CHECK(r.y >= chip.second.y + chip.second.h);
+        }
+
+        // each half queues the right edit; the half that's already the state queues nothing
+        WidgetInstance out;
+        const WidgetInstance before = rig.layout.columns[0].widgets[0];
+        CHECK(!pill.isOn(before));
+        CHECK(pressSetting(rig, pill.on, {0, 0}, out));
+        CHECK(pill.isOn(out));
+        WidgetInstance want = before;
+        if (pill.type == W::RamItems) want.sumSameName = true;
+        if (pill.type == W::CpuItems) want.hideSystem = true;
+        if (pill.type == W::Frame) want.compact = true;
+        if (pill.type == W::Network) want.adapter = NetAdapter::Home;
+        if (pill.type == W::HeadsetCamera) want.cameraFullSize = true;
+        CHECK(out == want);
+        CHECK(!pressSetting(rig, pill.off, {0, 0}, out));  // already off
+        // flip it on in the layout, then the other half queues the way back
+        rig.set([&] {
+            Layout l = rig.layout;
+            l.columns[0].widgets[0] = want;
+            return l;
+        }());
+        CHECK(!pressSetting(rig, pill.on, {0, 0}, out));
+        CHECK(pressSetting(rig, pill.off, {0, 0}, out));
+        CHECK(!pill.isOn(out));
+        CHECK(out == before);
+    }
+
+    // Headset camera: Full size is its own row, below the FPS stepper; three rows, all inside the card
+    Rig rig(make({{W::HeadsetCamera}}));
+    rig.tap(rig.centre({0, 0}));
+    EditorRect fps {}, full {};
+    for (const auto& s : rig.ed.settingButtons()) {
+        if (s.first == Setting::FpsDown) fps = s.second;
+        if (s.first == Setting::FullSizeOn) full = s.second;
+    }
+    CHECK(fps.w > 0 && full.w > 0);
+    CHECK(full.y >= fps.y + fps.h);
+    for (const auto& s : rig.ed.settingButtons()) {
+        CHECK(s.second.x >= kPaletteCard.x && s.second.x + s.second.w <= kPaletteCard.x + kPaletteCard.w);
+        CHECK(s.second.y + s.second.h <= kPaletteCard.y + kPaletteCard.h);
+        for (const auto& chip : rig.ed.chips()) CHECK(s.second.y >= chip.second.y + chip.second.h);
+    }
+}
+
+// R3: the four cam toggles are one-part pills sharing one row
+void testCameraPills() {
+    const Setting cams[4] = {Setting::Camera0, Setting::Camera1, Setting::Camera2, Setting::Camera3};
+    Rig rig(make({{W::HeadsetCamera}}));  // cameras = 0x01
+    rig.tap(rig.centre({0, 0}));
+    EditorRect r[4] {}, fps {}, full {};
+    for (const auto& s : rig.ed.settingButtons()) {
+        for (int c = 0; c < 4; ++c) {
+            if (s.first == cams[c]) r[c] = s.second;
+        }
+        if (s.first == Setting::FpsDown) fps = s.second;
+        if (s.first == Setting::FullSizeOn) full = s.second;
+    }
+    for (int c = 0; c < 4; ++c) {
+        CHECK(r[c].w > 0);
+        CHECK(r[c].x >= kPaletteCard.x && r[c].x + r[c].w <= kPaletteCard.x + kPaletteCard.w);
+        CHECK(r[c].y + r[c].h <= kPaletteCard.y + kPaletteCard.h);
+        for (const auto& chip : rig.ed.chips()) CHECK(r[c].y >= chip.second.y + chip.second.h);
+        CHECK(r[c].y == r[0].y);                             // one row
+        CHECK(c == 0 || r[c - 1].x + r[c - 1].w <= r[c].x);  // left to right, no overlap
+        CHECK(r[c].y + r[c].h <= fps.y);                     // FPS below the cams
+    }
+    CHECK(full.y >= fps.y + fps.h);
+
+    // a tap toggles exactly its bit; the only cam on cannot be turned off
+    WidgetInstance out;
+    CHECK(!pressSetting(rig, Setting::Camera0, {0, 0}, out));
+    const uint8_t expect[4] = {0, 0x03, 0x05, 0x09};
+    for (int c = 1; c < 4; ++c) {
+        CHECK(pressSetting(rig, cams[c], {0, 0}, out));
+        CHECK(out.cameras == expect[c]);
+    }
+    Layout two = make({{W::HeadsetCamera}});
+    two.columns[0].widgets[0].cameras = 0x05;
+    rig.set(two);
+    CHECK(pressSetting(rig, Setting::Camera0, {0, 0}, out) && out.cameras == 0x04);
+    CHECK(pressSetting(rig, Setting::Camera2, {0, 0}, out) && out.cameras == 0x01);
+
+    // "video13" in bold at the chip size fits its part without shrinking to the minimum
+    // (drawSegmentedPill: part = w - 2 * 5, available = part - 20 - 0.9 * 20)
+    Config cfg;
+    FontSet fonts;
+    fonts.load(paths::resolveFontPath(cfg.fontPath, false), paths::resolveFontPath(cfg.boldFontPath, true));
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t* cr = cairo_create(surface);
+    const Pen pen {cr, &fonts};
+    const double available = (r[3].w - 10) - 20 - 18;
+    CHECK(fitSize(pen, "video13", 20, 14, available, true) > 14);
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}
+
+// R3: no palette chip label may shrink to fitSize's minimum (same formula as LayoutEditor::drawPalette)
+void testChipLabelSizes() {
+    Config cfg;
+    FontSet fonts;
+    fonts.load(paths::resolveFontPath(cfg.fontPath, false), paths::resolveFontPath(cfg.boldFontPath, true));
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t* cr = cairo_create(surface);
+    const Pen pen {cr, &fonts};
+    const UiText& text = uiText(Language::En);
+    Rig rig(make({{W::Frame}}));
+    for (const auto& chip : rig.ed.chips()) {
+        const W type = chip.first;
+        std::string label;
+        if (type == W::Network) label = text.paletteNetwork;
+        else if (type == W::CpuItems) label = text.paletteCpuItems;
+        else if (type == W::RamItems) label = text.paletteRamItems;
+        else if (type == W::HeadsetCamera) label = text.paletteHeadsetCamera;
+        else if (type == W::EyeCamera) label = text.paletteEyeCamera;
+        else {
+            WidgetInstance w;
+            w.type = type;
+            label = fph::widgetTitle(w);
+        }
+        // a present single-instance chip: check mark + bold (repeatable types are never "present", they get a count)
+        if (!fph::isRepeatable(type)) CHECK(fitSize(pen, label, 17, 11, chip.second.w - 20 - 20, true) > 11);
+        // idle
+        CHECK(fitSize(pen, label, 17, 11, chip.second.w - 20, false) > 11);
+        // repeatable types with a count
+        if (fph::isRepeatable(type)) {
+            CHECK(fitSize(pen, label + " \u00d7" + "2", 17, 11, chip.second.w - 20, false) > 11);
+        }
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
 }
 
 }  // namespace
@@ -1375,6 +1545,9 @@ int main() {
     testPanelLeaveCancelsDrag();
     testProfilesPanel();
     testProfilesReviewFixes();  // lane B review
+    testPills();
+    testCameraPills();
+    testChipLabelSizes();
     if (failures == 0) std::printf("layout-editor-test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

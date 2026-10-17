@@ -55,8 +55,8 @@ enum class SettingsAction {
     FadeOff,      ///< 手首のとき、傾けても消さない
     FadeAngleDown,  ///< 消える角度を 5° 小さく（35° まで）
     FadeAngleUp,    ///< 消える角度を 5° 大きく（90° まで）
-    CurveDown,      ///< R2 Detached: one step flatter (config.detachedCurve, saved)
-    CurveUp,        ///< R2 Detached: one step more curved
+    CurveDown,      ///< R3 Detached: 10° less arc (config.detachedCurveDeg, 0..90, saved)
+    CurveUp,        ///< R3 Detached: 10° more arc
     SizeDown,
     SizeUp,
     AlphaDown,

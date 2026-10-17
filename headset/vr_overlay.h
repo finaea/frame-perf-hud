@@ -288,10 +288,10 @@ private:
     std::unique_ptr<CameraOverlays> cameras_;
     void notePlacement();
 
-    // R2: the Detached HUD's curve. The radius stays put and the curvature follows the panel's width
-    double curveRadiusM_ = 0.0;      ///< 0 = flat (head, wrist, or Detached set to Flat)
+    // R2/R3: the Detached HUD's curve, an arc in degrees (curvature = degrees / 360), so the radius follows the width
+    float wantCurvature_ = 0.0f;     ///< 0 = flat (head, wrist, or Detached at 0°)
     float appliedCurvature_ = 0.0f;  ///< what SetOverlayCurvature last took
-    /** Sends the curvature for curveRadiusM_ and the panel's width, when it changed. */
+    /** Sends wantCurvature_ when it changed. */
     void applyCurvature();
 
     bool panelInteractive_ = false;  ///< T05: the HUD's input method is Mouse

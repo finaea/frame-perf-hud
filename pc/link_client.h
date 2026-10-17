@@ -136,6 +136,25 @@ public:
     /** T11: monotonic time of the last METRICS (< 0 = never) */
     double lastMetricsAt() const { return lastMetricsAt_; }
 
+    // ---- R3: the Profiles / Logs tabs (CONTROL_STATE / CONTROL_ACTION / CONTROL_RESULT) ----
+    /** @return the headset's last CONTROL_STATE; nullptr until one arrives (a headset older than R3 never sends it) */
+    const link::ControlState* controlState() const { return haveControl_ ? &control_ : nullptr; }
+    /** @return bumps whenever a CONTROL_STATE with new content arrives or an action finishes (redraw) */
+    uint64_t controlRevision() const { return controlRevision_; }
+    /**
+     * Sends a Profiles / Logs button to the headset; resent every kControlResendSec until CONTROL_RESULT, given up
+     * after kControlGiveUpSec (then takeControlResult gives Failed "No answer from the headset").
+     * @param confirmed the user's second tap (Use / Reset losing changes, Delete)
+     * @param layoutVersion the layout version that confirmation was for
+     * @return false (nothing sent) if not subscribed, no CONTROL_STATE yet, or another action is in flight
+     */
+    bool sendControl(link::ControlKind kind, const std::string& profileId, const std::string& text, bool confirmed,
+                     uint32_t layoutVersion, double now);
+    /** @return true while an action waits for its answer */
+    bool controlInFlight() const { return controlPending_; }
+    /** @return the finished action's result and kind, once; false if none */
+    bool takeControlResult(link::ControlResult& result, link::ControlKind& kind);
+
     MetricStore& store() { return store_; }
     const MetricStore& store() const { return store_; }
     const ProcessListsView& processes() const { return processes_; }
@@ -214,6 +233,18 @@ private:
     ProcessListsView processes_;
     link::LinkState headsetState_;  ///< T11
     double lastMetricsAt_ = -1.0;   ///< T11
+    // R3
+    link::ControlState control_;
+    bool haveControl_ = false;
+    uint64_t controlRevision_ = 0;
+    bool controlPending_ = false;
+    link::ControlAction controlAction_;
+    double controlStarted_ = 0.0;
+    double controlNextSend_ = 0.0;
+    bool haveControlResult_ = false;
+    link::ControlResult controlResult_;
+    link::ControlKind controlResultKind_ = link::ControlKind::ProfileNew;
+    void finishControl(const link::ControlResult& result);
     CameraFeed cameras_;          ///< T10
     int cameraFps_ = 10;          ///< T10
     uint32_t cameraPathIp_ = 0;   ///< T10: the headset's wlanap address, when it isn't the lease path

@@ -1199,9 +1199,13 @@ int runOverlay(const Options& options) {
         return true;
     };
     refreshProfilesUi();
-    /** The Profiles page's buttons (Use, Save, ... on the selected / active profile). Writes only here. */
+    /**
+     * The Profiles page's buttons (Use, Save, ... on the selected / active profile), from the dashboard or (R3) a PC.
+     * Writes only here. @return true if it was carried out
+     */
     const auto handleProfileAction = [&](SettingsAction action, const std::string& selectedId) {
         std::string error;
+        bool ok = false;
         const Profile* selected = profiles.find(selectedId);
         const std::string selectedName = selected != nullptr ? selected->name : std::string();
         /** The live layout -> target, through the same compare-and-set as an edit (the PC follows) */
@@ -1217,6 +1221,7 @@ int runOverlay(const Options& options) {
             case SettingsAction::ProfileNew: {
                 std::string id;
                 if (profiles.create(config.layout, id, error)) {
+                    ok = true;
                     config.activeProfile = id;
                     if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
                     settings.selectProfile(id);
@@ -1228,15 +1233,15 @@ int runOverlay(const Options& options) {
             }
             case SettingsAction::ProfileUse:
                 if (selected == nullptr) break;
-                profileStatus = setLive(selected->layout, selected->id) ? "Using " + selectedName
-                                                                        : "Couldn't use " + selectedName + ": " + error;
+                ok = setLive(selected->layout, selected->id);
+                profileStatus = ok ? "Using " + selectedName : "Couldn't use " + selectedName + ": " + error;
                 break;
             case SettingsAction::ProfileSave: {
                 const Profile* active = profiles.find(config.activeProfile);
                 if (active == nullptr) break;
                 const std::string name = active->name;
-                profileStatus = profiles.save(active->id, config.layout, error) ? "Saved to " + name
-                                                                                : "Couldn't save " + name + ": " + error;
+                ok = profiles.save(active->id, config.layout, error);
+                profileStatus = ok ? "Saved to " + name : "Couldn't save " + name + ": " + error;
                 break;
             }
             case SettingsAction::ProfileRename:
@@ -1245,6 +1250,7 @@ int runOverlay(const Options& options) {
                                     static_cast<uint32_t>(ProfileStore::kMaxNameBytes), error)) {
                     pendingRename = selected->id;
                     profileStatus.clear();
+                    ok = true;
                 } else {
                     profileStatus = "The keyboard didn't open: " + error;
                 }
@@ -1252,6 +1258,7 @@ int runOverlay(const Options& options) {
             case SettingsAction::ProfileDelete:
                 if (selected == nullptr) break;
                 if (profiles.remove(selectedId, error)) {
+                    ok = true;
                     profileStatus = "Deleted " + selectedName;
                     if (config.activeProfile == selectedId) {
                         config.activeProfile.clear();
@@ -1262,13 +1269,104 @@ int runOverlay(const Options& options) {
                 }
                 break;
             case SettingsAction::ProfileReset:  // saved profiles stay as they are until Save
-                profileStatus = setLive(fph::defaultLayout(), config.activeProfile) ? "Layout reset to the default"
-                                                                                    : "Couldn't reset: " + error;
+                ok = setLive(fph::defaultLayout(), config.activeProfile);
+                profileStatus = ok ? "Layout reset to the default" : "Couldn't reset: " + error;
                 break;
             default: break;
         }
+        if (!ok && selected == nullptr && action != SettingsAction::ProfileNew && action != SettingsAction::ProfileSave &&
+            action != SettingsAction::ProfileReset) {
+            profileStatus = "That profile isn't there any more";
+        }
         std::fprintf(stderr, "[profiles] %s\n", profileStatus.c_str());
+        return ok;
     };
+    // R3: the PC window's Profiles / Logs tabs, over the link. State: the same things the dashboard pages show
+    fph::link::ControlState controlState;
+    const auto buildControlState = [&](fph::link::ControlState& out) {
+        using namespace fph::link;
+        ControlState next;
+        next.layoutVersion = config.layout.version;
+        next.flags = static_cast<uint8_t>((sessions.recording() ? kControlRecording : 0) |
+                                          (sessions.ui().crashRecorderOn ? kControlCrashRecorder : 0) |
+                                          (profiles.unsaved(config.layout, config.activeProfile) ? kControlUnsaved : 0));
+        next.maxProfiles = static_cast<uint8_t>(ProfileStore::kMaxProfiles);
+        next.activeId = profiles.find(config.activeProfile) != nullptr ? config.activeProfile : std::string();
+        for (const Profile& p : profiles.profiles()) next.profiles.push_back({p.id, p.name});
+        next.status = profileStatus;
+        next.recordStatus = sessions.ui().recordStatus;
+        next.crashStatus = sessions.ui().crashStatus;
+        next.powerOff = sessions.ui().powerOff;
+        if (!next.sameContent(controlState)) {
+            next.revision = controlState.revision + 1;
+            controlState = next;
+        }
+        out = controlState;
+        return true;
+    };
+    /** A leased PC's button: the same guards and the same write path as the dashboard's */
+    const auto runControlAction = [&](const fph::link::ControlAction& a, double now) {
+        using namespace fph::link;
+        ControlResult r;
+        r.requestId = a.requestId;
+        // The second-tap rule, on this moment's "unsaved" and layout version (not on what the PC last saw)
+        if (!controlActionConfirmed(a, profiles.unsaved(config.layout, config.activeProfile), config.layout.version)) {
+            r.outcome = ControlOutcome::NeedsConfirm;
+            r.layoutVersion = config.layout.version;
+            r.message = a.kind == ControlKind::ProfileDelete ? "Tap again to delete"
+                                                               : "Tap again: the layout's changes are lost";
+            return r;
+        }
+        bool ok = true;
+        std::string error;
+        switch (a.kind) {
+            case ControlKind::ProfileNew: ok = handleProfileAction(SettingsAction::ProfileNew, ""); break;
+            case ControlKind::ProfileUse: ok = handleProfileAction(SettingsAction::ProfileUse, a.profileId); break;
+            case ControlKind::ProfileSave: ok = handleProfileAction(SettingsAction::ProfileSave, ""); break;
+            case ControlKind::ProfileDelete: ok = handleProfileAction(SettingsAction::ProfileDelete, a.profileId); break;
+            case ControlKind::ProfileReset: ok = handleProfileAction(SettingsAction::ProfileReset, ""); break;
+            case ControlKind::ProfileRename:  // the PC's own text box, so no keyboard here
+                ok = profiles.rename(a.profileId, a.text, error);
+                profileStatus = ok && profiles.find(a.profileId) != nullptr ? "Renamed to " + profiles.find(a.profileId)->name
+                                                                            : "Couldn't rename: " + error;
+                std::fprintf(stderr, "[profiles] %s\n", profileStatus.c_str());
+                break;
+            case ControlKind::RecordOn:
+            case ControlKind::RecordOff: {
+                const bool on = a.kind == ControlKind::RecordOn;
+                sessions.setRecord(on, bridge.session(), now);
+                ok = sessions.recording() == on;
+                r.message = sessions.ui().recordStatus;
+                break;
+            }
+            case ControlKind::CrashRecorderOn:
+            case ControlKind::CrashRecorderOff: {
+                // like the dashboard's switch: the config (saved), then the recorder and its pinned sources
+                const bool on = a.kind == ControlKind::CrashRecorderOn;
+                if (config.crashRecorder != on) {
+                    config.crashRecorder = on;
+                    if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
+                }
+                crashRecorderApplied = on;
+                sessions.setCrashRecorder(on);
+                scheduler.setPinnedSources(sessions.pinnedSources());
+                ok = sessions.ui().crashRecorderOn == on;
+                r.message = ok ? (on ? "Crash recorder on" : "Crash recorder off") : sessions.ui().crashStatus;
+                break;
+            }
+            default:
+                r.outcome = ControlOutcome::Unsupported;
+                r.layoutVersion = config.layout.version;
+                return r;
+        }
+        if (a.kind <= ControlKind::ProfileReset) r.message = profileStatus;
+        r.outcome = ok ? ControlOutcome::Done : ControlOutcome::Failed;
+        r.layoutVersion = config.layout.version;
+        std::fprintf(stderr, "[link] PC action %u: %s (%s)\n", static_cast<unsigned>(a.kind), controlOutcomeName(r.outcome),
+                     r.message.c_str());
+        return r;
+    };
+    linkService.setControlHooks(buildControlState, runControlAction);
     std::fprintf(stderr, "[layout] version %u, %zu widget(s) in %zu column(s), panel %dx%d\n", config.layout.version,
                  fph::enabledWidgets(config.layout).size(), config.layout.columns.size(),
                  renderer.geometry().textureWidth, renderer.geometry().textureHeight);

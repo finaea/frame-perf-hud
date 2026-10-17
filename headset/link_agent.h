@@ -9,6 +9,7 @@
 #include "metric_store.h"
 
 #include <csignal>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -31,6 +32,18 @@ public:
     size_t sendQueued() override { return socket_.queuedBytes(); }  // T10
     void expirePcMetrics(double now) { pcStream_.expire(store_, now); }
 
+    /** R3: the PC window's Profiles / Logs tabs, answered by the main loop (unset: no CONTROL_STATE, Unsupported). */
+    using ControlStateFn = std::function<bool(fph::link::ControlState&)>;
+    using ControlActionFn = std::function<fph::link::ControlResult(const fph::link::ControlAction&, double)>;
+    void setControlHooks(ControlStateFn state, ControlActionFn action) {
+        controlStateFn_ = std::move(state);
+        controlActionFn_ = std::move(action);
+    }
+    bool controlState(fph::link::ControlState& out) override { return controlStateFn_ && controlStateFn_(out); }
+    fph::link::ControlResult controlAction(const fph::link::ControlAction& a, double now) override {
+        return controlActionFn_ ? controlActionFn_(a, now) : LinkHostEnv::controlAction(a, now);
+    }
+
 private:
     Config& config_;
     ConfigWatcher& watcher_;
@@ -38,6 +51,8 @@ private:
     fph::PcStreamReceiver pcStream_;
     const SensorBridge& bridge_;
     LinkSocket& socket_;
+    ControlStateFn controlStateFn_;      // R3
+    ControlActionFn controlActionFn_;
 };
 
 /** Socket + env + server, for the main loop. */
@@ -58,6 +73,10 @@ public:
     bool hasLease() const { return server_.hasLease(); }
     /** The protocol logic: uiState / allow / deny / forgetAll for the dashboard tab. */
     LinkServer& server() { return server_; }
+    /** R3: the PC window's Profiles / Logs tabs (see AgentLinkEnv::setControlHooks). */
+    void setControlHooks(AgentLinkEnv::ControlStateFn state, AgentLinkEnv::ControlActionFn action) {
+        env_.setControlHooks(std::move(state), std::move(action));
+    }
     /** For the debug dump. */
     std::string debugText(double now) const;
     /** BYE to every lease holder, then closes the socket. */

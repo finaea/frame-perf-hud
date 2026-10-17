@@ -140,6 +140,7 @@ void PcSessionLogs::writeEnded() {
             if (slog::writeSession(l.dir, stemOf(*s), *s, l.log->columns(), slog::kKeepSessions, error)) {
                 note("[session] " + s->source + " session saved: " + l.dir + "\\" + stemOf(*s) + ".json (" +
                      std::to_string(s->dataSeconds) + " s of data)");
+                if (l.log == &headset_) lastCard_ = slog::endCard(*s, l.log->columns());  // R3: the Logs tab
             } else {
                 note("[session] " + s->source + " session couldn't be saved: " + error);
             }

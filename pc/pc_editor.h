@@ -30,10 +30,11 @@ public:
     enum class CommitOutcome { Applied, Stale, Failed };
     enum class Setting {
         Remove, RowsDown, RowsUp, SameNameOn, SameNameOff, AdapterDongle, AdapterHome,
-        Camera0, Camera1, Camera2, Camera3, FullSizeToggle,  // T10 Headset camera
+        Camera0, Camera1, Camera2, Camera3, FullSizeOn,      // T10 Headset camera (R3: Full size On | Off)
         FpsDown, FpsUp,                                      // T10 both camera widgets
         CompactOn, CompactOff,                               // R2 Frame, Power, Battery, Temp
-        HideSystemOn, HideSystemOff                          // R2 process lists (third row)
+        HideSystemOn, HideSystemOff,                         // R2 process lists (third row)
+        FullSizeOff                                          // R3 Headset camera
     };
 
     /** Where things are this frame. */

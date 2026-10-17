@@ -10,6 +10,7 @@
 #include "link_client.h"
 #include "log.h"
 #include "panel_view.h"
+#include "pc_pages.h"  // R3: the Layout | Profiles | Logs tabs
 #include "pc_editor.h"
 #include "platform.h"
 #include "resource.h"
@@ -20,6 +21,7 @@
 #include "streaming/service.h"
 #include "theme.h"
 #include "udp_socket.h"
+#include "updater.h"  // Release G
 #include "widgets.h"
 #include "win_text.h"
 
@@ -34,6 +36,7 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <vector>
 
 namespace fph {
 namespace pc {
@@ -61,8 +64,11 @@ enum MenuId : UINT {
     kMenuRows5,  // + 0..4: 5, 10, 15, 25, 50 rows
     kMenuSave = kMenuRows5 + 5,  // T11: the last 10 minutes + the session's summary
     kMenuOpenLogs,               // T11: the data folder (sessions, saves) in Explorer
-    kMenuCompact,                // R2: Frame, Power, Battery, Temp
+    kMenuCompact,                // R2: the hasCompactView() types (Frame, Power, Battery, Temp; R3: Streaming)
     kMenuHideSystem,             // R2: process lists
+    kMenuUpdateInstall,          // Release G: download, verify, swap in, restart
+    kMenuUpdatePage,             // Release G: the release page in the browser
+    kMenuUpdateCheck,            // Release G: Check now (the Settings button; also WM_COMMAND for scripts)
 };
 constexpr uint32_t kRowChoices[] = {5, 10, 15, 25, 50};
 
@@ -113,6 +119,17 @@ private:
     double nextPcMetrics_ = 0;
     std::unique_ptr<PcSessionLogs> logs_;  ///< T11
     Rect saveButton_;                      ///< T11: the status bar's Save, window px
+    // Release G: the self-updater
+    std::unique_ptr<update::Updater> updater_;
+    uint64_t updateRev_ = 0;
+    Rect updateButton_;                    ///< the status bar's "Update available (x.y.z)", window px (w 0 = none)
+    std::string updateAnnounced_;          ///< the version the tray balloon already told about
+    // R3: the tabs and the Profiles / Logs pages
+    PcPages pages_;
+    std::string headsetMessage_;  ///< the last headset action's answer
+    std::string pcMessage_;       ///< the last PC Save's result
+    uint64_t controlRev_ = ~0ull;
+    PageAction sentAction_ = PageAction::None;  ///< the button whose CONTROL_ACTION is in flight (NeedsConfirm re-arms it)
 
     FontSet fonts_;
     std::unique_ptr<PanelView> panel_;
@@ -165,6 +182,14 @@ private:
     void showCardMenu(POINT screen, int slot);
     void setNotice(const std::string& text, double seconds = 8.0);
     void flushSessionLog();  ///< T11: the session logs' lines into pc.log
+    PagesView pagesView() const;           ///< R3
+    void runPageAction(PageAction action);  ///< R3: a Profiles / Logs button
+    // Release G
+    bool updateNewer(const update::View& v) const;  ///< a newer release is known (Available, or one being installed)
+    void afterUpdaterChange();
+    void installUpdate(const std::string& readyPath);
+    void showUpdateMenu(POINT screen);
+    void setTrayTip(const std::wstring& tip);
 
     void onTick();
     void afterLinkEvents();
@@ -211,6 +236,15 @@ void App::loadState() {
             settings_.pcId.c_str(), idCreated ? " (new)" : "");
     if (idCreated || r != LoadResult::Loaded) saveSettings();
     logs_.reset(new PcSessionLogs(dataDir_));  // T11
+    // Release G: the exe an update replaced (it was still running then), and the updater with its last answer
+    const std::string exe = exePath();
+    if (update::removeOldExe(exe)) logLine("[update] removed %s", update::oldExePath(exe).c_str());
+    const update::UpdaterConfig uc = update::configFromEnvironment(FRAME_PERF_HUD_VERSION, dataDir_ + "\\update");
+    if (uc.apiBase != "https://api.github.com" || uc.insecure) {
+        logLine("[update] test override: %s%s", uc.apiBase.c_str(), uc.insecure ? " (insecure)" : "");
+    }
+    updater_.reset(new update::Updater(uc));
+    updater_->restore(settings_.updateCheckedAt, settings_.updateLatest, settings_.updatePage);
 }
 
 void App::saveSettings() {
@@ -400,6 +434,133 @@ void App::showTrayBalloon(const wchar_t* title, const wchar_t* text) {
     Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
+void App::setTrayTip(const std::wstring& tip) {
+    if (!trayAdded_) return;
+    NOTIFYICONDATAW nid {};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hwnd_;
+    nid.uID = kTrayId;
+    nid.uFlags = NIF_TIP | NIF_SHOWTIP;
+    wcsncpy_s(nid.szTip, tip.c_str(), _TRUNCATE);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+// ---- Release G: the self-updater ----
+
+bool App::updateNewer(const update::View& v) const {
+    return !v.latest.empty() && update::compareVersions(v.latest, v.current) > 0;
+}
+
+void App::afterUpdaterChange() {
+    if (updater_->revision() == updateRev_) return;
+    updateRev_ = updater_->revision();
+    int64_t checkedAt = 0;
+    std::string latest;
+    std::string page;
+    if (updater_->takeChecked(checkedAt, latest, page)) {  // remembered, so a restart within the day still knows
+        settings_.updateCheckedAt = checkedAt;
+        settings_.updateLatest = latest;
+        settings_.updatePage = page;
+        saveSettings();
+    }
+    const update::View v = updater_->view();
+    if (v.state == update::State::Ready) {
+        installUpdate(v.readyPath);
+        return;
+    }
+    if (v.state == update::State::InstallFailed) setNotice(update::describe(v), 15);
+    const bool newer = updateNewer(v);
+    setTrayTip(newer ? widen("frame-perf-hud: update available (" + v.latest + ")") : L"frame-perf-hud");
+    if (newer && v.state == update::State::Available && updateAnnounced_ != v.latest) {
+        updateAnnounced_ = v.latest;
+        logLine("[update] %s is available (this is %s)", v.latest.c_str(), v.current.c_str());
+        if (!IsWindowVisible(hwnd_)) {
+            showTrayBalloon(L"frame-perf-hud update available",
+                            widen("Version " + v.latest + " is out. Right-click the tray icon to install it.").c_str());
+        }
+    }
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::installUpdate(const std::string& readyPath) {
+    const std::string exe = exePath();
+    const std::string dir = exe.substr(0, exe.find_last_of("\\/"));
+    const update::View v = updater_->view();
+    if (!update::folderWritable(dir)) {
+        // e.g. Program Files: the browser download is the way, and the app keeps running as it is
+        logLine("[update] %s isn't writable: opening the release page", dir.c_str());
+        if (!v.page.empty()) ShellExecuteW(hwnd_, L"open", widen(v.page).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        updater_->installFailed("can't write to " + dir +
+                                (v.page.empty() ? "" : ", so the release page was opened instead"));
+        afterUpdaterChange();
+        return;
+    }
+    std::string error;
+    if (!update::swapInExe(exe, readyPath, error)) {
+        logLine("[update] swap failed: %s", error.c_str());
+        updater_->installFailed(error);
+        afterUpdaterChange();
+        return;
+    }
+    logLine("[update] %s is now %s (the old exe is %s)", exe.c_str(), v.latest.c_str(), update::oldExePath(exe).c_str());
+    // The new exe waits for this process to exit (it holds the instance mutex until then)
+    std::wstring cmd = L"\"" + widen(exe) + L"\" --wait-pid " + std::to_wstring(GetCurrentProcessId()) + L" --updated";
+    if (!IsWindowVisible(hwnd_)) cmd += L" --tray";
+    if (!options_.dataDir.empty()) cmd += L" --data-dir \"" + widen(options_.dataDir) + L"\"";
+    if (options_.offline) cmd += L" --offline";
+    STARTUPINFOW si {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi {};
+    std::vector<wchar_t> line(cmd.begin(), cmd.end());
+    line.push_back(L'\0');
+    // A bad exe would make Windows put up a modal "Unsupported 16-Bit Application"-style box here and hold the
+    // window until it's closed; fail at once instead and roll back
+    DWORD previousMode = 0;
+    SetThreadErrorMode(SEM_FAILCRITICALERRORS, &previousMode);
+    const BOOL started =
+        CreateProcessW(widen(exe).c_str(), line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
+    const DWORD launchError = started ? ERROR_SUCCESS : GetLastError();
+    SetThreadErrorMode(previousMode, nullptr);
+    if (!started) {
+        // Windows refused the new exe: put this one back, so the next start isn't stuck with the rejected file
+        logLine("[update] can't start the new exe (error %lu): putting the old one back", launchError);
+        std::string why = "Windows wouldn't start the new exe (error " + std::to_string(launchError) + ")";
+        std::string undoError;
+        const bool undone = update::undoSwap(exe, undoError);
+        if (undone) {
+            logLine("[update] %s is back to %s", exe.c_str(), v.current.c_str());
+            why += ", so this version stays";
+        } else {
+            logLine("[update] %s", undoError.c_str());
+            const std::string name = exe.substr(exe.find_last_of("\\/") + 1);
+            why += " and the old exe couldn't be put back (" + undoError + "). Before the next start, move or delete " +
+                   exe + " (the rejected file), then rename " + update::oldExePath(exe) + " to " + name;
+        }
+        updater_->installFailed(why, !undone);
+        afterUpdaterChange();
+        return;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    logLine("[update] started the new exe (pid %lu); exiting", pi.dwProcessId);
+    exitApp();  // BYE to the headset, settings saved, like Exit
+}
+
+void App::showUpdateMenu(POINT screen) {
+    const update::View v = updater_->view();
+    HMENU menu = CreatePopupMenu();
+    const bool busy = v.state == update::State::Downloading || v.state == update::State::Ready;
+    AppendMenuW(menu, MF_STRING | (busy ? MF_GRAYED : 0), kMenuUpdateInstall,
+                widen(v.installable ? "Install " + v.latest + " and restart" : "Install " + v.latest).c_str());
+    AppendMenuW(menu, MF_STRING | (v.page.empty() ? MF_GRAYED : 0), kMenuUpdatePage, L"Open release page");
+    SetForegroundWindow(hwnd_);
+    const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, screen.x, screen.y, 0,
+                                    hwnd_, nullptr);
+    DestroyMenu(menu);
+    PostMessageW(hwnd_, WM_NULL, 0, 0);
+    command(cmd);
+}
+
 // ---- window actions ----
 
 void App::showWindow() {
@@ -453,9 +614,61 @@ void App::setOnTop(bool on) {
 
 void App::toggleEditing() {
     editing_ = !editing_;
+    if (editing_) pages_.setTab(PcTab::Layout);  // R3: the editor lives on the Layout tab
     cancelDrag();
     if (editing_) showWindow();
     InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+PagesView App::pagesView() const {
+    PagesView v;
+    v.headset = client_->controlState();
+    v.subscribed = client_->subscribed();
+    v.busy = client_->controlInFlight();
+    v.headsetMessage = headsetMessage_;
+    v.pcMessage = pcMessage_;
+    v.lastCard = logs_->lastCard();
+    v.dataDir = dataDir_;
+    return v;
+}
+
+void App::runPageAction(PageAction action) {
+    using link::ControlKind;
+    const auto send = [&](ControlKind kind, const std::string& id, const std::string& text) {
+        sentAction_ = action;
+        // the clock is read here, after Rename's dialog closed: its time in the dialog mustn't count toward the 5 s
+        if (client_->sendControl(kind, id, text, pages_.lastConfirmed(), pages_.confirmVersion(), nowSec())) {
+            headsetMessage_.clear();
+        } else {
+            headsetMessage_ = client_->controlInFlight() ? "Still waiting for the headset's last answer"
+                                                         : "Not connected to the headset";
+        }
+    };
+    const std::string& selected = pages_.selectedProfile();
+    switch (action) {
+        case PageAction::ProfileNew: send(ControlKind::ProfileNew, "", ""); break;
+        case PageAction::ProfileUse: send(ControlKind::ProfileUse, selected, ""); break;
+        case PageAction::ProfileSave: send(ControlKind::ProfileSave, "", ""); break;
+        case PageAction::ProfileDelete: send(ControlKind::ProfileDelete, selected, ""); break;
+        case PageAction::ProfileReset: send(ControlKind::ProfileReset, "", ""); break;
+        case PageAction::ProfileRename: {
+            std::string name;
+            if (const link::ControlState* h = client_->controlState()) {
+                for (const auto& p : h->profiles) {
+                    if (p.id == selected) name = p.name;
+                }
+            }
+            if (showRenameDialog(instance_, hwnd_, name)) send(ControlKind::ProfileRename, selected, name);
+            break;
+        }
+        case PageAction::RecordOn: send(ControlKind::RecordOn, "", ""); break;
+        case PageAction::RecordOff: send(ControlKind::RecordOff, "", ""); break;
+        case PageAction::CrashOn: send(ControlKind::CrashRecorderOn, "", ""); break;
+        case PageAction::CrashOff: send(ControlKind::CrashRecorderOff, "", ""); break;
+        case PageAction::SaveLocal: command(kMenuSave); break;
+        case PageAction::OpenFolder: command(kMenuOpenLogs); break;
+        default: break;
+    }
 }
 
 void App::flushSessionLog() {
@@ -497,7 +710,14 @@ void App::openSettings() {
     }
     info << "\r\nLog and settings: " << dataDir_;
     data.info = info.str();
+    data.updateCheck = settings_.updateCheck;  // Release G
+    data.checkNow = [this] { updater_->checkNow(); };
+    data.updateStatus = [this] { return update::describe(updater_->view()); };
     if (!showSettingsDialog(instance_, hwnd_, data)) return;
+    if (data.updateCheck != settings_.updateCheck) {
+        logLine("[update] automatic checks %s", data.updateCheck ? "on" : "off");
+        settings_.updateCheck = data.updateCheck;
+    }
     if (data.manualIp != settings_.manualIp) {
         logLine("[app] manual IP: '%s'", data.manualIp.c_str());
         settings_.manualIp = data.manualIp;
@@ -524,12 +744,19 @@ void App::openSettings() {
 
 void App::showMenu(POINT screen, bool fromTray) {
     HMENU menu = CreatePopupMenu();
+    if (const update::View u = updater_->view(); updateNewer(u)) {  // Release G: on top while there's one
+        const bool busy = u.state == update::State::Downloading || u.state == update::State::Ready;
+        AppendMenuW(menu, MF_STRING | (busy ? MF_GRAYED : 0), kMenuUpdateInstall,
+                    widen(busy ? "Updating to " + u.latest + "…" : "Update available (" + u.latest + "): Install").c_str());
+        AppendMenuW(menu, MF_STRING | (u.page.empty() ? MF_GRAYED : 0), kMenuUpdatePage, L"Open release page");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    }
     if (fromTray) AppendMenuW(menu, MF_STRING, kMenuShow, L"Show");
     AppendMenuW(menu, MF_STRING | (editing_ ? MF_CHECKED : 0), kMenuEdit, L"Edit layout");
     AppendMenuW(menu, MF_STRING | (settings_.onTop ? MF_CHECKED : 0), kMenuOnTop, L"On top");
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"Settings...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kMenuSave, L"Save last 10 min");  // T11
+    AppendMenuW(menu, MF_STRING, kMenuSave, L"Save Logs");  // T11
     AppendMenuW(menu, MF_STRING, kMenuOpenLogs, L"Open logs folder");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     if (!fromTray) AppendMenuW(menu, MF_STRING, kMenuHide, L"Hide to tray");
@@ -553,8 +780,32 @@ void App::command(UINT id) {
         case kMenuHide: hideToTray(); break;
         case kMenuExit: exitApp(); break;
         case kMenuSave:  // T11
-            setNotice(logs_->save(static_cast<int64_t>(std::time(nullptr))));
+            pcMessage_ = logs_->save(static_cast<int64_t>(std::time(nullptr)));  // R3: shown on the Logs tab too
+            setNotice(pcMessage_);
             flushSessionLog();
+            break;
+        case kMenuUpdateInstall: {  // Release G
+            const update::View u = updater_->view();
+            const std::string exe = exePath();
+            if (u.installable && !update::folderWritable(exe.substr(0, exe.find_last_of("\\/")))) {
+                // e.g. Program Files: don't download what can't be swapped in; the browser download is the way
+                installUpdate("");
+            } else if (u.installable) {
+                updater_->install();
+            } else if (!u.page.empty()) {
+                ShellExecuteW(hwnd_, L"open", widen(u.page).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            afterUpdaterChange();
+            break;
+        }
+        case kMenuUpdatePage: {
+            const update::View u = updater_->view();
+            if (!u.page.empty()) ShellExecuteW(hwnd_, L"open", widen(u.page).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        }
+        case kMenuUpdateCheck:
+            updater_->checkNow();
+            afterUpdaterChange();
             break;
         case kMenuOpenLogs:
             ShellExecuteW(hwnd_, L"open", widen(dataDir_).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -649,6 +900,32 @@ void App::onTick() {
                     client_->store());
         flushSessionLog();
     }
+    // R3: the Profiles / Logs tabs: the headset's answer, a second tap expiring, a new CONTROL_STATE
+    {
+        link::ControlResult result;
+        link::ControlKind kind;
+        if (client_->takeControlResult(result, kind)) {
+            switch (result.outcome) {
+                case link::ControlOutcome::NeedsConfirm:  // the headset's own rule said "ask first": arm for the second tap
+                    pages_.armFromHeadset(sentAction_, result.layoutVersion, now);
+                    headsetMessage_ = result.message;
+                    break;
+                case link::ControlOutcome::NotAllowed: headsetMessage_ = "The headset didn't accept this PC's button (no live connection)"; break;
+                case link::ControlOutcome::UnknownSubscriber: headsetMessage_ = "The headset restarted: reconnecting"; break;
+                case link::ControlOutcome::Unsupported: headsetMessage_ = "The headset's HUD doesn't know this button: update it"; break;
+                default: headsetMessage_ = result.message; break;
+            }
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        if (pages_.tick(now)) InvalidateRect(hwnd_, nullptr, FALSE);
+        if (client_->controlRevision() != controlRev_) {
+            controlRev_ = client_->controlRevision();
+            if (pages_.tab() != PcTab::Layout) InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+    }
+    // Release G: automatic checks (at start, then once a day); --offline contacts nothing on its own
+    if (!options_.offline) updater_->tick(settings_.updateCheck, static_cast<int64_t>(std::time(nullptr)));
+    afterUpdaterChange();
     if (!notice_.empty() && now > noticeUntil_) {
         notice_.clear();
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -687,6 +964,7 @@ void App::afterLinkEvents() {
     if (client_->phase() != lastPhase_) {
         logLine("[app] link %s -> %s", linkPhaseName(lastPhase_), linkPhaseName(client_->phase()));
         lastPhase_ = client_->phase();
+        pages_.cancelArm();  // R3: a second tap armed against the old connection's state doesn't carry over
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
 }
@@ -751,16 +1029,27 @@ void App::drawStatus(const Pen& pen, double width, double barH) {
     // A dot says the same thing as the colour, so colour isn't the only signal
     const Color dot = client_->subscribed() ? kSuccess : client_->phase() == LinkPhase::Discovery ? kTextMuted : c;
     drawDisc(pen.cr, 14 * s, barH / 2, 4.5 * s, dot);
-    // T11: Save on the right (the last 10 minutes + the session's summary)
-    const double bw = 64 * s;
-    const double bh = barH - 8 * s;
-    saveButton_ = {width - bw - 6 * s, 4 * s, bw, bh};
-    pen.color(kControl);
-    pen.roundedRect(saveButton_.x, saveButton_.y, bw, bh, bh / 2);
-    cairo_fill(pen.cr);
-    strokeRounded(pen, saveButton_.x, saveButton_.y, bw, bh, bh / 2, kBorder, 1.5 * s);
-    textCentered(pen, saveButton_.x + bw / 2, centerBaseline(saveButton_.y, bh, 12.5 * s), "Save", 12.5 * s, kText, true);
-    const double size = fitSize(pen, text, 13.5 * s, 9 * s, width - 34 * s - bw - 12 * s, !live);
+    // T11: Save on the right (the last 10 minutes + the session's summary), as wide as its label
+    const PageBox save = drawStatusSaveButton(pen, width, barH, s);
+    saveButton_ = {save.x, save.y, save.w, save.h};
+    const double bh = save.h;
+    // Release G: "Update available (x.y.z)" left of Save while a newer release is known; a click offers Install
+    updateButton_ = {};
+    double rightEdge = saveButton_.x;
+    if (const update::View u = updater_->view(); updateNewer(u)) {
+        const bool busy = u.state == update::State::Downloading || u.state == update::State::Ready;
+        const std::string label = busy ? "Updating to " + u.latest + "…" : "Update available (" + u.latest + ")";
+        const double uw = pen.measure(label, 12.5 * s, true) + 24 * s;
+        updateButton_ = {saveButton_.x - uw - 6 * s, 4 * s, uw, bh};
+        pen.color(blendColor(kAccent, kBg, 0.25));
+        pen.roundedRect(updateButton_.x, updateButton_.y, uw, bh, bh / 2);
+        cairo_fill(pen.cr);
+        strokeRounded(pen, updateButton_.x, updateButton_.y, uw, bh, bh / 2, kAccent, 1.5 * s);
+        textCentered(pen, updateButton_.x + uw / 2, centerBaseline(updateButton_.y, bh, 12.5 * s), label, 12.5 * s,
+                     kAccentText, true);
+        rightEdge = updateButton_.x;
+    }
+    const double size = fitSize(pen, text, 13.5 * s, 9 * s, rightEdge - 32 * s - 12 * s, !live);
     pen.text(26 * s, centerBaseline(0, barH, size), text, size, live ? kTextMuted : c, !live);
 }
 
@@ -783,12 +1072,15 @@ void App::drawFrame() {
 
     const double barH = 30 * s;
     const double pad = 8 * s;
+    const double tabsH = PcPages::tabBarHeight(s);  // R3: Layout | Profiles | Logs under the status bar
     const double areaX = pad;
-    const double areaY = barH + pad * 0.5;
+    const double areaY = barH + tabsH + pad * 0.5;
     const double areaW = std::max(1.0, w - 2 * pad);
     const double areaH = std::max(1.0, h - areaY - pad);
 
-    if (client_->haveLayout()) {
+    if (pages_.tab() != PcTab::Layout) {  // R3
+        pages_.drawPage(pen, {areaX, areaY, areaW, areaH}, s, pagesView());
+    } else if (client_->haveLayout()) {
         // Every paint: widgets whose inputs didn't change keep their pixels (widgetSignature), so this is cheap
         WidgetContext ctx;
         ctx.store = &client_->store();
@@ -862,6 +1154,7 @@ void App::drawFrame() {
         }
         panelDirty_ = false;
     }
+    pages_.drawTabs(pen, pad, barH, s);  // R3
     drawStatus(pen, w, barH);
     cairo_destroy(cr);
     cairo_surface_flush(surface_);
@@ -1017,9 +1310,29 @@ LRESULT App::handle(UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_LBUTTONDOWN:
+            if (updateButton_.contains(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) {  // Release G
+                POINT pt {static_cast<LONG>(updateButton_.x), static_cast<LONG>(updateButton_.y + updateButton_.h)};
+                ClientToScreen(hwnd_, &pt);
+                showUpdateMenu(pt);
+                return 0;
+            }
             if (saveButton_.contains(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) {  // T11
                 command(kMenuSave);
                 return 0;
+            }
+            {  // R3: the tabs, and the Profiles / Logs pages' buttons
+                const PageAction a = pages_.press(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), nowSec(), pagesView());
+                if (a == PageAction::TabLayout || a == PageAction::TabProfiles || a == PageAction::TabLogs) {
+                    if (a != PageAction::TabLayout && editing_) toggleEditing();
+                    panelDirty_ = true;
+                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    return 0;
+                }
+                if (pages_.tab() != PcTab::Layout) {
+                    runPageAction(a);
+                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    return 0;
+                }
             }
             if (editing_) pointerDown(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             return 0;
@@ -1163,6 +1476,8 @@ bool App::init() {
     SetTimer(hwnd_, kTickTimer, options_.startInTray ? kTrayTickMs : kTickMs, nullptr);
     client_->tick(nowSec());
     if (!options_.startInTray) showWindow();
+    if (options_.justUpdated) setNotice(std::string("Updated to ") + FRAME_PERF_HUD_VERSION, 15);  // Release G
+    afterUpdaterChange();  // the remembered "update available", if any (and the tray tip)
     return true;
 }
 

@@ -46,6 +46,9 @@ public:
     /** @return the last thing worth logging ("" = nothing new), then clears it */
     std::string takeLog();
 
+    /** R3: the end card of the last headset session this PC saved (the Logs tab), empty if none yet */
+    const std::vector<std::string>& lastCard() const { return lastCard_; }
+
     const slog::SessionLog& headsetLog() const { return headset_; }
     const slog::SessionLog& streamLog() const { return stream_; }
     std::string sessionsDir() const;
@@ -64,6 +67,7 @@ private:
     int32_t silentSavedId_ = 0;  ///< the headset session already saved for this silence
     double noSteamVrSince_ = -1;  ///< when the PC scene app started reading NoSteamVr (< 0 = it doesn't)
     std::string log_;
+    std::vector<std::string> lastCard_;  ///< R3
 
     void writeEnded();
     void note(const std::string& line);

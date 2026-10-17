@@ -45,7 +45,7 @@ WidgetInstance instance(WidgetType type, NetAdapter adapter = NetAdapter::Dongle
 
 bool hasCompactView(WidgetType type) {
     return type == WidgetType::Frame || type == WidgetType::Power || type == WidgetType::Battery ||
-           type == WidgetType::Temp;
+           type == WidgetType::Temp || type == WidgetType::Streaming;  // R3: Streaming too
 }
 
 uint8_t cameraFpsMax(WidgetType type) {

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <map>
 #include <string>
+#include <set>
 #include <vector>
 
 namespace {
@@ -770,6 +771,245 @@ void testOnMetricsSkipsUnknownIdsKeepsKnownOnes() {
     CHECK(r.client.store().f32Or(metric::kTempCpuC, -1) == 42.0f);
 }
 
+// ---- R3: CONTROL_STATE / CONTROL_ACTION / CONTROL_RESULT ----
+
+Bytes controlStateBytes(uint32_t revision, uint32_t layoutVersion, uint8_t flags = 0) {
+    ControlState s;
+    s.revision = revision;
+    s.layoutVersion = layoutVersion;
+    s.flags = flags;
+    s.activeId = "profile-1";
+    s.profiles = {{"profile-1", "Gaming"}, {"profile-2", "Work"}};
+    s.status = "ok";
+    return encodeControlState(s);
+}
+
+Bytes controlResultBytes(uint32_t requestId, ControlOutcome outcome, uint32_t version, const std::string& message) {
+    ControlResult m;
+    m.requestId = requestId;
+    m.outcome = outcome;
+    m.layoutVersion = version;
+    m.message = message;
+    return encodeControlResult(m);
+}
+
+ControlAction actionOf(const Sent& s) {
+    ControlAction a;
+    CHECK(decodeControlAction(s.payload.data(), s.payload.size(), a));
+    return a;
+}
+
+void testControlClient() {
+    {
+        // nothing before a CONTROL_STATE: no state, sendControl refuses and sends nothing
+        Rig r;
+        r.connect();
+        CHECK(r.client.controlState() == nullptr && r.client.controlRevision() == 0);
+        const size_t mark = r.env.sent.size();
+        CHECK(!r.client.sendControl(ControlKind::RecordOn, "", "", false, 0, r.now));
+        CHECK(r.env.sent.size() == mark && !r.client.controlInFlight());
+        // not subscribed, state or not: refuses
+        Rig cold;
+        feed(cold.client, pkt(PacketType::ControlState, controlStateBytes(1, 3)), kHeadset, 0.0);
+        CHECK(!cold.client.subscribed() && !cold.client.sendControl(ControlKind::RecordOn, "", "", false, 0, 0.1));
+        CHECK(cold.env.count(PacketType::ControlAction) == 0);
+    }
+    {
+        // a state: kept, revision bumps on new content only (not on the revision field alone)
+        Rig r;
+        r.connect();
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(1, 3, kControlUnsaved)), kHeadset, r.now);
+        const ControlState* st = r.client.controlState();
+        CHECK(st != nullptr && st->revision == 1 && st->layoutVersion == 3 && st->profiles.size() == 2 &&
+              st->activeId == "profile-1" && (st->flags & kControlUnsaved) != 0);
+        const uint64_t rev1 = r.client.controlRevision();
+        CHECK(rev1 == 1);
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(1, 3, kControlUnsaved)), kHeadset, r.now + 0.1);
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(9, 3, kControlUnsaved)), kHeadset, r.now + 0.2);
+        CHECK(r.client.controlRevision() == rev1 && r.client.controlState()->revision == 9);  // 2 s repeats don't redraw
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(10, 3, kControlUnsaved | kControlRecording)),
+             kHeadset, r.now + 0.3);
+        CHECK(r.client.controlRevision() == rev1 + 1);
+        CHECK(r.client.malformed() == 0 && r.client.subscribed());
+    }
+    {
+        // sendControl: fields, one in flight, resend every 1 s, matching RESULT finishes it
+        Rig r;
+        r.connect();
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(1, 3)), kHeadset, r.now);
+        const uint64_t revBefore = r.client.controlRevision();
+        const size_t mark = r.env.sent.size();
+        const double t0 = r.now;
+        CHECK(r.client.sendControl(ControlKind::ProfileUse, "profile-2", "", true, 3, t0));
+        CHECK(r.client.controlInFlight() && r.client.controlRevision() > revBefore);
+        std::vector<Sent> acts = r.env.ofType(PacketType::ControlAction);
+        CHECK(acts.size() == 1 && acts[0].to == kHeadset && r.env.sent.size() == mark + 1);
+        const ControlAction first = actionOf(acts[0]);
+        CHECK(first.pcId == kPcId && first.kind == ControlKind::ProfileUse && first.profileId == "profile-2" &&
+              (first.flags & kControlConfirmed) != 0 && first.layoutVersion == 3 && first.requestId != 0);
+        // a second one while in flight: refused, nothing sent
+        CHECK(!r.client.sendControl(ControlKind::RecordOn, "", "", false, 0, t0 + 0.1));
+        CHECK(r.env.count(PacketType::ControlAction) == 1);
+        // resends: not before 1 s, then once per second, the same request id and fields
+        r.now = t0;
+        auto stepTo = [&](double t) {
+            while (r.now < t - 1e-9) {
+                r.now += 0.25;
+                feed(r.client, subscribeAck(PeerStatus::Allowed), kHeadset, r.now);
+                r.client.tick(r.now);
+            }
+        };
+        stepTo(t0 + 0.75);
+        CHECK(r.env.count(PacketType::ControlAction) == 1);
+        stepTo(t0 + 1.0);
+        CHECK(r.env.count(PacketType::ControlAction) == 2);
+        stepTo(t0 + 1.75);
+        CHECK(r.env.count(PacketType::ControlAction) == 2);
+        stepTo(t0 + 2.0);
+        CHECK(r.env.count(PacketType::ControlAction) == 3);
+        acts = r.env.ofType(PacketType::ControlAction);
+        for (const Sent& s : acts) {
+            const ControlAction a = actionOf(s);
+            CHECK(a.requestId == first.requestId && a.kind == first.kind && a.profileId == first.profileId &&
+                  a.flags == first.flags && a.layoutVersion == first.layoutVersion);
+        }
+        // a result for another request id is ignored: still in flight, nothing to take
+        feed(r.client, pkt(PacketType::ControlResult, controlResultBytes(first.requestId + 5, ControlOutcome::Done, 3, "x")),
+             kHeadset, r.now);
+        ControlResult res;
+        ControlKind kind = ControlKind::ProfileNew;
+        CHECK(r.client.controlInFlight() && !r.client.takeControlResult(res, kind));
+        // the matching one finishes it
+        const uint64_t revMid = r.client.controlRevision();
+        feed(r.client, pkt(PacketType::ControlResult, controlResultBytes(first.requestId, ControlOutcome::NeedsConfirm, 4, "Lose?")),
+             kHeadset, r.now);
+        CHECK(!r.client.controlInFlight() && r.client.controlRevision() > revMid);
+        CHECK(r.client.takeControlResult(res, kind));
+        CHECK(res.requestId == first.requestId && res.outcome == ControlOutcome::NeedsConfirm && res.layoutVersion == 4 &&
+              res.message == "Lose?" && kind == ControlKind::ProfileUse);
+        CHECK(!r.client.takeControlResult(res, kind));  // once
+        // no more resends, and a late duplicate answer is harmless
+        const size_t sentNow = r.env.count(PacketType::ControlAction);
+        stepTo(r.now + 3.0);
+        CHECK(r.env.count(PacketType::ControlAction) == sentNow);
+        feed(r.client, pkt(PacketType::ControlResult, controlResultBytes(first.requestId, ControlOutcome::Done, 4, "dup")),
+             kHeadset, r.now);
+        CHECK(!r.client.takeControlResult(res, kind) && !r.client.controlInFlight());
+        // the next action gets a new request id
+        CHECK(r.client.sendControl(ControlKind::RecordOn, "", "", false, 0, r.now));
+        const ControlAction second = actionOf(r.env.ofType(PacketType::ControlAction).back());
+        CHECK(second.requestId != first.requestId && (second.flags & kControlConfirmed) == 0 &&
+              second.kind == ControlKind::RecordOn);
+        CHECK(r.client.malformed() == 0);
+    }
+    {
+        // no answer: given up after 5 s with "No answer from the headset"
+        Rig r;
+        r.connect();
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(1, 3)), kHeadset, r.now);
+        const double t0 = r.now;
+        CHECK(r.client.sendControl(ControlKind::ProfileSave, "", "", false, 3, t0));
+        for (double t = t0 + 0.25; t <= t0 + 5.0 + 1e-9; t += 0.25) {
+            r.now = t;
+            feed(r.client, subscribeAck(PeerStatus::Allowed), kHeadset, t);
+            r.client.tick(t);
+        }
+        CHECK(r.client.controlInFlight());  // exactly 5 s: still waiting (it gives up past 5 s)
+        CHECK(r.env.count(PacketType::ControlAction) == 6);  // t0, +1 .. +5
+        r.now = t0 + 5.25;
+        feed(r.client, subscribeAck(PeerStatus::Allowed), kHeadset, r.now);
+        r.client.tick(r.now);
+        CHECK(!r.client.controlInFlight());
+        ControlResult res;
+        ControlKind kind = ControlKind::ProfileNew;
+        CHECK(r.client.takeControlResult(res, kind));
+        CHECK(res.outcome == ControlOutcome::Failed && res.message == "No answer from the headset" &&
+              kind == ControlKind::ProfileSave);
+        // and it can send again
+        CHECK(r.client.sendControl(ControlKind::ProfileSave, "", "", false, 3, r.now));
+    }
+    {
+        // losing the subscription while waiting fails it at once (the BYE / silence case)
+        Rig r;
+        r.connect();
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(1, 3)), kHeadset, r.now);
+        CHECK(r.client.sendControl(ControlKind::RecordOn, "", "", false, 0, r.now));
+        feed(r.client, subscribeAck(PeerStatus::UnknownSubscriber), kHeadset, r.now + 0.1);
+        CHECK(!r.client.subscribed());
+        r.client.tick(r.now + 0.2);
+        CHECK(!r.client.controlInFlight());
+        ControlResult res;
+        ControlKind kind = ControlKind::ProfileNew;
+        CHECK(r.client.takeControlResult(res, kind) && res.outcome == ControlOutcome::Failed &&
+              res.message == "No answer from the headset");
+    }
+    {
+        // version skew: unknown packet types and CONTROL_* with extra trailing bytes neither count as malformed nor
+        // drop the link
+        Rig r;
+        r.connect();
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(1, 3)), kHeadset, r.now);
+        const uint64_t malformed = r.client.malformed();
+        const uint64_t rev = r.client.controlRevision();
+        feed(r.client, pkt(static_cast<PacketType>(99), Bytes {1, 2, 3, 4}), kHeadset, r.now + 0.1);
+        feed(r.client, pkt(static_cast<PacketType>(200), Bytes {}), kHeadset, r.now + 0.1);
+        CHECK(r.client.malformed() == malformed && r.client.subscribed());
+        Bytes newer = controlStateBytes(2, 3, kControlRecording);
+        for (uint8_t b : {0xAA, 0xBB, 0xCC, 0xDD}) newer.push_back(b);  // a newer headset's appended fields
+        feed(r.client, pkt(PacketType::ControlState, newer), kHeadset, r.now + 0.2);
+        CHECK(r.client.malformed() == malformed && r.client.subscribed());
+        CHECK(r.client.controlState() != nullptr && r.client.controlState()->revision == 2 &&
+              (r.client.controlState()->flags & kControlRecording) != 0 && r.client.controlRevision() == rev + 1);
+        // a RESULT with trailing bytes and an outcome from the future reads as Failed
+        CHECK(r.client.sendControl(ControlKind::RecordOn, "", "", false, 0, r.now + 0.3));
+        const uint32_t id = actionOf(r.env.ofType(PacketType::ControlAction).back()).requestId;
+        Bytes future = controlResultBytes(id, static_cast<ControlOutcome>(77), 3, "newer");
+        future.push_back(0x55);
+        feed(r.client, pkt(PacketType::ControlResult, future), kHeadset, r.now + 0.4);
+        ControlResult res;
+        ControlKind kind = ControlKind::ProfileNew;
+        CHECK(r.client.takeControlResult(res, kind) && res.outcome == ControlOutcome::Failed && res.message == "newer");
+        CHECK(r.client.malformed() == malformed && r.client.subscribed());
+        // truly short ones are malformed, though
+        Bytes shortState = controlStateBytes(3, 3);
+        shortState.resize(shortState.size() - 1);
+        feed(r.client, pkt(PacketType::ControlState, shortState), kHeadset, r.now + 0.5);
+        CHECK(r.client.malformed() == malformed + 1 && r.client.controlState()->revision == 2);
+    }
+}
+
+// Lane F review: request ids differ across launches (the headset remembers answers per PC id across a BYE / HELLO,
+// so ids restarting at 1 would replay an old answer), and losing the connection clears the headset's tab state
+void testControlReviewFixes() {
+    std::set<uint32_t> ids;
+    for (int launch = 0; launch < 20; ++launch) {  // the same PC id, a new LinkClient each time = a new app launch
+        Rig r;
+        r.connect();
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(1, 3)), kHeadset, r.now);
+        CHECK(r.client.sendControl(launch % 2 ? ControlKind::RecordOff : ControlKind::RecordOn, "", "", false, 3, r.now));
+        const std::vector<Sent> acts = r.env.ofType(PacketType::ControlAction);
+        CHECK(acts.size() == 1);
+        if (acts.size() == 1) ids.insert(actionOf(acts[0]).requestId);
+    }
+    CHECK(ids.size() == 20);  // no launch reused another's id (ids.count(1) == 20 before the fix)
+    CHECK(ids.count(0) == 0);
+    {
+        Rig r;
+        r.connect();
+        feed(r.client, pkt(PacketType::ControlState, controlStateBytes(1, 3, kControlUnsaved)), kHeadset, r.now);
+        CHECK(r.client.controlState() != nullptr);
+        const uint64_t rev = r.client.controlRevision();
+        // 7 s of silence: back to discovery, and the old headset's state goes with it (an older HUD found next
+        // must show "update it", not this one's buttons)
+        r.now += 7.0;
+        r.client.tick(r.now);
+        CHECK(!r.client.subscribed());
+        CHECK(r.client.controlState() == nullptr);
+        CHECK(r.client.controlRevision() > rev);
+        CHECK(!r.client.sendControl(ControlKind::RecordOn, "", "", false, 3, r.now));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -791,6 +1031,8 @@ int main() {
     testDeniedThenAllowed();
     testGoodbye();
     testOnMetricsSkipsUnknownIdsKeepsKnownOnes();
+    testControlClient();       // R3
+    testControlReviewFixes();  // R3 lane F review
     if (failures != 0) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

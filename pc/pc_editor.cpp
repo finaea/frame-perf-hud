@@ -22,8 +22,10 @@ constexpr double kPad = 16;
 constexpr double kHeaderH = 48;
 constexpr double kLaneInsetPanel = 3;  // lane edge inside its 512 px column (the cards sit 8 px in)
 constexpr int kChipColumns = 2;
-constexpr double kChipH = 32;
-constexpr double kChipGap = 8;
+// R3: chips 28 + 4 (were 32 + 8), so the camera card's 4 settings rows fit a 600 px window; 3 columns would
+// shrink "CPU usage items" to unreadable
+constexpr double kChipH = 28;
+constexpr double kChipGap = 4;
 constexpr double kRowH = 34;
 constexpr double kRowGap = 8;
 constexpr double kFpsStepperW = 130;  // T10: the camera widgets' FPS − n + (ui units)
@@ -51,6 +53,10 @@ uint32_t rowsUp(uint32_t v) {
 
 std::string chipLabel(WidgetType type) {
     if (type == WidgetType::Network) return text().paletteNetwork;
+    if (type == WidgetType::CpuItems) return text().paletteCpuItems;  // R3: short chip labels
+    if (type == WidgetType::RamItems) return text().paletteRamItems;
+    if (type == WidgetType::HeadsetCamera) return text().paletteHeadsetCamera;
+    if (type == WidgetType::EyeCamera) return text().paletteEyeCamera;
     WidgetInstance w;
     w.type = type;
     return widgetTitle(w);
@@ -167,17 +173,25 @@ void PcEditor::relayout() {
         settings_.push_back({Setting::CompactOn, {controlX, rowA, controlW / 2, kRowH * u}});
         settings_.push_back({Setting::CompactOff, {controlX + controlW / 2, rowA, controlW / 2, kRowH * u}});
     } else if (w->type == WidgetType::Network) {
-        settings_.push_back({Setting::AdapterDongle, {controlX, rowA, controlW / 2, kRowH * u}});
-        settings_.push_back({Setting::AdapterHome, {controlX + controlW / 2, rowA, controlW / 2, kRowH * u}});
-    } else if (w->type == WidgetType::HeadsetCamera) {  // T10: one toggle per outward cam, then Full size
-        const double cw = (controlW + 70 * u) / 4;
+        // R3: the pill reaches 70 px further left (like the camera row) so "Home Wi-Fi" + ✓ fits its half
+        const double aw = (controlW + 70 * u) / 2;
+        settings_.push_back({Setting::AdapterDongle, {controlX - 70 * u, rowA, aw, kRowH * u}});
+        settings_.push_back({Setting::AdapterHome, {controlX - 70 * u + aw, rowA, aw, kRowH * u}});
+    } else if (w->type == WidgetType::HeadsetCamera) {  // T10: one toggle per outward cam; FPS − n +; Full size
+        // R3: the cam toggles are one-part pills, 2 × 2 so "video13" + ✓ fits (the palette has height to spare);
+        // FPS and Full size move down one row
+        const double step = (kRowH + kRowGap) * u;
+        const double cw = (controlW + 70 * u) / 2;
         for (int c = 0; c < 4; ++c)
             settings_.push_back({static_cast<Setting>(static_cast<int>(Setting::Camera0) + c),
-                                 {controlX - 70 * u + c * cw, rowA, cw - 3 * u, kRowH * u}});
-        settings_.push_back({Setting::FpsDown, {controlX - 70 * u, rowB, kFpsStep * u, kRowH * u}});
-        settings_.push_back({Setting::FpsUp, {controlX - 70 * u + (kFpsStepperW - kFpsStep) * u, rowB, kFpsStep * u, kRowH * u}});
-        settings_.push_back({Setting::FullSizeToggle,
-                             {controlX + (kFpsStepperW - 64) * u, rowB, controlW - (kFpsStepperW - 64) * u, kRowH * u}});
+                                 {controlX - 70 * u + (c % 2) * cw, rowA + (c / 2) * step, cw - 4 * u, kRowH * u}});
+        const double rowFps = rowB + step;
+        settings_.push_back({Setting::FpsDown, {controlX - 70 * u, rowFps, kFpsStep * u, kRowH * u}});
+        settings_.push_back({Setting::FpsUp, {controlX - 70 * u + (kFpsStepperW - kFpsStep) * u, rowFps, kFpsStep * u, kRowH * u}});
+        // R3: Full size is an On | Off pill on its own row (it shared row B with FPS as a single toggle button)
+        const double rowC = rowFps + step;
+        settings_.push_back({Setting::FullSizeOn, {controlX, rowC, controlW / 2, kRowH * u}});
+        settings_.push_back({Setting::FullSizeOff, {controlX + controlW / 2, rowC, controlW / 2, kRowH * u}});
     } else if (w->type == WidgetType::EyeCamera) {  // T10: FPS − n +
         settings_.push_back({Setting::FpsDown, {controlX - 70 * u, rowA, kFpsStep * u, kRowH * u}});
         settings_.push_back({Setting::FpsUp, {controlX - 70 * u + (kFpsStepperW - kFpsStep) * u, rowA, kFpsStep * u, kRowH * u}});
@@ -291,7 +305,8 @@ void PcEditor::applySetting(Setting setting) {
             if (mask & 0x0F) e.cameras = mask;
             break;
         }
-        case Setting::FullSizeToggle: e.cameraFullSize = !e.cameraFullSize; break;
+        case Setting::FullSizeOn: e.cameraFullSize = true; break;  // R3
+        case Setting::FullSizeOff: e.cameraFullSize = false; break;
         case Setting::FpsDown: e.cameraFps = cameraFpsStep(e.cameraFps, -1, e.type); break;
         case Setting::FpsUp: e.cameraFps = cameraFpsStep(e.cameraFps, +1, e.type); break;
         case Setting::CompactOn: e.compact = true; break;  // R2
@@ -567,6 +582,18 @@ void PcEditor::drawOverPanel(const Pen& pen) const {
                 textCentered(pen, r.x + r.w / 2, centerBaseline(r.y, r.h, size), label, size, on ? kOnAccent : kText, true);
             }
         };
+        // R3: two-way settings are the dashboard's segmented pill (the headset's look), the halves being the buttons
+        const auto pill = [&](Setting a, Setting b, const std::string& labelA, const std::string& labelB, bool aSelected) {
+            const Box* ra = nullptr;
+            const Box* rb = nullptr;
+            for (const auto& [id, r] : settings_) {
+                if (id == a) ra = &r;
+                if (id == b) rb = &r;
+            }
+            if (ra == nullptr || rb == nullptr) return;
+            drawSegmentedPill(pen, ra->x, ra->y, rb->x + rb->w - ra->x, ra->h, {{labelA}, {labelB}}, aSelected ? 0 : 1,
+                              true, 14 * u, u);
+        };
         const std::string title = widgetTitle(*w);
         const double titleSize = fitSize(pen, title, 17 * u, 11 * u, card.w - 2 * kPad * u - 110 * u, true);
         pen.text(sx, centerBaseline(sy, kRowH * u, titleSize), title, titleSize, kText, true);
@@ -594,28 +621,33 @@ void PcEditor::drawOverPanel(const Pen& pen) const {
             }
             const double sameSize = fitSize(pen, text().rowSameName, labelSize, 9 * u, card.w - 2 * kPad * u - 178 * u, false);
             pen.text(sx, centerBaseline(rowB, kRowH * u, sameSize), text().rowSameName, sameSize, kTextMuted);
-            button(Setting::SameNameOn, text().on, w->sumSameName);
-            button(Setting::SameNameOff, text().off, !w->sumSameName);
+            pill(Setting::SameNameOn, Setting::SameNameOff, text().on, text().off, w->sumSameName);
             const double rowC = rowB + (kRowH + kRowGap) * u;  // R2
             pen.text(sx, centerBaseline(rowC, kRowH * u, labelSize), text().rowHideSystem, labelSize, kTextMuted);
-            button(Setting::HideSystemOn, text().on, w->hideSystem);
-            button(Setting::HideSystemOff, text().off, !w->hideSystem);
+            pill(Setting::HideSystemOn, Setting::HideSystemOff, text().on, text().off, w->hideSystem);
         } else if (hasCompactView(w->type)) {  // R2
             pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowCompact, labelSize, kTextMuted);
-            button(Setting::CompactOn, text().on, w->compact);
-            button(Setting::CompactOff, text().off, !w->compact);
+            pill(Setting::CompactOn, Setting::CompactOff, text().on, text().off, w->compact);
         } else if (w->type == WidgetType::Network) {
             pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowAdapter, labelSize, kTextMuted);
-            button(Setting::AdapterDongle, text().adapterDongle, w->adapter == NetAdapter::Dongle);
-            button(Setting::AdapterHome, text().adapterHome, w->adapter == NetAdapter::Home);
+            pill(Setting::AdapterDongle, Setting::AdapterHome, text().adapterDongle, text().adapterHome,
+                 w->adapter == NetAdapter::Dongle);
         } else if (w->type == WidgetType::HeadsetCamera) {  // T10
             pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowCameras, labelSize, kTextMuted);
-            for (uint8_t c = 0; c < 4; ++c)
-                button(static_cast<Setting>(static_cast<int>(Setting::Camera0) + c), cam::cameraName(c),
-                       (w->cameras & (1u << c)) != 0);
-            pen.text(sx, centerBaseline(rowB, kRowH * u, labelSize), text().rowFps, labelSize, kTextMuted);
-            fpsStepper(rowB);
-            button(Setting::FullSizeToggle, text().rowFullSize, w->cameraFullSize);
+            for (uint8_t c = 0; c < 4; ++c) {  // R3: one-part pills (✓ + accent when the cam is shown)
+                const Setting s = static_cast<Setting>(static_cast<int>(Setting::Camera0) + c);
+                for (const auto& [id, r] : settings_) {
+                    if (id == s)
+                        drawSegmentedPill(pen, r.x, r.y, r.w, r.h, {{cam::cameraName(c)}},
+                                          (w->cameras & (1u << c)) != 0 ? 0 : -1, true, 14 * u, u);
+                }
+            }
+            const double rowFps = rowB + (kRowH + kRowGap) * u;  // R3: the cams take two rows
+            pen.text(sx, centerBaseline(rowFps, kRowH * u, labelSize), text().rowFps, labelSize, kTextMuted);
+            fpsStepper(rowFps);
+            const double rowC = rowFps + (kRowH + kRowGap) * u;  // R3
+            pen.text(sx, centerBaseline(rowC, kRowH * u, labelSize), text().rowFullSize, labelSize, kTextMuted);
+            pill(Setting::FullSizeOn, Setting::FullSizeOff, text().on, text().off, w->cameraFullSize);
         } else if (w->type == WidgetType::EyeCamera) {  // T10
             pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowFps, labelSize, kTextMuted);
             fpsStepper(rowA);

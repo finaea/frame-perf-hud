@@ -47,9 +47,9 @@ const UiText kEnglish = {
     "Layout", "Placement", "Room", "Bring it in front of me",
     "Point the laser at the HUD and hold the trigger to move it",
     "Not placed yet",
-    "Curve", {"Flat", "Slight", "Medium", "Strong"},  // R2: Detached curvature
+    "Curve",  // R2: Detached curvature (R3: the value is in degrees)
     "Layout", "Drag a widget to move it, tap it to change its settings", "New column", "Drop here to remove",
-    "Widgets", "Network", "soon",
+    "Widgets", "Network", "CPU items", "RAM items", "Headset cam", "Eye cam", "soon",
     "Tap a widget on the left to change it", "No settings", "Remove",
     "Rows", "One row per name", "Adapter", "Dongle", "Home Wi-Fi",
     "%u rows", ", by name",
@@ -60,7 +60,7 @@ const UiText kEnglish = {
     // R2: Compact cards, Hide system
     "Compact", "Hide system", ", no system",
     // T11: the Logs page
-    "Logs", "Save and Record", "Record", "Save last 10 min",
+    "Logs", "Save and Record", "Record", "Save Logs",
     "Save keeps the last 10 minutes and this session's summary. Record writes every second until you turn it off, "
     "even with the HUD hidden",
     "Crash recorder", "Recorder",

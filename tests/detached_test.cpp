@@ -576,69 +576,84 @@ void testConfigMalformedPose() {
     CHECK(anyWarningMentions(warnings, "attachment"));
 }
 
-// R2: Detached curvature steps and the detached_curve config key
+// R3: the Detached curve in degrees, and the detached_curve_deg config key
 void testCurveSteps() {
-    CHECK(kDetachedCurveSteps == 4);
-    CHECK(detachedCurveRadiusM(0) == 0.0);
-    CHECK(detachedCurveRadiusM(1) == 2.0);
-    CHECK(detachedCurveRadiusM(2) == 1.0);
-    CHECK(detachedCurveRadiusM(3) == 0.6);
-    CHECK(detachedCurveRadiusM(-5) == 0.0);  // clamps
-    CHECK(detachedCurveRadiusM(4) == 0.6);
-    CHECK(detachedCurveRadiusM(99) == 0.6);
+    CHECK(kDetachedCurveMaxDeg == 90 && kDetachedCurveStepDeg == 10);
+    const struct { double in; int want; } clampCases[] = {{-5, 0}, {std::nan(""), 0}, {0, 0}, {4, 0}, {5, 10}, {34, 30},
+                                                          {35, 40}, {90, 90}, {200, 90}};
+    for (const auto& k : clampCases) CHECK(clampCurveDeg(k.in) == k.want);
+
+    CHECK(detachedCurvature(0) == 0.0f);
+    CHECK(detachedCurvature(40) == static_cast<float>(40.0 / 360.0));
+    CHECK(detachedCurvature(90) == 0.25f);
+    CHECK(detachedCurvature(100) == 0.25f);  // clamps
+    CHECK(detachedCurvature(-10) == 0.0f);
+    // A 0.4 m HUD at 90° wraps a circle of radius W / θ = 0.4 / (π/2); the same formula as camtiles::curvatureRadius
+    // (tested against 0.25 in camera_tile_geometry_test, which keeps grid_renderer.h out of this test)
+    const double r = 0.4 / (2.0 * M_PI * detachedCurvature(90));
+    CHECK(std::fabs(r - 0.4 / (M_PI / 2)) < 1e-5);
+    CHECK(std::fabs(r - 0.2546) < 1e-4);
 }
 
 void testConfigCurve() {
     std::string error;
     std::vector<std::string> warnings;
-    CHECK(Config().detachedCurve == 0);
+    CHECK(Config().detachedCurveDeg == 0);
 
-    // Round trip of every step
-    for (int step = 0; step <= 3; ++step) {
+    // Round trip of every step, no warnings
+    for (int deg = 0; deg <= 90; deg += 10) {
         const std::string path = tempDir + "/curve.json";
         Config c;
-        c.detachedCurve = step;
+        c.detachedCurveDeg = deg;
         CHECK(saveConfig(path, c, error));
-        CHECK(readFile(path).find("\"detached_curve\": " + std::to_string(step)) != std::string::npos);
+        CHECK(readFile(path).find("\"detached_curve_deg\": " + std::to_string(deg)) != std::string::npos);
         Config back;
-        back.detachedCurve = 2;  // must be overwritten
+        back.detachedCurveDeg = 50;  // must be overwritten
         warnings.clear();
         CHECK(loadConfig(path, back, warnings, error));
-        CHECK(back.detachedCurve == step);
+        CHECK(back.detachedCurveDeg == deg);
         CHECK(!anyWarningMentions(warnings, "detached_curve"));
         CHECK(!anyWarningMentions(warnings, "unknown"));
     }
-    // Clamped on load
-    const struct { const char* text; int want; } cases[] = {{"7", 3}, {"-2", 0}, {"3", 3}, {"0", 0}, {"1", 1}};
+    // Rounded to 10 and clamped to 0..90 on load; out-of-range warns
+    const struct { const char* text; int want; bool warns; } cases[] = {
+        {"37", 40, false}, {"34", 30, false}, {"35", 40, false}, {"200", 90, true}, {"-10", 0, true}, {"90", 90, false}, {"0", 0, false}};
     int n = 0;
     for (const auto& k : cases) {
         const std::string path = tempDir + "/curveclamp" + std::to_string(n++) + ".json";
-        writeFile(path, std::string("{ \"detached_curve\": ") + k.text + " }");
+        writeFile(path, std::string("{ \"detached_curve_deg\": ") + k.text + " }");
         Config c;
         warnings.clear();
         CHECK(loadConfig(path, c, warnings, error));
-        CHECK(c.detachedCurve == k.want);
+        CHECK(c.detachedCurveDeg == k.want);
+        CHECK(anyWarningMentions(warnings, "detached_curve_deg") == k.warns);
     }
     // Missing key: 0, no warning
     {
         const std::string path = tempDir + "/curvemissing.json";
         writeFile(path, "{ \"attachment\": \"detached\" }");
-        Config c;
-        c.detachedCurve = 2;  // loadConfig starts from the defaults, or leaves it? either way must not warn
-        warnings.clear();
-        CHECK(loadConfig(path, c, warnings, error));
-        CHECK(!anyWarningMentions(warnings, "detached_curve"));
         Config fresh;
         warnings.clear();
         CHECK(loadConfig(path, fresh, warnings, error));
-        CHECK(fresh.detachedCurve == 0);
+        CHECK(!anyWarningMentions(warnings, "detached_curve"));
+        CHECK(fresh.detachedCurveDeg == 0);
+    }
+    // R2's old 0-3 "detached_curve" key: known (no warning), ignored
+    {
+        const std::string path = tempDir + "/curveold.json";
+        writeFile(path, "{ \"detached_curve\": 2 }");
+        Config c;
+        warnings.clear();
+        CHECK(loadConfig(path, c, warnings, error));
+        CHECK(warnings.empty());
+        CHECK(c.detachedCurveDeg == 0);
     }
     // resetDisplaySettings
     {
         Config c;
-        c.detachedCurve = 3;
+        c.detachedCurveDeg = 60;
         resetDisplaySettings(c);
-        CHECK(c.detachedCurve == 0);
+        CHECK(c.detachedCurveDeg == 0);
     }
 }
 

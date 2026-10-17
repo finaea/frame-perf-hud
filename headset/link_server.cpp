@@ -150,6 +150,12 @@ void LinkServer::handlePacket(const uint8_t* data, size_t size, const LinkEndpoi
             env_.pcMetrics(m, now);
             break;
         }
+        case PacketType::ControlAction: {  // R3
+            ControlAction m;
+            ok = decodeControlAction(payload, header.length, m);
+            if (ok) onControlAction(m, from, now);
+            break;
+        }
         default:
             ok = false;  // headset -> PC types, or unknown
             break;
@@ -428,6 +434,61 @@ void LinkServer::tick(double now) {
             peer.sentListGeneration = generation;
         }
     }
+    // R3: the Profiles / Logs tabs' state, to every lease holder: at once when it changed, else every 2 s
+    ControlState control;
+    bool haveControl = false, askedControl = false;
+    for (auto& kv : peers_) {
+        Peer& peer = kv.second;
+        if (!peer.leased) continue;
+        if (!askedControl) {
+            askedControl = true;
+            haveControl = env_.controlState(control);
+        }
+        if (!haveControl) break;
+        if (peer.controlSent && control.revision == peer.controlRevision &&
+            now - peer.controlSentAt < kControlStateEverySec) {
+            continue;
+        }
+        sendPacket(peer.leaseAddress, PacketType::ControlState, encodeControlState(control));
+        peer.controlSent = true;
+        peer.controlRevision = control.revision;
+        peer.controlSentAt = now;
+        ++controlStatesSent_;
+    }
+}
+
+void LinkServer::onControlAction(const ControlAction& m, const LinkEndpoint& from, double now) {
+    ControlResult result;
+    result.requestId = m.requestId;
+    result.layoutVersion = layout_.version();
+    const auto it = peers_.find(idToHex(m.pcId));
+    if (it == peers_.end()) {
+        result.outcome = ControlOutcome::UnknownSubscriber;
+        sendPacket(from, PacketType::ControlResult, encodeControlResult(result));
+        return;
+    }
+    Peer& peer = it->second;
+    peer.lastSeen = now;
+    // Only a PC holding a valid lease, from the address it holds it on, may press buttons (like PC_METRICS)
+    if (!peer.leased || now > peer.leaseUntil || peer.status != PeerStatus::Allowed || from != peer.leaseAddress) {
+        result.outcome = ControlOutcome::NotAllowed;
+        sendPacket(from, PacketType::ControlResult, encodeControlResult(result));
+        return;
+    }
+    // A resend of an action already carried out gets the same answer and is never done twice
+    for (const ControlResult& answer : peer.controlAnswers) {
+        if (answer.requestId == m.requestId) {
+            sendPacket(from, PacketType::ControlResult, encodeControlResult(answer));
+            return;
+        }
+    }
+    result = env_.controlAction(m, now);
+    result.requestId = m.requestId;
+    if (result.outcome == ControlOutcome::Done) ++controlActionsDone_;
+    peer.controlAnswers.push_back(result);
+    while (peer.controlAnswers.size() > kLayoutAnswerMemory) peer.controlAnswers.pop_front();
+    sendPacket(from, PacketType::ControlResult, encodeControlResult(result));
+    // the state moved (a new profile, Record on, ...): the next tick sends it at once
 }
 
 void LinkServer::sayGoodbye() {

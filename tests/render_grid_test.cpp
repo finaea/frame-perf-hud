@@ -937,6 +937,140 @@ void testCompactToggleKeepsFrameHistory() {
     CHECK(frameBand(toggled) == frameBand(steady));
 }
 
+// ---- R3: the segmented pill ----
+
+/** @return the pixel as 0xRRGGBB (cairo ARGB32 is B, G, R, A bytes on little-endian) */
+unsigned pixelRgb(cairo_surface_t* surface, int x, int y) {
+    cairo_surface_flush(surface);
+    const uint8_t* p = cairo_image_surface_get_data(surface) + y * cairo_image_surface_get_stride(surface) + x * 4;
+    return (static_cast<unsigned>(p[2]) << 16) | (static_cast<unsigned>(p[1]) << 8) | p[0];
+}
+
+void testSegmentedPillColours() {
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 240, 70);
+    cairo_t* cr = cairo_create(surface);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_paint(cr);
+    const Pen pen {cr, &fonts()};
+    // 200 x 48 at (10, 10): parts are 95 wide from x = 15 and x = 110. Sample 12 px inside each part's outer
+    // end and mid-height, clear of the label and the check.
+    for (const int selected : {0, 1}) {
+        cairo_set_source_rgb(cr, 0, 0, 0);
+        cairo_paint(cr);
+        drawSegmentedPill(pen, 10, 10, 200, 48, {{"On"}, {"Off"}}, selected, true);
+        const unsigned left = pixelRgb(surface, 15 + 12, 34);
+        const unsigned right = pixelRgb(surface, 205 - 12, 34);
+        CHECK((selected == 0 ? left : right) == 0xe27dfd);   // kAccent
+        CHECK((selected == 0 ? right : left) == 0x21262d);   // kControl
+    }
+    // unusable: no accent at full strength
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_paint(cr);
+    drawSegmentedPill(pen, 10, 10, 200, 48, {{"On"}, {"Off"}}, 0, false);
+    CHECK(pixelRgb(surface, 27, 34) != 0xe27dfd);
+
+    // a one-part pill (the cam toggles): selected = 0 fills with the accent, -1 stays kControl inside
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_paint(cr);
+    drawSegmentedPill(pen, 10, 10, 100, 48, {{"video3"}}, 0, true);
+    CHECK(pixelRgb(surface, 10 + 5 + 4, 34) == 0xe27dfd);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_paint(cr);
+    drawSegmentedPill(pen, 10, 10, 100, 48, {{"video3"}}, -1, true);
+    CHECK(pixelRgb(surface, 10 + 5 + 4, 34) == 0x21262d);
+    CHECK(pixelRgb(surface, 10 + 50, 11) != 0x21262d);  // the border ring, not the fill
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}
+
+// ---- R3: Streaming Compact ----
+
+void testStreamingCompact() {
+    WidgetInstance full = inst(W::Streaming);
+    WidgetInstance compact = inst(W::Streaming);
+    compact.compact = true;
+    CHECK(widgetHeight(compact) == 230 && widgetHeight(full) == 504);  // no context: the fixed reservations
+
+    // PC present
+    MetricStore pc = fullStreamingStore();
+    WidgetContext ctx;
+    ctx.store = &pc;
+    ctx.now = kNow;
+    const int fullH = widgetHeight(full, &ctx);
+    const int compactH = widgetHeight(compact, &ctx);
+    CHECK(fullH == 347);  // one link row
+    CHECK(compactH == 230);
+
+    // a second link adds a row to full (20) and nothing to compact (no Links section): 367 / 230
+    MetricStore twoLinks = fullStreamingStore();
+    twoLinks.setF32(metric::kPcStreamLink0Ping + 2, 14.0, kNow);
+    WidgetContext twoCtx;
+    twoCtx.store = &twoLinks;
+    twoCtx.now = kNow;
+    CHECK(widgetHeight(full, &twoCtx) == 367);
+    CHECK(widgetHeight(compact, &twoCtx) == 230);
+
+    // no jitter: the numbers moving doesn't move either height
+    MetricStore moved = fullStreamingStore();
+    moved.setF32(metric::kPcStreamPing, 55.5, kNow);
+    moved.setF32(metric::kPcStreamLink0Ping, 99.9, kNow);
+    moved.setF32(metric::kPcStreamLink0Share, 12, kNow);
+    moved.setF32(metric::kPcStreamNamedEncode, 9.9, kNow);
+    for (const uint16_t id : {metric::kPcStreamWireMbps, metric::kPcStreamVideoMbps}) moved.setF32(id, 250.0, kNow);
+    WidgetContext movedCtx;
+    movedCtx.store = &moved;
+    movedCtx.now = kNow;
+    CHECK(widgetHeight(full, &movedCtx) == fullH);
+    CHECK(widgetHeight(compact, &movedCtx) == compactH);
+
+    // a note line makes both grow by one line (16)
+    MetricStore noted = fullStreamingStore();
+    noted.setText(metric::kPcStreamL1Note, "a note", kNow);
+    WidgetContext notedCtx;
+    notedCtx.store = &noted;
+    notedCtx.now = kNow;
+    CHECK(widgetHeight(full, &notedCtx) == fullH + 16);
+    CHECK(widgetHeight(compact, &notedCtx) == compactH + 16);
+
+    // PC absent / no SteamVR: 108 full, 72 compact (state line only)
+    MetricStore noPc;
+    setPcStreamNa(noPc, Reason::PcAppNotRunning, kNow);
+    MetricStore noSteamVr;
+    setPcStreamNa(noSteamVr, Reason::NoSteamVr, kNow);
+    for (const MetricStore* store : {&noPc, &noSteamVr}) {
+        WidgetContext c;
+        c.store = store;
+        c.now = kNow;
+        CHECK(widgetHeight(full, &c) == 108);
+        CHECK(widgetHeight(compact, &c) == 72);
+    }
+
+    // it draws, and Compact looks different from full
+    CHECK(renderPx(oneWidget(compact), pc) != renderPx(oneWidget(full), pc));
+    CHECK(!renderPx(oneWidget(compact), noPc).empty());
+}
+
+// The header: the mode pill follows the title, and stays clear of the right-aligned "fps | Hz | ping" group.
+// (Same formulas as drawStreaming: pill at kInX + title + 10, width text + 12; the group ends at kInR = 490.)
+void testStreamingHeaderDoesNotOverlap() {
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t* cr = cairo_create(surface);
+    const Pen pen {cr, &fonts()};
+    const double inX = 6, inR = 496 - 6;
+    const std::string title = widgetTitle(inst(W::Streaming));
+    const double titleEnd = inX + pen.measure(title, 16);
+    const double pillX = titleEnd + 10;
+    CHECK(pillX > titleEnd);
+    const std::string right = "144 fps  |  144 Hz  |  ping 99.9 ms";
+    const double rightLeft = inR - pen.measure(right, 11);
+    for (const char* mode : {"Not streaming", "Dongle", "Home Wi-Fi", "Multi-link", "Idle", "Link --"}) {
+        const double pillRight = pillX + pen.measure(mode, 11) + 12;
+        CHECK(pillRight < rightLeft);
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}
+
 }  // namespace
 
 int main() {
@@ -965,6 +1099,9 @@ int main() {
     testCompactHeights();
     testFrameGraphsDraw();
     testCompactToggleKeepsFrameHistory();
+    testSegmentedPillColours();
+    testStreamingCompact();
+    testStreamingHeaderDoesNotOverlap();
     if (failures == 0) std::printf("render-grid-test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

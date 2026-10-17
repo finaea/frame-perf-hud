@@ -363,7 +363,7 @@ void VrOverlay::updatePlacement(const Config& config, double now) {
     }
     vr::IVROverlay* overlay = vr::VROverlay();
     // R2: only the Detached HUD curves; head and wrist stay flat
-    curveRadiusM_ = config.attachment == Attachment::Detached ? detachedCurveRadiusM(config.detachedCurve) : 0.0;
+    wantCurvature_ = config.attachment == Attachment::Detached ? detachedCurvature(config.detachedCurveDeg) : 0.0f;
     applyCurvature();
     // T05: Detached = a fixed standing-space pose. Without one (never placed), it stays hidden until it's placed
     if (config.attachment == Attachment::Detached) {
@@ -862,7 +862,6 @@ bool VrOverlay::submitPanel(const uint8_t* rgba, int width, int height, int colu
         panelColumns_ = std::max(1, columns);
         checkOverlay("SetOverlayWidthInMeters", vr::VROverlay()->SetOverlayWidthInMeters(
                                                     panelHandle_, static_cast<float>(configWidthM_ * panelColumns_)));
-        applyCurvature();  // R2: same radius, new width
     }
     notePlacement();  // T10: a new texture size / column count moves the camera tiles
     const bool ok = panelTexture_->update(panelHandle_, rgba, message);
@@ -906,11 +905,11 @@ void VrOverlay::setDetachedTransform(const DetachedPose& pose) {
 
 void VrOverlay::applyCurvature() {
     if (!connected_ || panelHandle_ == 0) return;
-    const float curvature = camtiles::overlayCurvature(configWidthM_ * panelColumns_, curveRadiusM_);
+    const float curvature = wantCurvature_;
     if (curvature == appliedCurvature_) return;
     const vr::EVROverlayError error = vr::VROverlay()->SetOverlayCurvature(panelHandle_, curvature);
-    std::fprintf(stderr, "[VR] SetOverlayCurvature(%.3f, radius %.2f m) -> %s\n", curvature, curveRadiusM_,
-                 overlayErrorName(error));
+    std::fprintf(stderr, "[VR] SetOverlayCurvature(%.3f = %.0f°, radius %.2f m) -> %s\n", curvature, curvature * 360.0,
+                 camtiles::curvatureRadius(configWidthM_ * panelColumns_, curvature), overlayErrorName(error));
     if (error != vr::VROverlayError_None) return;  // the next updatePlacement tries again
     appliedCurvature_ = curvature;
     notePlacement();  // the camera tiles bend with it

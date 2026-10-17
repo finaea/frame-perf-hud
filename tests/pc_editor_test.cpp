@@ -4,6 +4,7 @@
 
 #include "editor_model.h"
 #include "grid_renderer.h"
+#include "i18n.h"
 #include "layout.h"
 
 #include "metric_registry.h"
@@ -200,7 +201,8 @@ void testCompactAndHideSystemButtons() {
         e.select({0, i});
         const WidgetType type = l.columns[0].widgets[static_cast<size_t>(i)].type;
         const bool wantCompact = type == WidgetType::Frame || type == WidgetType::Power ||
-                                 type == WidgetType::Battery || type == WidgetType::Temp;
+                                 type == WidgetType::Battery || type == WidgetType::Temp ||
+                                 type == WidgetType::Streaming;  // R3
         const bool wantHide = type == WidgetType::CpuItems || type == WidgetType::RamItems;
         check(has(e, S::CompactOn) == wantCompact && has(e, S::CompactOff) == wantCompact,
               "Compact buttons only for Frame/Power/Battery/Temp");
@@ -233,6 +235,248 @@ void testCompactAndHideSystemButtons() {
     want.columns[0].widgets[7].hideSystem = true;
     check(edited.sameWidgets(want), "Hide system On changed only hideSystem");
 }
+
+// R3: every two-way setting is one pill over two adjacent halves (the two Setting boxes)
+void testPills() {
+    using S = PcEditor::Setting;
+    struct Pill {
+        WidgetType type;
+        S on, off;  ///< `on` is the half that sets the field, `off` the other
+        bool (*isOn)(const WidgetInstance&);
+    };
+    const Pill pills[] = {
+        {WidgetType::RamItems, S::SameNameOn, S::SameNameOff, [](const WidgetInstance& w) { return w.sumSameName; }},
+        {WidgetType::CpuItems, S::HideSystemOn, S::HideSystemOff, [](const WidgetInstance& w) { return w.hideSystem; }},
+        {WidgetType::Frame, S::CompactOn, S::CompactOff, [](const WidgetInstance& w) { return w.compact; }},
+        {WidgetType::Streaming, S::CompactOn, S::CompactOff, [](const WidgetInstance& w) { return w.compact; }},
+        {WidgetType::Network, S::AdapterHome, S::AdapterDongle,
+         [](const WidgetInstance& w) { return w.adapter == NetAdapter::Home; }},
+        {WidgetType::HeadsetCamera, S::FullSizeOn, S::FullSizeOff,
+         [](const WidgetInstance& w) { return w.cameraFullSize; }},
+    };
+    const Box card = {5000, 0, 400, 3000};
+    for (const Pill& pill : pills) {
+        Layout l;
+        l.version = 1;
+        l.columns.resize(1);
+        l.columns[0].widgets = {make(pill.type)};
+        PcEditor e;
+        attach(e, l);
+        e.select({0, 0});
+        Box a, b;
+        for (const auto& s : e.settingButtons()) {
+            if (s.first == pill.on) a = s.second;
+            if (s.first == pill.off) b = s.second;
+        }
+        if (pill.type == WidgetType::Network) std::swap(a, b);  // Dongle is the left half
+        check(a.w > 0 && b.w > 0, "pill halves exist");
+        check(a.y == b.y && a.h == b.h && a.w == b.w, "pill halves share a row and a width");
+        check(a.x + a.w == b.x, "pill halves are adjacent");
+        double chipsBottom = 0;
+        for (const auto& c : e.chips()) chipsBottom = std::max(chipsBottom, c.second.y + c.second.h);
+        for (const Box& r : {a, b}) {
+            check(r.x >= card.x && r.x + r.w <= card.x + card.w && r.y >= chipsBottom && r.y + r.h <= card.y + card.h,
+                  "pill inside the palette card, below the chips");
+        }
+
+        const WidgetInstance before = l.columns[0].widgets[0];
+        check(!pill.isOn(before), "pill starts in the Off state");
+        Layout edited;
+        check(!press(e, pill.off, edited), "the half that is already the state queues nothing");
+        check(press(e, pill.on, edited), "the On half queues an edit");
+        check(pill.isOn(edited.columns[0].widgets[0]), "On half set the field");
+        WidgetInstance want = before;
+        if (pill.type == WidgetType::RamItems) want.sumSameName = true;
+        if (pill.type == WidgetType::CpuItems) want.hideSystem = true;
+        if (pill.type == WidgetType::Frame || pill.type == WidgetType::Streaming) want.compact = true;
+        if (pill.type == WidgetType::Network) want.adapter = NetAdapter::Home;
+        if (pill.type == WidgetType::HeadsetCamera) want.cameraFullSize = true;
+        check(edited.columns[0].widgets[0] == want, "On half changed only its field");
+
+        // and back: with the field set, the Off half queues the way back
+        PcEditor e2;
+        Layout on = l;
+        on.columns[0].widgets[0] = want;
+        attach(e2, on);
+        e2.select({0, 0});
+        check(!press(e2, pill.on, edited), "On half is a no-op when already on");
+        check(press(e2, pill.off, edited), "Off half queues the way back");
+        check(edited.columns[0].widgets[0] == before, "Off half restored the field");
+    }
+
+    // Headset camera: Full size is its own row, below the FPS stepper
+    Layout l;
+    l.version = 1;
+    l.columns.resize(1);
+    l.columns[0].widgets = {make(WidgetType::HeadsetCamera)};
+    PcEditor e;
+    attach(e, l);
+    e.select({0, 0});
+    Box fps, full;
+    for (const auto& s : e.settingButtons()) {
+        if (s.first == S::FpsDown) fps = s.second;
+        if (s.first == S::FullSizeOn) full = s.second;
+    }
+    check(fps.w > 0 && full.w > 0 && full.y >= fps.y + fps.h, "Full size sits below the FPS row");
+}
+
+// R3: the four cam toggles are one-part pills (PC: 2 x 2)
+void testCameraPills() {
+    using S = PcEditor::Setting;
+    const S cams[4] = {S::Camera0, S::Camera1, S::Camera2, S::Camera3};
+    Layout l;
+    l.version = 1;
+    l.columns.resize(1);
+    l.columns[0].widgets = {make(WidgetType::HeadsetCamera)};  // cameras = 0x01
+    PcEditor e;
+    attach(e, l);
+    e.select({0, 0});
+    Box r[4], fps, full;
+    for (const auto& s : e.settingButtons()) {
+        for (int c = 0; c < 4; ++c) {
+            if (s.first == cams[c]) r[c] = s.second;
+        }
+        if (s.first == S::FpsDown) fps = s.second;
+        if (s.first == S::FullSizeOn) full = s.second;
+    }
+    double chipsBottom = 0;
+    for (const auto& c : e.chips()) chipsBottom = std::max(chipsBottom, c.second.y + c.second.h);
+    const Box card = {5000, 0, 400, 3000};
+    for (int c = 0; c < 4; ++c) {
+        check(r[c].w > 0, "cam chip exists");
+        check(r[c].x >= card.x && r[c].x + r[c].w <= card.x + card.w && r[c].y >= chipsBottom &&
+                  r[c].y + r[c].h <= card.y + card.h,
+              "cam chip inside the palette card, below the chips");
+        for (int d = c + 1; d < 4; ++d) {
+            const bool apart = r[c].x + r[c].w <= r[d].x || r[d].x + r[d].w <= r[c].x || r[c].y + r[c].h <= r[d].y ||
+                               r[d].y + r[d].h <= r[c].y;
+            check(apart, "cam chips do not overlap");
+        }
+        check(r[c].y + r[c].h <= fps.y, "FPS row is below the cams");
+    }
+    check(r[0].y == r[1].y && r[2].y == r[3].y && r[2].y > r[0].y && r[1].x > r[0].x && r[3].x > r[2].x &&
+              r[0].x == r[2].x,
+          "cams are a 2 x 2 grid");
+    check(full.y >= fps.y + fps.h, "Full size is below FPS");
+
+    // a tap on a chip toggles exactly its bit; the only cam on cannot be turned off
+    const uint8_t expect[4] = {0, 0x03, 0x05, 0x09};
+    for (int c = 0; c < 4; ++c) {
+        PcEditor ed;
+        attach(ed, l);
+        ed.select({0, 0});
+        Layout edited;
+        if (c == 0) {
+            check(!press(ed, cams[0], edited), "the last cam cannot be turned off");
+        } else {
+            check(press(ed, cams[c], edited) && edited.columns[0].widgets[0].cameras == expect[c],
+                  "cam chip toggles its bit");
+        }
+    }
+    Layout two = l;
+    two.columns[0].widgets[0].cameras = 0x05;
+    for (const int c : {0, 2}) {
+        PcEditor ed;
+        attach(ed, two);
+        ed.select({0, 0});
+        Layout edited;
+        check(press(ed, cams[c], edited) && edited.columns[0].widgets[0].cameras == (c == 0 ? 0x04 : 0x01),
+              "turning one of two cams off");
+    }
+}
+
+// R3: in a short client (1100 x 600 DIP) the palette is 340 x 510 below the tab bar. Every chip and every setting
+// of every widget type must sit fully inside it, whatever the DPI scale.
+// The app's numbers (pc/app_window.cpp): areaY = bar 30 + tabs 48 + pad 4 = 82, paletteH = h - areaY - 8, x = w - 8 - 340.
+// (48 is PcPages::tabBarHeight at scale 1; hardcoded here so the test doesn't need the window.)
+Box shortClientPalette(double s) {
+    const double w = 1100 * s, h = 600 * s, areaY = 82 * s;
+    return {w - 8 * s - 340 * s, areaY, 340 * s, h - areaY - 8 * s};
+}
+
+PcEditor::View shortClientView(double s) {
+    PcEditor::View v;
+    v.paletteCard = shortClientPalette(s);
+    v.layoutCard = {8 * s, 82 * s, v.paletteCard.x - 16 * s, v.paletteCard.h};
+    const double header = PcEditor::headerHeight(s);
+    v.viewport = {v.layoutCard.x + 8 * s, v.layoutCard.y + header, v.layoutCard.w - 16 * s, v.layoutCard.h - header - 8 * s};
+    v.originX = v.viewport.x;
+    v.originY = v.viewport.y;
+    v.ui = s;
+    return v;
+}
+
+void testSettingsFitShortClient() {
+    const WidgetType types[] = {WidgetType::Frame,    WidgetType::Cpu,         WidgetType::GpuRam,
+                                WidgetType::Power,    WidgetType::Battery,     WidgetType::Temp,
+                                WidgetType::CpuItems, WidgetType::RamItems,    WidgetType::Network,
+                                WidgetType::Streaming, WidgetType::General,    WidgetType::HeadsetCamera,
+                                WidgetType::EyeCamera};
+    for (const double s : {1.0, 1.25, 1.5, 2.0}) {
+        double worst = 1e9;
+        for (const WidgetType type : types) {
+            Layout l;
+            l.version = 1;
+            l.columns.resize(1);
+            l.columns[0].widgets = {make(type)};
+            PcEditor e;
+            e.sync(l, layoutGrid(l));
+            e.setView(shortClientView(s));
+            e.select({0, 0});
+            const Box card = shortClientPalette(s);
+            const double bottom = card.y + card.h;
+            bool inside = true;
+            auto account = [&](const Box& r) {
+                inside = inside && r.x >= card.x && r.x + r.w <= card.x + card.w && r.y >= card.y &&
+                         r.y + r.h <= bottom - 4 * s;
+                worst = std::min(worst, bottom - (r.y + r.h));
+            };
+            for (const auto& c : e.chips()) account(c.second);
+            for (const auto& b : e.settingButtons()) account(b.second);
+            check(inside, "chips and settings fit the palette of a 1100 x 600 client (4 * scale margin)");
+        }
+        std::printf("  short client, scale %.2f: worst bottom margin %.1f px (%.1f DIP)\n", s, worst, worst / s);
+    }
+}
+
+#ifdef FPH_FONT_DIR
+// R3: no palette chip label may shrink to fitSize's minimum (same formula as PcEditor::drawOverPanel, at scale 1)
+void testChipLabelSizes() {
+    FontSet fonts;
+    fonts.load(FPH_FONT_DIR "/NotoSans-Regular.ttf", FPH_FONT_DIR "/NotoSans-Bold.ttf");
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t* cr = cairo_create(surface);
+    const Pen pen {cr, &fonts};
+    const UiText& text = uiText(Language::En);
+    const Layout l = base(1);
+    PcEditor e;
+    attach(e, l);
+    for (const auto& chip : e.chips()) {
+        const WidgetType type = chip.first;
+        std::string label;
+        if (type == WidgetType::Network) label = text.paletteNetwork;
+        else if (type == WidgetType::CpuItems) label = text.paletteCpuItems;
+        else if (type == WidgetType::RamItems) label = text.paletteRamItems;
+        else if (type == WidgetType::HeadsetCamera) label = text.paletteHeadsetCamera;
+        else if (type == WidgetType::EyeCamera) label = text.paletteEyeCamera;
+        else {
+            WidgetInstance w;
+            w.type = type;
+            label = widgetTitle(w);
+        }
+        if (!isRepeatable(type)) {
+        check(fitSize(pen, label, 13.5, 9, chip.second.w - 16 - 16, true) > 9, "present chip label stays above the minimum size");
+        }
+        check(fitSize(pen, label, 13.5, 9, chip.second.w - 16, false) > 9, "chip label stays above the minimum size");
+        if (isRepeatable(type)) {
+            check(fitSize(pen, label + " \u00d72", 13.5, 9, chip.second.w - 16, false) > 9,
+                  "repeatable chip label with a count stays above the minimum size");
+        }
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}
+#endif
 
 #ifdef FPH_FONT_DIR
 // Screenshots, only when FPH_PNG_DIR is set (the PC app can't be launched twice, so this is how they're seen).
@@ -274,8 +518,14 @@ void writeScreens(const char* dir) {
     }
 
     // the palette with a selection: Frame (Compact row), CPU usage items (Rows / One row per name / Hide system)
-    for (const bool frame : {true, false}) {
-        const Layout l = base(1);
+    // and the Headset camera card (cams 0 and 2 on, Full size on)
+    for (const int variant : {0, 1, 2}) {
+        Layout l = base(1);
+        if (variant == 2) {
+            l.columns[0].widgets.push_back(make(WidgetType::HeadsetCamera));
+            l.columns[0].widgets.back().cameras = 0x05;
+            l.columns[0].widgets.back().cameraFullSize = true;
+        }
         PcEditor e;
         e.sync(l, layoutGrid(l));
         PcEditor::View v;
@@ -286,7 +536,7 @@ void writeScreens(const char* dir) {
         v.originY = 56;
         v.ui = 1.0;
         e.setView(v);
-        e.select(frame ? WidgetRef{0, 0} : WidgetRef{0, 1});
+        e.select(variant == 0 ? WidgetRef{0, 0} : variant == 1 ? WidgetRef{0, 1} : WidgetRef{0, 2});
         const int w = static_cast<int>(v.paletteCard.x + v.paletteCard.w) + 10;
         cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, 770);
         cairo_t* cr = cairo_create(surface);
@@ -308,7 +558,49 @@ void writeScreens(const char* dir) {
         cairo_paint(cr);
         cairo_surface_destroy(panel);
         e.drawOverPanel(pen);
-        cairo_surface_write_to_png(surface, (out + (frame ? "/pc_editor_frame.png" : "/pc_editor_cpu_items.png")).c_str());
+        cairo_surface_write_to_png(surface, (out + (variant == 0   ? "/pc_editor_frame.png"
+                                     : variant == 1 ? "/pc_editor_cpu_items.png"
+                                                    : "/pc_editor_headset_camera.png")).c_str());
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+    }
+
+    // the whole 1100 x 600 client with the real palette rect: Headset camera selected, cams 0 and 2 on, Full size on
+    {
+        Layout l = base(1);
+        l.columns[0].widgets.push_back(make(WidgetType::HeadsetCamera));
+        l.columns[0].widgets.back().cameras = 0x05;
+        l.columns[0].widgets.back().cameraFullSize = true;
+        PcEditor e;
+        e.sync(l, layoutGrid(l));
+        e.setView(shortClientView(1.0));
+        e.select({0, 2});
+        cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1100, 600);
+        cairo_t* cr = cairo_create(surface);
+        cairo_set_source_rgb(cr, 0.07, 0.07, 0.08);
+        cairo_paint(cr);
+        const Pen pen {cr, &fonts};
+        e.drawUnderPanel(pen);
+        GridRenderer renderer(fonts);
+        renderer.setLayout(l);
+        MetricStore s;
+        WidgetContext ctx;
+        ctx.store = &s;
+        ctx.now = 100;
+        renderer.render(ctx);
+        cairo_surface_t* panel = cairo_image_surface_create_for_data(
+            const_cast<uint8_t*>(renderer.pixels()), CAIRO_FORMAT_ARGB32, renderer.geometry().textureWidth,
+            renderer.geometry().textureHeight, renderer.geometry().textureWidth * 4);
+        const PcEditor::View v = shortClientView(1.0);
+        cairo_save(cr);
+        cairo_rectangle(cr, v.viewport.x, v.viewport.y, v.viewport.w, v.viewport.h);
+        cairo_clip(cr);
+        cairo_set_source_surface(cr, panel, v.originX, v.originY);
+        cairo_paint(cr);
+        cairo_restore(cr);
+        cairo_surface_destroy(panel);
+        e.drawOverPanel(pen);
+        cairo_surface_write_to_png(surface, (out + "/pc_editor_headset_camera_600.png").c_str());
         cairo_destroy(cr);
         cairo_surface_destroy(surface);
     }
@@ -319,7 +611,11 @@ void writeScreens(const char* dir) {
 
 int main() {
     testCompactAndHideSystemButtons();
+    testPills();
+    testCameraPills();
+    testSettingsFitShortClient();
 #ifdef FPH_FONT_DIR
+    testChipLabelSizes();
     if (const char* dir = std::getenv("FPH_PNG_DIR"); dir != nullptr && dir[0] != '\0') writeScreens(dir);
 #endif
     testSelectionFollowsInstance();

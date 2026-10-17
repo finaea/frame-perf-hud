@@ -37,6 +37,11 @@ struct Settings {
     bool onTop = false;
     bool trayHintShown = false;  ///< the one-time "still running in the tray" toast
     int cameraFps = 10;          ///< ticket 10
+    // Release G: the PC updater (pc/updater.h)
+    bool updateCheck = true;        ///< check GitHub at start and once a day (the Settings switch)
+    int64_t updateCheckedAt = 0;    ///< last answer from GitHub (Unix s; 0 = never)
+    std::string updateLatest;       ///< the latest release it named ("" = none)
+    std::string updatePage;         ///< its release page
 
     bool operator==(const Settings& o) const;
     bool operator!=(const Settings& o) const { return !(*this == o); }

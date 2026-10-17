@@ -17,6 +17,7 @@ struct AppOptions {
     std::string screenshotPath;  ///< --screenshot PATH: write the window's picture after it first draws (tests)
     double exitAfterSec = 0;     ///< --exit-after N: Exit (BYE included) after N s (tests)
     bool offline = false;        ///< --offline: no socket, nothing sent (look at the window without a headset)
+    bool justUpdated = false;    ///< --updated: the updater just swapped this exe in (say so once)
 };
 
 /** Runs the app until Exit. @return the process exit code */

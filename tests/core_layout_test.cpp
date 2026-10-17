@@ -244,12 +244,24 @@ void testCompactAndHideSystem() {
     // wrong type: warns (unknown key) and is ignored
     Layout wrong;
     warnings.clear();
-    CHECK(parseLayoutText(R"({"columns":[[{"type":"cpu","compact":true},{"type":"streaming","compact":true},)"
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"cpu","compact":true},{"type":"general","compact":true},)"
                           R"({"type":"frame","hide_system":true}]]})",
                           wrong, warnings, error));
     CHECK(warnings.size() == 3);
     CHECK(wrong.columns[0].widgets.size() == 3);
     for (const WidgetInstance& w : wrong.columns[0].widgets) CHECK(!w.compact && !w.hideSystem);
+
+    // Streaming has a Compact view now (R3): it round-trips
+    Layout streaming;
+    streaming.columns.resize(1);
+    WidgetInstance st = inst(W::Streaming);
+    st.compact = true;
+    streaming.columns[0].widgets = {st};
+    Layout streamingBack;
+    warnings.clear();
+    CHECK(parseLayoutText(layoutToJson(streaming, 0), streamingBack, warnings, error));
+    CHECK(warnings.empty() && streamingBack.columns[0].widgets[0].compact);
+    CHECK(streamingBack.sameWidgets(streaming));
 
     // non-bool value: warns, stays false
     Layout bad;

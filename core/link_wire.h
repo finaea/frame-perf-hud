@@ -50,6 +50,11 @@ enum class PacketType : uint8_t {
     LayoutAck = 9,     ///< headset -> PC
     LayoutReject = 10, ///< headset -> PC
     Bye = 11,          ///< both: clean exit
+    // R3: the PC window's Profiles / Logs tabs. An older peer ignores these: the PC's default branch drops unknown
+    // types silently; an older headset counts a CONTROL_ACTION as malformed, which only happens on a button press
+    ControlState = 12,   ///< headset -> PC: profiles, Record, crash recorder, last power-off (on change + every 2 s)
+    ControlAction = 13,  ///< PC -> headset: a Profiles / Logs button (resent every 1 s until answered)
+    ControlResult = 14,  ///< headset -> PC: the action's outcome
 };
 
 /** @return the type's name for logs ("HELLO", ...); "?" if unknown */
@@ -441,6 +446,120 @@ struct ProcessListWire {
     bool cpuValid = false;    ///< CPU list only: there's a real interval behind it
     std::vector<ProcessRowWire> rows;
 };
+
+// ---- R3: CONTROL_STATE / CONTROL_ACTION / CONTROL_RESULT ----
+// Newer fields go at the end: the decoders below ignore trailing bytes, so a newer peer can append without
+// breaking an older one.
+
+constexpr size_t kMaxControlProfiles = 8;
+constexpr double kControlStateEverySec = 2.0;  ///< headset: CONTROL_STATE to each lease holder at least this often
+constexpr double kControlResendSec = 1.0;      ///< PC: resend CONTROL_ACTION until CONTROL_RESULT
+constexpr double kControlGiveUpSec = 5.0;      ///< PC: no answer after this long: give up ("no answer")
+
+/** CONTROL_STATE flags. */
+constexpr uint8_t kControlRecording = 1u << 0;      ///< Record is on
+constexpr uint8_t kControlCrashRecorder = 1u << 1;  ///< the crash recorder runs
+constexpr uint8_t kControlUnsaved = 1u << 2;        ///< Use / Reset would lose the live layout (headset's rule)
+
+/** One saved profile in CONTROL_STATE. */
+struct ControlProfile {
+    std::string id;    ///< "profile-3" (≤ 15 bytes)
+    std::string name;  ///< ≤ 31 bytes
+
+    bool operator==(const ControlProfile& o) const { return id == o.id && name == o.name; }
+};
+
+/**
+ * CONTROL_STATE (headset -> PC): what the headset's Profiles and Logs pages show. A full snapshot, like METRICS:
+ * a lost one is healed by the next.
+ *   revision u32 | layout version u32 | flags u8 | max profiles u8 | active id str8 | count u8 |
+ *   count × (id str8, name str8) | status str8 | record status str8 | crash status str8 | power-off str8
+ */
+struct ControlState {
+    uint32_t revision = 0;       ///< bumps whenever anything below changes
+    uint32_t layoutVersion = 0;  ///< the live layout's version: a confirmed Use / Reset is bound to it
+    uint8_t flags = 0;           ///< kControl*
+    uint8_t maxProfiles = 8;
+    std::string activeId;        ///< "" = no active profile
+    std::vector<ControlProfile> profiles;  ///< by id number, ≤ kMaxControlProfiles
+    std::string status;          ///< the last profile action's result (≤ 127 bytes)
+    std::string recordStatus;    ///< "Recording 3:12 to …" (≤ 127)
+    std::string crashStatus;     ///< "Crash log saved (12:55)" (≤ 63)
+    std::string powerOff;        ///< the last power-off reason (≤ 31)
+
+    /** Equal apart from the revision. */
+    bool sameContent(const ControlState& o) const;
+};
+
+/** CONTROL_ACTION kinds. Stable: append only (a headset that doesn't know one answers Unsupported). */
+enum class ControlKind : uint8_t {
+    ProfileNew = 1,
+    ProfileUse = 2,     ///< profileId
+    ProfileSave = 3,    ///< the active profile
+    ProfileRename = 4,  ///< profileId + text
+    ProfileDelete = 5,  ///< profileId; needs kControlConfirmed
+    ProfileReset = 6,
+    RecordOn = 7,
+    RecordOff = 8,
+    CrashRecorderOn = 9,
+    CrashRecorderOff = 10,
+};
+
+/** CONTROL_ACTION flags. */
+constexpr uint8_t kControlConfirmed = 1u << 0;  ///< the PC's second tap: "lose the changes" (Use / Reset) / delete
+
+/**
+ * CONTROL_ACTION (PC -> headset), from a leased PC only.
+ *   pc id 16 | request id u32 | kind u8 | flags u8 | layout version u32 | profile id str8 | text str8
+ */
+struct ControlAction {
+    Id128 pcId {};
+    uint32_t requestId = 0;
+    ControlKind kind = ControlKind::ProfileNew;
+    uint8_t flags = 0;
+    uint32_t layoutVersion = 0;  ///< the layout version the PC's confirmation was for (CONTROL_STATE's)
+    std::string profileId;       ///< ≤ 15 bytes
+    std::string text;            ///< Rename's new name, ≤ 31 bytes
+};
+
+/** CONTROL_RESULT outcomes. */
+enum class ControlOutcome : uint8_t {
+    Done = 0,               ///< carried out (or nothing to do)
+    NeedsConfirm = 1,       ///< Use / Reset would lose unsaved changes, Delete needs a second tap: ask, then resend confirmed
+    Failed = 2,             ///< tried and failed: message says why
+    NotAllowed = 3,         ///< no valid lease from this address
+    UnknownSubscriber = 4,  ///< HELLO first
+    Unsupported = 5,        ///< a kind this headset doesn't know
+};
+
+/** @return the outcome's name for logs */
+const char* controlOutcomeName(ControlOutcome outcome);
+
+/** CONTROL_RESULT (headset -> PC): request id u32 | outcome u8 | layout version u32 | message str8 */
+struct ControlResult {
+    uint32_t requestId = 0;
+    ControlOutcome outcome = ControlOutcome::Done;
+    uint32_t layoutVersion = 0;  ///< the headset's current layout version (NeedsConfirm: confirm against this)
+    std::string message;         ///< ≤ 127 bytes ("Using Gaming", "Couldn't save: …")
+};
+
+/**
+ * The headset's second-tap rule for a PC's action, the same as a tap on its own dashboard: Delete always needs the
+ * confirmation; Use and Reset need it when they'd lose unsaved changes, and the confirmation only counts for the
+ * layout version the PC saw (an edit since then must be confirmed again).
+ * @param unsaved the headset's own "unsaved" right now (not a cached copy)
+ * @param currentVersion the live layout's version right now
+ * @return true if it may go ahead; false = answer NeedsConfirm
+ */
+bool controlActionConfirmed(const ControlAction& action, bool unsaved, uint32_t currentVersion);
+
+std::vector<uint8_t> encodeControlState(const ControlState& m);
+bool decodeControlState(const uint8_t* payload, size_t size, ControlState& out);
+std::vector<uint8_t> encodeControlAction(const ControlAction& m);
+/** Unknown kinds decode fine (the receiver answers Unsupported); only short / malformed payloads fail. */
+bool decodeControlAction(const uint8_t* payload, size_t size, ControlAction& out);
+std::vector<uint8_t> encodeControlResult(const ControlResult& m);
+bool decodeControlResult(const uint8_t* payload, size_t size, ControlResult& out);
 
 std::vector<uint8_t> encodeHello(const Hello& m);
 bool decodeHello(const uint8_t* payload, size_t size, Hello& out);

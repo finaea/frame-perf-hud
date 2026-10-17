@@ -1068,12 +1068,15 @@ struct StreamingMeasure {
     int height = 108;
 };
 
-StreamingMeasure measureStreaming(const WidgetContext& ctx) {
+StreamingMeasure measureStreaming(const WidgetContext& ctx, bool compact) {
     StreamingMeasure m;
     const auto* pc = value(ctx, kPcStreamPing);
     m.pcPresent = pc && (pc->ok || (pc->reason != Reason::PcAppNotRunning && pc->reason != Reason::NotSampledYet));
     m.noSteamVr = pc && !pc->ok && pc->reason == Reason::NoSteamVr;
-    if (!m.pcPresent || m.noSteamVr) return m;
+    if (!m.pcPresent || m.noSteamVr) {
+        if (compact) m.height = static_cast<int>(kTop) + 66;  // R3: the state line only (no chips)
+        return m;
+    }
     m.stages = true;
     for (unsigned j = 0; j < 6; ++j)
         m.stages = m.stages && ok(ctx, static_cast<uint16_t>(1040 + 2 * j));
@@ -1089,6 +1092,7 @@ StreamingMeasure measureStreaming(const WidgetContext& ctx) {
     }
     m.healthY = m.linksY + 21 + 20 * std::max<size_t>(1, m.links.size()) + 8;
     m.notesY = m.healthY + 68;
+    if (compact) m.notesY = m.linksY;  // R3 Compact: no Links section, no health chips
     for (uint16_t id : {kPcStreamL1Note, kPcStreamL2Note, kPcStreamL3Note}) {
         if (!text(ctx, id).empty()) m.notes.push_back(id);
     }
@@ -1120,12 +1124,12 @@ void streamSegment(const Pen& pen, double x, double y, double width, double heig
     }
 }
 
-void drawStreaming(const Pen& pen, double x, double y, const WidgetContext& ctx) {
+void drawStreaming(const Pen& pen, double x, double y, const WidgetInstance& w, const WidgetContext& ctx) {
     const double left = x + kInX + 8;
     const double right = x + kInR - 8;
     const double width = right - left;
     const double top = y + kTop;
-    const StreamingMeasure measured = measureStreaming(ctx);
+    const StreamingMeasure measured = measureStreaming(ctx, w.compact);
     const auto number = [&](uint16_t id, int precision = 1) {
         return ok(ctx, id) ? num(f(ctx, id), precision) : std::string("--");
     };
@@ -1157,16 +1161,20 @@ void drawStreaming(const Pen& pen, double x, double y, const WidgetContext& ctx)
     const char* modes[] = {"Not streaming", "Dongle", "Home Wi-Fi", "Multi-link", "Idle"};
     const auto mode = i(ctx, kStreamLinkMode);
     const std::string modeText = ok(ctx, kStreamLinkMode) && mode >= 0 && mode < 5 ? modes[mode] : "Link --";
+    // R3: the mode pill sits right after the title (staticTitle's text), fps joins the right-aligned group
+    const double pillX = x + kInX + pen.measure(titleOf(w), 16) + 10;
     pen.color(kBg);
-    pen.roundedRect(left + 106, top + 3, pen.measure(modeText, 11) + 12, 20, 6);
+    pen.roundedRect(pillX, top + 3, pen.measure(modeText, 11) + 12, 20, 6);
     cairo_fill(pen.cr);
-    pen.text(left + 112, top + 17, modeText, 11, kTextMuted);
-    if (ok(ctx, kPcStreamFps)) pen.text(left + 216, top + 17, number(kPcStreamFps, 0) + " fps", 11, kTextMuted);
-    pen.text(right, top + 17, number(kPcStreamDisplayHz, 0) + " Hz  |  ping " + number(kPcStreamPing) + " ms", 11,
-             kTextMuted, false, true);
+    pen.text(pillX + 6, top + 17, modeText, 11, kTextMuted);
+    pen.text(right, top + 17,
+             (ok(ctx, kPcStreamFps) ? number(kPcStreamFps, 0) + " fps  |  " : std::string()) +
+                 number(kPcStreamDisplayHz, 0) + " Hz  |  ping " + number(kPcStreamPing) + " ms",
+             11, kTextMuted, false, true);
 
     if (!measured.pcPresent || measured.noSteamVr) {
         pen.text(left, top + 52, measured.noSteamVr ? "SteamVR not running" : "PC app not running", 18, kTextMuted);
+        if (w.compact) return;  // R3: no health chips in Compact
         double sx = left;
         double sy = top + measured.healthY;
         chip(sx, sy, "FEC retries", kStreamFecRetries);
@@ -1261,45 +1269,44 @@ void drawStreaming(const Pen& pen, double x, double y, const WidgetContext& ctx)
             rx += 8 + pen.text(rx + 8, top + measured.bitrateY + 41, label, 10, kTextMuted) + 10;
         }
     }
-    pen.text(left, top + measured.linksY, "Links", 12, kTextMuted);
-    pen.text(right, top + measured.linksY, "share / max ping", 10, kTextMuted, false, true);
-    double row = top + measured.linksY + 21;
-    unsigned linkCount = 0;
-    for (unsigned j = 0; j < 4; ++j) {
-        const auto id = static_cast<uint16_t>(1060 + 2 * j);
-        if (!ok(ctx, id)) continue;
-        ++linkCount;
-        const std::string name = ctx.store ? streamLinkName(*ctx.store, j) : "Link " + std::to_string(j + 1);
-        pen.text(left, row, ellipsize(pen, name, 12, 103), 12, kText);
-        const double bx = left + 112;
-        const double bw = width - 255;
-        streamSegment(pen, bx, row - 10, bw, 8, kBg);
-        if (ok(ctx, id + 1)) {
-            streamSegment(pen, bx, row - 10, bw * std::clamp(f(ctx, id + 1) / 100, 0.0, 1.0), 8,
-                          j == 0   ? kAccent
-                          : j == 1 ? kGpu
-                                   : kStreamDecode);
+    if (!w.compact) {  // R3: Compact stops after Bitrate (no Links section, no health chips), then the notes
+        pen.text(left, top + measured.linksY, "Links", 12, kTextMuted);
+        pen.text(right, top + measured.linksY, "share / max ping", 10, kTextMuted, false, true);
+        double row = top + measured.linksY + 21;
+        unsigned linkCount = 0;
+        for (unsigned j = 0; j < 4; ++j) {
+            const auto id = static_cast<uint16_t>(1060 + 2 * j);
+            if (!ok(ctx, id)) continue;
+            ++linkCount;
+            const std::string name = ctx.store ? streamLinkName(*ctx.store, j) : "Link " + std::to_string(j + 1);
+            pen.text(left, row, ellipsize(pen, name, 12, 103), 12, kText);
+            const double bx = left + 112;
+            const double bw = width - 255;
+            streamSegment(pen, bx, row - 10, bw, 8, kBg);
+            if (ok(ctx, id + 1)) {
+                streamSegment(pen, bx, row - 10, bw * std::clamp(f(ctx, id + 1) / 100, 0.0, 1.0), 8,
+                              j == 0   ? kAccent
+                              : j == 1 ? kGpu
+                                       : kStreamDecode);
+            }
+            pen.text(right, row, number(id + 1, 0) + "%  /  " + number(id) + " ms", 12, kTextMuted, false, true);
+            row += 20;
         }
-        pen.text(right, row, number(id + 1, 0) + "%  /  " + number(id) + " ms", 12, kTextMuted, false, true);
-        row += 20;
+        if (!linkCount) pen.text(left, row, "Links unavailable", 12, kTextMuted);
+        // Fixed-width chips cannot reflow as counter values change.
+        double sx = left;
+        double sy = top + measured.healthY;
+        chip(sx, sy, "Retransmits", kPcStreamRetransmitRequests, false, kPcStreamRetransmitSent);
+        chip(sx, sy, "Skipped/s", kPcStreamSkipped, true);
+        chip(sx, sy, "Late", kPcStreamLate, true);
+        chip(sx, sy, "Enc resets", kPcStreamEncoderResets);
+        chip(sx, sy, "Stream resets", kPcStreamStreamResets);
+        chip(sx, sy, "Bad link", kPcStreamBadLinks, true);
+        chip(sx, sy, "Throttle", kPcStreamThrottleEvents, true);
+        chip(sx, sy, "FEC retries", kStreamFecRetries, false, kStreamFecRetryPackets);
+        chip(sx, sy, "Enc reinit", kPcStreamEncoderReinits);
     }
-    if (!linkCount) {
-        pen.text(left, row, "Links unavailable", 12, kTextMuted);
-        row += 20;
-    }
-    // Fixed-width chips cannot reflow as counter values change.
-    double sx = left;
-    double sy = top + measured.healthY;
-    chip(sx, sy, "Retransmits", kPcStreamRetransmitRequests, false, kPcStreamRetransmitSent);
-    chip(sx, sy, "Skipped/s", kPcStreamSkipped, true);
-    chip(sx, sy, "Late", kPcStreamLate, true);
-    chip(sx, sy, "Enc resets", kPcStreamEncoderResets);
-    chip(sx, sy, "Stream resets", kPcStreamStreamResets);
-    chip(sx, sy, "Bad link", kPcStreamBadLinks, true);
-    chip(sx, sy, "Throttle", kPcStreamThrottleEvents, true);
-    chip(sx, sy, "FEC retries", kStreamFecRetries, false, kStreamFecRetryPackets);
-    chip(sx, sy, "Enc reinit", kPcStreamEncoderReinits);
-    row = top + measured.notesY;
+    double row = top + measured.notesY;
     for (uint16_t id : {kPcStreamL1Note, kPcStreamL2Note, kPcStreamL3Note}) {
         const std::string note = text(ctx, id);
         if (note.empty()) continue;
@@ -1410,7 +1417,7 @@ int widgetHeight(const WidgetInstance& w, const WidgetContext* ctx) {
             if (ctx && ok(*ctx, kCrashLogNote)) ++rows;
             return static_cast<int>(kTop) + 20 + rows * static_cast<int>(kLineH) + 12;
         }
-        case WidgetType::Streaming: return ctx ? measureStreaming(*ctx).height : 504;
+        case WidgetType::Streaming: return ctx ? measureStreaming(*ctx, w.compact).height : (w.compact ? 230 : 504);
         case WidgetType::HeadsetCamera:
         case WidgetType::EyeCamera: return cam::cameraWidgetHeight(w);  // T10
         case WidgetType::None: break;
@@ -1461,7 +1468,7 @@ void drawWidgetDynamic(const Pen& pen, double x, double y, const WidgetInstance&
         case WidgetType::RamItems: drawProcessList(pen, x, y, w, ctx); break;
         case WidgetType::Network: drawNetwork(pen, x, y, w, ctx); break;
         case WidgetType::General: drawGeneral(pen, x, y, ctx); break;
-        case WidgetType::Streaming: drawStreaming(pen, x, y, ctx); break;
+        case WidgetType::Streaming: drawStreaming(pen, x, y, w, ctx); break;
         case WidgetType::HeadsetCamera:
         case WidgetType::EyeCamera: drawCameras(pen, x, y, w, ctx); break;  // T10
         case WidgetType::None: break;

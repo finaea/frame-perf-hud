@@ -14,18 +14,30 @@ constexpr double kDetachedNudgeM = 0.02;
 /** Step of the Near / Far buttons in Detached mode (m). */
 constexpr double kDetachedDepthStepM = 0.05;
 
-/** R2: Config::detachedCurve's steps (flat, slight, medium, strong). */
-constexpr int kDetachedCurveSteps = 4;
+/** R3: the Detached curve (Config::detachedCurveDeg) is the arc the whole HUD wraps, 0° (flat) to this. */
+constexpr int kDetachedCurveMaxDeg = 90;
+/** R3: the dashboard's − / + step and the config's rounding (degrees). */
+constexpr int kDetachedCurveStepDeg = 10;
 
 /**
- * R2: the cylinder a Detached HUD is bent to, by its radius rather than its curvature, so a wider layout bends the
- * same per metre. Medium is kDetachedFrontDistanceM: a HUD brought in front of you curves around your head.
- * @param step Config::detachedCurve (clamped to 0..3)
- * @return the radius (m); 0 = flat
+ * R3: clamps a curve to 0..kDetachedCurveMaxDeg and rounds it to the nearest kDetachedCurveStepDeg.
+ * @param degrees any value (NaN = 0)
+ * @return 0, 10, ..., 90
  */
-inline double detachedCurveRadiusM(int step) {
-    constexpr double kRadii[kDetachedCurveSteps] = {0.0, 2.0, kDetachedFrontDistanceM, 0.6};
-    return kRadii[step < 0 ? 0 : (step >= kDetachedCurveSteps ? kDetachedCurveSteps - 1 : step)];
+inline int clampCurveDeg(double degrees) {
+    if (!(degrees > 0.0)) return 0;
+    if (degrees >= kDetachedCurveMaxDeg) return kDetachedCurveMaxDeg;
+    return static_cast<int>(degrees / kDetachedCurveStepDeg + 0.5) * kDetachedCurveStepDeg;
+}
+
+/**
+ * R3: SetOverlayCurvature's value for a HUD wrapping `degrees` of arc: the fraction of a full cylinder, so 90° = 0.25.
+ * The radius then follows the HUD's width (R = width / angle): a wider layout wraps a bigger circle.
+ * @param degrees the arc (clamped / rounded with clampCurveDeg)
+ * @return 0 (flat) .. 0.25
+ */
+inline float detachedCurvature(int degrees) {
+    return static_cast<float>(clampCurveDeg(degrees) / 360.0);
 }
 
 /** @return the pose as an OpenVR matrix */

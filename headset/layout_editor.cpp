@@ -61,6 +61,10 @@ bool isList(fph::WidgetType t) {
 /** Palette label of a type. */
 std::string chipLabel(fph::WidgetType type, const UiText& text) {
     if (type == fph::WidgetType::Network) return text.paletteNetwork;
+    if (type == fph::WidgetType::CpuItems) return text.paletteCpuItems;  // R3: short chip labels
+    if (type == fph::WidgetType::RamItems) return text.paletteRamItems;
+    if (type == fph::WidgetType::HeadsetCamera) return text.paletteHeadsetCamera;
+    if (type == fph::WidgetType::EyeCamera) return text.paletteEyeCamera;
     fph::WidgetInstance w;
     w.type = type;
     return fph::widgetTitle(w);
@@ -164,14 +168,18 @@ void LayoutEditor::relayout() {
     } else if (w->type == fph::WidgetType::Network) {
         settings_.push_back({Setting::AdapterDongle, {controlX, rowA, controlW / 2, kRowH}});
         settings_.push_back({Setting::AdapterHome, {controlX + controlW / 2, rowA, controlW / 2, kRowH}});
-    } else if (w->type == fph::WidgetType::HeadsetCamera) {  // T10: one toggle per outward cam; FPS − n + and Full size
-        const double cw = (controlW + 70) / 4;
+    } else if (w->type == fph::WidgetType::HeadsetCamera) {  // T10: one toggle per outward cam; FPS − n +; Full size
+        // R3: the cam toggles are one-part pills; they take the whole row (no "Cameras" label) so "video13" + ✓ fits
+        const double cw = (sw + 8) / 4;
         for (int c = 0; c < 4; ++c)
             settings_.push_back({static_cast<Setting>(static_cast<int>(Setting::Camera0) + c),
-                                 {controlX - 70 + c * cw, rowA, cw - 4, kRowH}});
+                                 {sx + c * cw, rowA, cw - 8, kRowH}});
         settings_.push_back({Setting::FpsDown, {controlX - 70, rowB, kFpsStep, kRowH}});
         settings_.push_back({Setting::FpsUp, {controlX - 70 + kFpsStepperW - kFpsStep, rowB, kFpsStep, kRowH}});
-        settings_.push_back({Setting::FullSizeToggle, {controlX + kFpsStepperW - 60, rowB, controlW + 60 - kFpsStepperW, kRowH}});
+        // R3: Full size is an On | Off pill on its own row (it shared row B with FPS as a single toggle button)
+        const double rowC = rowB + kRowH + kRowGap;
+        settings_.push_back({Setting::FullSizeOn, {controlX, rowC, controlW / 2, kRowH}});
+        settings_.push_back({Setting::FullSizeOff, {controlX + controlW / 2, rowC, controlW / 2, kRowH}});
     } else if (w->type == fph::WidgetType::EyeCamera) {  // T10: FPS − n +
         settings_.push_back({Setting::FpsDown, {controlX - 70, rowA, kFpsStep, kRowH}});
         settings_.push_back({Setting::FpsUp, {controlX - 70 + kFpsStepperW - kFpsStep, rowA, kFpsStep, kRowH}});
@@ -303,7 +311,8 @@ void LayoutEditor::applySetting(Setting setting) {
             if (mask & 0x0F) e.cameras = mask;
             break;
         }
-        case Setting::FullSizeToggle: e.cameraFullSize = !e.cameraFullSize; break;
+        case Setting::FullSizeOn: e.cameraFullSize = true; break;  // R3
+        case Setting::FullSizeOff: e.cameraFullSize = false; break;
         case Setting::FpsDown: e.cameraFps = fph::cameraFpsStep(e.cameraFps, -1, e.type); break;
         case Setting::FpsUp: e.cameraFps = fph::cameraFpsStep(e.cameraFps, +1, e.type); break;
         case Setting::CompactOn: e.compact = true; break;  // R2
@@ -640,6 +649,30 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
             textCentered(pen, r.x + r.w / 2, centerBaseline(r.y, r.h, size), label, size, selected ? kOnAccent : kText, true);
         }
     };
+    // R3: two-way settings are the dashboard's segmented pill (Autostart's look), the halves being the two buttons
+    const auto pill = [&](Setting a, Setting b, const std::string& labelA, const std::string& labelB, bool aSelected) {
+        const EditorRect* ra = nullptr;
+        const EditorRect* rb = nullptr;
+        for (const auto& [id, r] : settings_) {
+            if (id == a) ra = &r;
+            if (id == b) rb = &r;
+        }
+        if (ra == nullptr || rb == nullptr) return;
+        // No hover: the editor redraws on presses, not on pointer moves
+        const auto part = [&](Setting s, const std::string& label) {
+            return PillPart {label, press_ == Press::Setting && pressedSetting_ == s, false};
+        };
+        drawSegmentedPill(pen, ra->x, ra->y, rb->x + rb->w - ra->x, ra->h, {part(a, labelA), part(b, labelB)},
+                          aSelected ? 0 : 1, true, 20);
+    };
+    // R3: an independent on/off chip: the same pill with one part
+    const auto toggle = [&](Setting s, const std::string& label, bool on) {
+        for (const auto& [id, r] : settings_) {
+            if (id != s) continue;
+            drawSegmentedPill(pen, r.x, r.y, r.w, r.h, {{label, press_ == Press::Setting && pressedSetting_ == s, false}},
+                              on ? 0 : -1, true, 20);
+        }
+    };
     const std::string title = fph::widgetTitle(*w);
     pen.text(sx, centerBaseline(sy, kRowH, 22), title, fitSize(pen, title, 22, 14, card.w - 2 * kCardPad - 150, true), kText,
              true);
@@ -666,28 +699,26 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
         }
         const double labelSize = fitSize(pen, text.rowSameName, 20, 12, card.w - 2 * kCardPad - 280, false);
         pen.text(sx, centerBaseline(rowB, kRowH, labelSize), text.rowSameName, labelSize, kTextMuted);
-        button(Setting::SameNameOn, text.on, w->sumSameName);
-        button(Setting::SameNameOff, text.off, !w->sumSameName);
+        pill(Setting::SameNameOn, Setting::SameNameOff, text.on, text.off, w->sumSameName);
         const double rowC = rowB + kRowH + kRowGap;  // R2
         pen.text(sx, centerBaseline(rowC, kRowH, 20), text.rowHideSystem, 20, kTextMuted);
-        button(Setting::HideSystemOn, text.on, w->hideSystem);
-        button(Setting::HideSystemOff, text.off, !w->hideSystem);
+        pill(Setting::HideSystemOn, Setting::HideSystemOff, text.on, text.off, w->hideSystem);
     } else if (fph::hasCompactView(w->type)) {  // R2
         pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowCompact, 20, kTextMuted);
-        button(Setting::CompactOn, text.on, w->compact);
-        button(Setting::CompactOff, text.off, !w->compact);
+        pill(Setting::CompactOn, Setting::CompactOff, text.on, text.off, w->compact);
     } else if (w->type == fph::WidgetType::Network) {
         pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowAdapter, 20, kTextMuted);
-        button(Setting::AdapterDongle, text.adapterDongle, w->adapter == fph::NetAdapter::Dongle);
-        button(Setting::AdapterHome, text.adapterHome, w->adapter == fph::NetAdapter::Home);
+        pill(Setting::AdapterDongle, Setting::AdapterHome, text.adapterDongle, text.adapterHome,
+             w->adapter == fph::NetAdapter::Dongle);
     } else if (w->type == fph::WidgetType::HeadsetCamera) {  // T10
-        pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowCameras, 20, kTextMuted);
-        for (uint8_t c = 0; c < 4; ++c)
-            button(static_cast<Setting>(static_cast<int>(Setting::Camera0) + c), fph::cam::cameraName(c),
+        for (uint8_t c = 0; c < 4; ++c)  // R3: one-part pills (✓ + accent when the cam is shown)
+            toggle(static_cast<Setting>(static_cast<int>(Setting::Camera0) + c), fph::cam::cameraName(c),
                    (w->cameras & (1u << c)) != 0);
         pen.text(sx, centerBaseline(rowB, kRowH, 20), text.rowFps, 20, kTextMuted);
         fpsStepper(rowB);
-        button(Setting::FullSizeToggle, text.rowFullSize, w->cameraFullSize);
+        const double rowC = rowB + kRowH + kRowGap;  // R3
+        pen.text(sx, centerBaseline(rowC, kRowH, 20), text.rowFullSize, 20, kTextMuted);
+        pill(Setting::FullSizeOn, Setting::FullSizeOff, text.on, text.off, w->cameraFullSize);
     } else if (w->type == fph::WidgetType::EyeCamera) {  // T10
         pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowFps, 20, kTextMuted);
         fpsStepper(rowA);

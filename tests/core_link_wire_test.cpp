@@ -750,6 +750,212 @@ void testForgetPeer() {
     }
 }
 
+// ---- R3: CONTROL_STATE / CONTROL_ACTION / CONTROL_RESULT ----
+
+void testControl() {
+    CHECK(std::strcmp(packetTypeName(PacketType::ControlState), "CONTROL_STATE") == 0);
+    CHECK(std::strcmp(packetTypeName(PacketType::ControlAction), "CONTROL_ACTION") == 0);
+    CHECK(std::strcmp(packetTypeName(PacketType::ControlResult), "CONTROL_RESULT") == 0);
+    CHECK(static_cast<int>(PacketType::ControlState) == 12 && static_cast<int>(PacketType::ControlAction) == 13 &&
+          static_cast<int>(PacketType::ControlResult) == 14);
+
+    // CONTROL_STATE: 8 profiles round trip
+    ControlState st;
+    st.revision = 41;
+    st.layoutVersion = 7;
+    st.flags = kControlRecording | kControlUnsaved;
+    st.maxProfiles = 8;
+    st.activeId = "profile-3";
+    for (int i = 1; i <= 8; ++i) st.profiles.push_back({"profile-" + std::to_string(i), "Name " + std::to_string(i)});
+    st.status = "Using Gaming";
+    st.recordStatus = "Recording 3:12 to /x/y.csv";
+    st.crashStatus = "Crash log saved (12:55)";
+    st.powerOff = "Normal shutdown";
+    const Bytes sb = encodeControlState(st);
+    ControlState sd;
+    CHECK(decodeControlState(sb.data(), sb.size(), sd));
+    CHECK(sd.revision == 41 && sd.layoutVersion == 7 && sd.flags == st.flags && sd.maxProfiles == 8);
+    CHECK(sd.activeId == "profile-3" && sd.profiles == st.profiles && sd.profiles.size() == 8);
+    CHECK(sd.status == st.status && sd.recordStatus == st.recordStatus && sd.crashStatus == st.crashStatus &&
+          sd.powerOff == st.powerOff);
+
+    // empty state
+    ControlState empty;
+    const Bytes eb = encodeControlState(empty);
+    ControlState ed;
+    ed.profiles.push_back({"x", "y"});
+    CHECK(decodeControlState(eb.data(), eb.size(), ed));
+    CHECK(ed.profiles.empty() && ed.activeId.empty() && ed.status.empty() && ed.revision == 0);
+    CHECK(ed.sameContent(empty));
+
+    // max-length strings cut at UTF-8 boundaries (3-byte euro: 31 -> 30, 15 -> 15, 127 -> 126, 63 -> 63)
+    std::string euros;
+    for (int i = 0; i < 60; ++i) euros += "\xE2\x82\xAC";
+    ControlState big;
+    big.activeId = euros;
+    big.profiles.push_back({euros, euros});
+    big.status = euros;
+    big.recordStatus = euros;
+    big.crashStatus = euros;
+    big.powerOff = euros;
+    const Bytes bb = encodeControlState(big);
+    ControlState bd;
+    CHECK(decodeControlState(bb.data(), bb.size(), bd));
+    CHECK(validUtf8(bd.activeId) && bd.activeId.size() == 15);
+    CHECK(bd.profiles.size() == 1 && validUtf8(bd.profiles[0].id) && bd.profiles[0].id.size() == 15);
+    CHECK(validUtf8(bd.profiles[0].name) && bd.profiles[0].name.size() == 30);
+    CHECK(validUtf8(bd.status) && bd.status.size() == 126);
+    CHECK(validUtf8(bd.recordStatus) && bd.recordStatus.size() == 126);
+    CHECK(validUtf8(bd.crashStatus) && bd.crashStatus.size() == 63);
+    CHECK(validUtf8(bd.powerOff) && bd.powerOff.size() == 30);
+    ControlState ascii;
+    ascii.status = std::string(300, 'a');
+    ascii.profiles.push_back({std::string(40, 'i'), std::string(40, 'n')});
+    ControlState ad;
+    const Bytes ab = encodeControlState(ascii);
+    CHECK(decodeControlState(ab.data(), ab.size(), ad));
+    CHECK(ad.status.size() == 127 && ad.profiles[0].id.size() == 15 && ad.profiles[0].name.size() == 31);
+
+    // forward compat: trailing bytes ignored; short payloads fail
+    Bytes more = sb;
+    for (int i = 0; i < 9; ++i) more.push_back(static_cast<uint8_t>(0xA0 + i));
+    ControlState md;
+    CHECK(decodeControlState(more.data(), more.size(), md) && md.profiles == st.profiles && md.powerOff == st.powerOff);
+    CHECK(allPrefixesFail<ControlState>(sb, [](const uint8_t* p, size_t n, ControlState& o) {
+        return decodeControlState(p, n, o);
+    }));
+    ControlState untouched;
+    untouched.revision = 99;
+    CHECK(!decodeControlState(sb.data(), sb.size() - 1, untouched) && untouched.revision == 99);
+
+    // > 8 profiles on the wire fail (hand-built: the encoder clamps)
+    Bytes nine = encodeControlState(empty);
+    const size_t countAt = 4 + 4 + 1 + 1 + 1;  // revision, version, flags, max, activeId length byte
+    CHECK(nine[countAt] == 0);
+    nine[countAt] = 9;
+    for (int i = 0; i < 9; ++i) nine.insert(nine.begin() + countAt + 1, {0, 0});
+    ControlState nd;
+    CHECK(!decodeControlState(nine.data(), nine.size(), nd));
+    ControlState twelve;
+    for (int i = 0; i < 12; ++i) twelve.profiles.push_back({"p" + std::to_string(i), "n"});
+    const Bytes tb = encodeControlState(twelve);
+    ControlState td;
+    CHECK(decodeControlState(tb.data(), tb.size(), td) && td.profiles.size() == kMaxControlProfiles);
+
+    // sameContent ignores only the revision
+    ControlState a = st, b = st;
+    b.revision = 1000;
+    CHECK(a.sameContent(b));
+    b = st; b.layoutVersion++; CHECK(!a.sameContent(b));
+    b = st; b.flags ^= kControlCrashRecorder; CHECK(!a.sameContent(b));
+    b = st; b.maxProfiles = 3; CHECK(!a.sameContent(b));
+    b = st; b.activeId = "profile-4"; CHECK(!a.sameContent(b));
+    b = st; b.profiles[2].name = "x"; CHECK(!a.sameContent(b));
+    b = st; b.profiles.pop_back(); CHECK(!a.sameContent(b));
+    b = st; b.status = "x"; CHECK(!a.sameContent(b));
+    b = st; b.recordStatus = "x"; CHECK(!a.sameContent(b));
+    b = st; b.crashStatus = "x"; CHECK(!a.sameContent(b));
+    b = st; b.powerOff = "x"; CHECK(!a.sameContent(b));
+
+    // CONTROL_ACTION
+    ControlAction ac;
+    ac.pcId = idOf(0x31);
+    ac.requestId = 0xDEADBEEF;
+    ac.kind = ControlKind::ProfileRename;
+    ac.flags = kControlConfirmed;
+    ac.layoutVersion = 12345;
+    ac.profileId = "profile-5";
+    ac.text = "R\xC3\xA9named \xE2\x82\xAC";
+    const Bytes acb = encodeControlAction(ac);
+    ControlAction acd;
+    CHECK(decodeControlAction(acb.data(), acb.size(), acd));
+    CHECK(acd.pcId == ac.pcId && acd.requestId == ac.requestId && acd.kind == ControlKind::ProfileRename &&
+          acd.flags == kControlConfirmed && acd.layoutVersion == 12345 && acd.profileId == "profile-5" &&
+          acd.text == ac.text);
+    CHECK(allPrefixesFail<ControlAction>(acb, [](const uint8_t* p, size_t n, ControlAction& o) {
+        return decodeControlAction(p, n, o);
+    }));
+    Bytes acMore = acb;
+    acMore.push_back(1); acMore.push_back(2); acMore.push_back(3);
+    CHECK(decodeControlAction(acMore.data(), acMore.size(), acd) && acd.text == ac.text);
+    ControlAction longAc = ac;
+    longAc.profileId = euros;
+    longAc.text = euros;
+    const Bytes lb = encodeControlAction(longAc);
+    CHECK(decodeControlAction(lb.data(), lb.size(), acd) && acd.profileId.size() == 15 && acd.text.size() == 30 &&
+          validUtf8(acd.profileId) && validUtf8(acd.text));
+    ControlAction unk = ac;
+    unk.kind = static_cast<ControlKind>(200);
+    const Bytes ub = encodeControlAction(unk);
+    CHECK(decodeControlAction(ub.data(), ub.size(), acd) && static_cast<uint8_t>(acd.kind) == 200);
+    ControlAction minimal;
+    const Bytes mb = encodeControlAction(minimal);
+    CHECK(decodeControlAction(mb.data(), mb.size(), acd) && acd.profileId.empty() && acd.text.empty());
+
+    // CONTROL_RESULT
+    ControlResult rs;
+    rs.requestId = 77;
+    rs.outcome = ControlOutcome::NeedsConfirm;
+    rs.layoutVersion = 9;
+    rs.message = "Lose the changes?";
+    const Bytes rb = encodeControlResult(rs);
+    ControlResult rd;
+    CHECK(decodeControlResult(rb.data(), rb.size(), rd));
+    CHECK(rd.requestId == 77 && rd.outcome == ControlOutcome::NeedsConfirm && rd.layoutVersion == 9 &&
+          rd.message == rs.message);
+    CHECK(allPrefixesFail<ControlResult>(rb, [](const uint8_t* p, size_t n, ControlResult& o) {
+        return decodeControlResult(p, n, o);
+    }));
+    Bytes rMore = rb;
+    rMore.push_back(0xFF);
+    CHECK(decodeControlResult(rMore.data(), rMore.size(), rd) && rd.message == rs.message);
+    for (uint8_t o = 0; o <= 5; ++o) {
+        ControlResult each;
+        each.outcome = static_cast<ControlOutcome>(o);
+        const Bytes eachB = encodeControlResult(each);
+        CHECK(decodeControlResult(eachB.data(), eachB.size(), rd) && static_cast<uint8_t>(rd.outcome) == o);
+    }
+    ControlResult weird = rs;
+    weird.outcome = static_cast<ControlOutcome>(77);
+    const Bytes wb = encodeControlResult(weird);
+    CHECK(decodeControlResult(wb.data(), wb.size(), rd) && rd.outcome == ControlOutcome::Failed &&
+          rd.message == rs.message && rd.requestId == 77);
+    ControlResult longRs = rs;
+    longRs.message = euros;
+    const Bytes lrb = encodeControlResult(longRs);
+    CHECK(decodeControlResult(lrb.data(), lrb.size(), rd) && rd.message.size() == 126 && validUtf8(rd.message));
+    CHECK(std::strcmp(controlOutcomeName(ControlOutcome::Done), "done") == 0 &&
+          std::strcmp(controlOutcomeName(ControlOutcome::Unsupported), "unsupported") == 0);
+
+    // controlActionConfirmed truth table
+    auto act = [](ControlKind k, bool confirmed, uint32_t ver) {
+        ControlAction x;
+        x.kind = k;
+        x.flags = confirmed ? kControlConfirmed : 0;
+        x.layoutVersion = ver;
+        return x;
+    };
+    for (bool unsaved : {false, true}) {
+        CHECK(!controlActionConfirmed(act(ControlKind::ProfileDelete, false, 5), unsaved, 5));
+        CHECK(controlActionConfirmed(act(ControlKind::ProfileDelete, true, 5), unsaved, 5));
+        CHECK(controlActionConfirmed(act(ControlKind::ProfileDelete, true, 1), unsaved, 5));  // version irrelevant
+        for (ControlKind k : {ControlKind::ProfileNew, ControlKind::ProfileSave, ControlKind::ProfileRename,
+                              ControlKind::RecordOn, ControlKind::RecordOff, ControlKind::CrashRecorderOn,
+                              ControlKind::CrashRecorderOff, static_cast<ControlKind>(200)}) {
+            CHECK(controlActionConfirmed(act(k, false, 0), unsaved, 5));
+            CHECK(controlActionConfirmed(act(k, true, 3), unsaved, 5));
+        }
+    }
+    for (ControlKind k : {ControlKind::ProfileUse, ControlKind::ProfileReset}) {
+        CHECK(controlActionConfirmed(act(k, false, 0), false, 5));  // nothing unsaved: one tap
+        CHECK(controlActionConfirmed(act(k, true, 99), false, 5));
+        CHECK(!controlActionConfirmed(act(k, false, 5), true, 5));  // unsaved, not confirmed
+        CHECK(controlActionConfirmed(act(k, true, 5), true, 5));    // unsaved, confirmed, same version
+        CHECK(!controlActionConfirmed(act(k, true, 4), true, 5));   // an edit since: ask again
+        CHECK(!controlActionConfirmed(act(k, true, 6), true, 5));
+    }
+}
+
 // ---- helpers ----
 
 void testHelpers() {
@@ -806,6 +1012,7 @@ int main() {
     testMetricsSplit();
     testBlobs();
     testForgetPeer();
+    testControl();
     testHelpers();
     if (failures == 0) std::printf("core-link-wire-test: all passed\n");
     else std::printf("core-link-wire-test: %d failure(s)\n", failures);

@@ -157,6 +157,39 @@ struct FakeEnv : LinkHostEnv {
         return true;
     }
     void pcMetrics(const fph::PcMetrics& m, double) override { pcMetricsCalls.push_back(m); }
+
+    // R3: the control hooks. Off by default (= a default env: no CONTROL_STATE, actions Unsupported)
+    bool controlHooks = false;
+    ControlState control;
+    std::vector<ControlAction> controlSeen;
+    ControlOutcome controlOutcome = ControlOutcome::Done;
+    bool recording = false;
+    bool crashRecorder = true;
+    bool controlState(ControlState& out) override {
+        if (!controlHooks) return false;
+        control.flags = static_cast<uint8_t>((recording ? kControlRecording : 0) |
+                                             (crashRecorder ? kControlCrashRecorder : 0) | (control.flags & kControlUnsaved));
+        out = control;
+        return true;
+    }
+    ControlResult controlAction(const ControlAction& a, double) override {
+        if (!controlHooks) return LinkHostEnv::controlAction(a, 0.0);
+        controlSeen.push_back(a);
+        ControlResult r;
+        r.outcome = controlOutcome;
+        r.layoutVersion = control.layoutVersion;
+        r.message = "did " + std::to_string(static_cast<int>(a.kind));
+        if (controlOutcome == ControlOutcome::Done) {
+            switch (a.kind) {
+                case ControlKind::RecordOn: recording = true; ++control.revision; break;
+                case ControlKind::RecordOff: recording = false; ++control.revision; break;
+                case ControlKind::CrashRecorderOn: crashRecorder = true; ++control.revision; break;
+                case ControlKind::CrashRecorderOff: crashRecorder = false; ++control.revision; break;
+                default: break;
+            }
+        }
+        return r;
+    }
 };
 
 fph::Layout modLayout(int n) {
@@ -1309,6 +1342,273 @@ void testConfigLink() {
 
 }  // namespace
 
+// ---- R3: CONTROL_STATE / CONTROL_ACTION ----
+
+Bytes controlActionBytes(uint8_t seed, uint32_t requestId, ControlKind kind, uint8_t flags = 0, uint32_t version = 0) {
+    ControlAction a;
+    a.pcId = pcId(seed);
+    a.requestId = requestId;
+    a.kind = kind;
+    a.flags = flags;
+    a.layoutVersion = version;
+    return encodeControlAction(a);
+}
+
+ControlResult resultOf(const Sent& s) {
+    ControlResult m;
+    CHECK(decodeControlResult(s.payload.data(), s.payload.size(), m));
+    return m;
+}
+
+ControlState stateOf(const Sent& s) {
+    ControlState m;
+    CHECK(decodeControlState(s.payload.data(), s.payload.size(), m));
+    return m;
+}
+
+void testControl() {
+    const uint32_t pcIp = ip(192, 168, 1, 45);
+    const LinkEndpoint helloFrom = ep(pcIp, 40000);
+    const LinkEndpoint subFrom = ep(pcIp, 40001);
+    auto leased = [&](Rig& r, uint8_t seed = 1) {
+        r.env.controlHooks = true;
+        r.env.control.revision = 1;
+        r.env.control.layoutVersion = 3;
+        r.env.control.activeId = "profile-1";
+        r.env.control.profiles = {{"profile-1", "Gaming"}, {"profile-2", "Work"}};
+        r.allowInConfig(seed);
+        r.hello(seed, helloFrom, 0.0);
+        r.subscribe(seed, subFrom, 0.0);
+    };
+    {
+        // a leased PC's action reaches the env once and gets the env's answer, to its lease address
+        Rig r;
+        leased(r);
+        r.send(PacketType::ControlAction, controlActionBytes(1, 10, ControlKind::ProfileSave), subFrom, 1.0);
+        std::vector<Sent> out = r.take();
+        CHECK(out.size() == 1 && out[0].header.type == PacketType::ControlResult && out[0].to == subFrom);
+        const ControlResult res = resultOf(out[0]);
+        CHECK(res.requestId == 10 && res.outcome == ControlOutcome::Done && res.message == "did 3" &&
+              res.layoutVersion == 3);
+        CHECK(r.env.controlSeen.size() == 1 && r.env.controlSeen[0].kind == ControlKind::ProfileSave &&
+              r.env.controlSeen[0].requestId == 10);
+        CHECK(r.server.controlActionsDone() == 1 && r.server.malformed() == 0);  // valid action: not malformed
+
+        // the action's fields reach the env intact
+        ControlAction a;
+        a.pcId = pcId(1);
+        a.requestId = 11;
+        a.kind = ControlKind::ProfileRename;
+        a.flags = kControlConfirmed;
+        a.layoutVersion = 3;
+        a.profileId = "profile-2";
+        a.text = "Renamed";
+        r.send(PacketType::ControlAction, encodeControlAction(a), subFrom, 1.1);
+        r.take();
+        const ControlAction& seen = r.env.controlSeen.back();
+        CHECK(seen.profileId == "profile-2" && seen.text == "Renamed" && seen.flags == kControlConfirmed &&
+              seen.layoutVersion == 3 && seen.kind == ControlKind::ProfileRename);
+
+        // an unknown kind goes to the env (it answers Unsupported); still not malformed
+        r.send(PacketType::ControlAction, controlActionBytes(1, 12, ControlKind(200)), subFrom, 1.2);
+        out = r.take();
+        CHECK(out.size() == 1 && r.env.controlSeen.back().kind == ControlKind(200) && r.server.malformed() == 0);
+
+        // a truncated action is malformed and unanswered
+        Bytes cut = controlActionBytes(1, 13, ControlKind::ProfileNew);
+        cut.resize(cut.size() - 2);
+        r.send(PacketType::ControlAction, cut, subFrom, 1.3);
+        CHECK(r.take().empty() && r.server.malformed() == 1);
+    }
+    {
+        // a resend of the same request id: same stored answer, env not called again (any later tick too)
+        Rig r;
+        leased(r);
+        r.env.controlOutcome = ControlOutcome::NeedsConfirm;
+        r.send(PacketType::ControlAction, controlActionBytes(1, 20, ControlKind::ProfileUse), subFrom, 1.0);
+        const ControlResult first = resultOf(r.take().at(0));
+        CHECK(first.outcome == ControlOutcome::NeedsConfirm && r.env.controlSeen.size() == 1);
+        r.env.controlOutcome = ControlOutcome::Failed;  // the env would answer differently now
+        r.env.control.layoutVersion = 99;
+        for (double t : {2.0, 3.0, 4.0}) {
+            r.send(PacketType::ControlAction, controlActionBytes(1, 20, ControlKind::ProfileUse), subFrom, t);
+            const std::vector<Sent> out = r.take();
+            CHECK(out.size() == 1 && out[0].to == subFrom);
+            const ControlResult again = resultOf(out[0]);
+            CHECK(again.requestId == 20 && again.outcome == ControlOutcome::NeedsConfirm &&
+                  again.layoutVersion == first.layoutVersion && again.message == first.message);
+        }
+        CHECK(r.env.controlSeen.size() == 1);
+        // a new id is a new action
+        r.send(PacketType::ControlAction, controlActionBytes(1, 21, ControlKind::ProfileUse, kControlConfirmed, 3), subFrom,
+               5.0);
+        CHECK(resultOf(r.take().at(0)).outcome == ControlOutcome::Failed && r.env.controlSeen.size() == 2);
+        // a not-Done answer isn't counted as done
+        CHECK(r.server.controlActionsDone() == 0);
+    }
+    {
+        // only the last 8 answers are remembered: 1..8 stay deduped, 1 is forgotten after 9 more
+        Rig r;
+        leased(r);
+        for (uint32_t id = 1; id <= 9; ++id) {
+            r.send(PacketType::ControlAction, controlActionBytes(1, id, ControlKind::ProfileSave), subFrom, 1.0);
+        }
+        r.take();
+        CHECK(r.env.controlSeen.size() == 9);
+        r.send(PacketType::ControlAction, controlActionBytes(1, 9, ControlKind::ProfileSave), subFrom, 2.0);
+        r.send(PacketType::ControlAction, controlActionBytes(1, 2, ControlKind::ProfileSave), subFrom, 2.0);
+        CHECK(r.take().size() == 2 && r.env.controlSeen.size() == 9);
+        r.send(PacketType::ControlAction, controlActionBytes(1, 1, ControlKind::ProfileSave), subFrom, 2.0);  // forgotten
+        r.take();
+        CHECK(r.env.controlSeen.size() == 10);
+    }
+    {
+        // refusals never reach the env
+        Rig r;
+        r.env.controlHooks = true;
+        r.allowInConfig(1);
+        // unknown PC id (never said HELLO)
+        r.send(PacketType::ControlAction, controlActionBytes(9, 30, ControlKind::RecordOn), subFrom, 0.0);
+        std::vector<Sent> out = r.take();
+        CHECK(out.size() == 1 && out[0].to == subFrom);
+        CHECK(resultOf(out[0]).outcome == ControlOutcome::UnknownSubscriber && resultOf(out[0]).requestId == 30);
+        // known, allowed, not subscribed (no lease)
+        r.hello(1, helloFrom, 0.0);
+        r.send(PacketType::ControlAction, controlActionBytes(1, 31, ControlKind::RecordOn), subFrom, 0.5);
+        out = r.take();
+        CHECK(out.size() == 1 && resultOf(out[0]).outcome == ControlOutcome::NotAllowed);
+        // pending PC (not on the list), subscribed: no lease
+        CHECK(r.hello(2, helloFrom, 0.6).status == PeerStatus::Pending);
+        r.subscribe(2, subFrom, 0.7);
+        r.send(PacketType::ControlAction, controlActionBytes(2, 32, ControlKind::RecordOn), subFrom, 0.8);
+        out = r.take();
+        CHECK(out.size() == 1 && resultOf(out[0]).outcome == ControlOutcome::NotAllowed);
+        // leased, then a different address (other port, other IP)
+        r.subscribe(1, subFrom, 1.0);
+        for (const LinkEndpoint& other : {ep(pcIp, 40009), ep(ip(10, 0, 0, 9), 40001), helloFrom}) {
+            r.send(PacketType::ControlAction, controlActionBytes(1, 33, ControlKind::RecordOn), other, 1.1);
+            out = r.take();
+            CHECK(out.size() == 1 && out[0].to == other && resultOf(out[0]).outcome == ControlOutcome::NotAllowed);
+        }
+        // lease expired (6 s, checked at the packet even before a tick drops it)
+        r.send(PacketType::ControlAction, controlActionBytes(1, 34, ControlKind::RecordOn), subFrom, 1.0 + 6.5);
+        out = r.take();
+        CHECK(out.size() == 1 && resultOf(out[0]).outcome == ControlOutcome::NotAllowed);
+        // denied later: lease dropped
+        r.subscribe(1, subFrom, 8.0);
+        r.server.deny(idToHex(pcId(1)));
+        r.send(PacketType::ControlAction, controlActionBytes(1, 35, ControlKind::RecordOn), subFrom, 8.1);
+        out = r.take();
+        CHECK(out.size() == 1 && resultOf(out[0]).outcome == ControlOutcome::NotAllowed);
+        CHECK(r.env.controlSeen.empty() && !r.env.recording && r.server.controlActionsDone() == 0);
+        CHECK(r.server.malformed() == 0);
+    }
+    {
+        // CONTROL_STATE: lease holders only, at once on a new revision, else every 2 s
+        Rig r;
+        leased(r);
+        const LinkEndpoint otherSub = ep(ip(192, 168, 1, 46), 41000);
+        r.allowInConfig(2);
+        r.hello(2, ep(ip(192, 168, 1, 46), 41001), 0.0);
+        r.take();
+        // PC 3 stays pending, subscribed: no lease, no state
+        r.hello(3, ep(ip(192, 168, 1, 47), 42001), 0.0);
+        r.subscribe(3, ep(ip(192, 168, 1, 47), 42000), 0.0);
+        r.server.tick(0.5);  // only PC 1 holds a lease
+        std::vector<Sent> out = ofType(r.take(), PacketType::ControlState);
+        CHECK(out.size() == 1 && out[0].to == subFrom);
+        const ControlState got = stateOf(out[0]);
+        CHECK(got.revision == 1 && got.layoutVersion == 3 && got.activeId == "profile-1" && got.profiles.size() == 2 &&
+              got.profiles[1].name == "Work" && (got.flags & kControlCrashRecorder) != 0);
+        CHECK(r.server.controlStatesSent() == 1);
+        // not every tick
+        for (double t : {0.6, 1.0, 1.5, 2.0, 2.4}) {
+            r.server.tick(t);
+            CHECK(ofType(r.take(), PacketType::ControlState).empty());
+        }
+        CHECK(r.server.controlStatesSent() == 1);
+        // again after 2 s (from the last send at 0.5)
+        r.server.tick(2.6);
+        CHECK(ofType(r.take(), PacketType::ControlState).size() == 1 && r.server.controlStatesSent() == 2);
+        r.server.tick(3.0);
+        CHECK(ofType(r.take(), PacketType::ControlState).empty());
+        // a revision bump goes out on the very next tick
+        r.env.control.revision = 2;
+        r.env.control.status = "Saved";
+        r.server.tick(3.1);
+        out = ofType(r.take(), PacketType::ControlState);
+        CHECK(out.size() == 1 && stateOf(out[0]).revision == 2 && stateOf(out[0]).status == "Saved");
+        r.server.tick(3.2);
+        CHECK(ofType(r.take(), PacketType::ControlState).empty());
+        // a second PC subscribing later gets its own copy at once, the first isn't repeated
+        r.subscribe(2, otherSub, 3.3);
+        r.server.tick(3.4);
+        out = ofType(r.take(), PacketType::ControlState);
+        CHECK(out.size() == 1 && out[0].to == otherSub);
+        // after its lease ends nothing more goes to it
+        r.server.tick(30.0);
+        r.take();
+        r.server.tick(33.0);
+        CHECK(ofType(r.take(), PacketType::ControlState).empty());
+        CHECK(r.server.malformed() == 0);
+    }
+    {
+        // a default env (no hooks): no CONTROL_STATE ever, actions answered Unsupported, env's hook not counted
+        Rig r;
+        r.allowInConfig(1);
+        r.hello(1, helloFrom, 0.0);
+        r.subscribe(1, subFrom, 0.0);
+        for (double t : {0.5, 3.0, 6.0}) {
+            r.server.tick(t);
+            CHECK(ofType(r.take(), PacketType::ControlState).empty());
+            r.subscribe(1, subFrom, t);
+        }
+        CHECK(r.server.controlStatesSent() == 0);
+        r.send(PacketType::ControlAction, controlActionBytes(1, 40, ControlKind::RecordOn), subFrom, 6.1);
+        const std::vector<Sent> out = r.take();
+        CHECK(out.size() == 1 && resultOf(out[0]).outcome == ControlOutcome::Unsupported &&
+              resultOf(out[0]).requestId == 40);
+        CHECK(r.server.controlActionsDone() == 0 && r.server.malformed() == 0);
+        // the answer is remembered too
+        r.send(PacketType::ControlAction, controlActionBytes(1, 40, ControlKind::RecordOn), subFrom, 6.2);
+        CHECK(resultOf(r.take().at(0)).outcome == ControlOutcome::Unsupported);
+    }
+    {
+        // the Logs switches round trip: RecordOn -> env flag -> next tick's CONTROL_STATE carries kControlRecording
+        Rig r;
+        leased(r);
+        r.server.tick(0.1);
+        ControlState s0 = stateOf(ofType(r.take(), PacketType::ControlState).at(0));
+        CHECK((s0.flags & kControlRecording) == 0 && (s0.flags & kControlCrashRecorder) != 0);
+
+        r.send(PacketType::ControlAction, controlActionBytes(1, 50, ControlKind::RecordOn), subFrom, 0.2);
+        CHECK(resultOf(r.take().at(0)).outcome == ControlOutcome::Done && r.env.recording);
+        r.server.tick(0.3);  // well before the 2 s repeat: the bump sends it
+        std::vector<Sent> out = ofType(r.take(), PacketType::ControlState);
+        CHECK(out.size() == 1);
+        ControlState s1 = stateOf(out.at(0));
+        CHECK((s1.flags & kControlRecording) != 0 && s1.revision == 2);
+
+        r.send(PacketType::ControlAction, controlActionBytes(1, 51, ControlKind::CrashRecorderOff), subFrom, 0.4);
+        CHECK(resultOf(r.take().at(0)).outcome == ControlOutcome::Done && !r.env.crashRecorder);
+        r.server.tick(0.5);
+        out = ofType(r.take(), PacketType::ControlState);
+        CHECK(out.size() == 1);
+        ControlState s2 = stateOf(out.at(0));
+        CHECK((s2.flags & kControlRecording) != 0 && (s2.flags & kControlCrashRecorder) == 0);
+
+        r.send(PacketType::ControlAction, controlActionBytes(1, 52, ControlKind::RecordOff), subFrom, 0.6);
+        r.send(PacketType::ControlAction, controlActionBytes(1, 53, ControlKind::CrashRecorderOn), subFrom, 0.6);
+        r.take();
+        r.server.tick(0.7);
+        out = ofType(r.take(), PacketType::ControlState);
+        CHECK(out.size() == 1);
+        ControlState s3 = stateOf(out.at(0));
+        CHECK((s3.flags & kControlRecording) == 0 && (s3.flags & kControlCrashRecorder) != 0 && s3.revision == 5);
+        CHECK(r.server.controlActionsDone() == 4);
+    }
+}
+
 int main() {
     char pattern[] = "/tmp/fph-t06-tests/link-XXXXXX";
     fph::makeDirectories("/tmp/fph-t06-tests");
@@ -1327,6 +1627,7 @@ int main() {
     testLayoutSet();
     testLayoutAuthority();
     testConfigLink();
+    testControl();
     const std::string cleanup = "rm -rf '" + tempDir + "'";
     if (std::system(cleanup.c_str()) != 0) std::printf("(could not remove %s)\n", tempDir.c_str());
     if (failures == 0) std::printf("link-server-test: all passed\n");

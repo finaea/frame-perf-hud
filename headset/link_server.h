@@ -62,6 +62,20 @@ public:
     virtual void pcMetrics(const fph::PcMetrics&, double) {}
     /** T10: bytes waiting in the socket's send queue (camera frames back off so control packets always fit) */
     virtual size_t sendQueued() { return 0; }
+    /**
+     * R3: what the PC window's Profiles / Logs tabs show. The revision must bump whenever the content changes.
+     * @return false if this agent has none (then no CONTROL_STATE is sent)
+     */
+    virtual bool controlState(fph::link::ControlState&) { return false; }
+    /**
+     * R3: carries out a leased PC's Profiles / Logs button, with the same guards as the headset's own dashboard
+     * (fph::link::controlActionConfirmed for the second tap). Called at most once per request id.
+     */
+    virtual fph::link::ControlResult controlAction(const fph::link::ControlAction&, double) {
+        fph::link::ControlResult r;
+        r.outcome = fph::link::ControlOutcome::Unsupported;
+        return r;
+    }
 };
 
 class LinkServer {
@@ -105,6 +119,9 @@ public:
     bool sendCameraBlob(const LinkEndpoint& to, uint8_t camera, const std::vector<uint8_t>& data);
     static constexpr size_t kCameraQueueLimit = 256 * 1024;
     uint64_t cameraFramesSkipped() const { return cameraSkipped_; }
+    /** R3: CONTROL_STATE packets sent / CONTROL_ACTIONs carried out (tests, debug dump) */
+    uint64_t controlStatesSent() const { return controlStatesSent_; }
+    uint64_t controlActionsDone() const { return controlActionsDone_; }
 
     /** Sends BYE to every lease holder (shutdown). */
     void sayGoodbye();
@@ -161,6 +178,11 @@ private:
         LinkEndpoint cameraAddress;      ///< T10: the PC's dongle path, from a camera-path-only SUBSCRIBE
         double cameraAddressUntil = 0.0;
         std::deque<Answer> answers;  ///< last kLayoutAnswerMemory LAYOUT_SET answers
+        // R3: CONTROL_STATE / CONTROL_ACTION
+        bool controlSent = false;
+        uint32_t controlRevision = 0;  ///< the last CONTROL_STATE revision sent
+        double controlSentAt = 0.0;
+        std::deque<fph::link::ControlResult> controlAnswers;  ///< last kLayoutAnswerMemory answers (a resend gets the same)
     };
 
     Config& config_;
@@ -185,6 +207,8 @@ private:
     uint64_t metricsSent_ = 0;
     uint64_t hostIpLookups_ = 0;
     uint64_t cameraSkipped_ = 0;  ///< T10
+    uint64_t controlStatesSent_ = 0;   ///< R3
+    uint64_t controlActionsDone_ = 0;  ///< R3
 
     void sendPacket(const LinkEndpoint& to, fph::link::PacketType type, const std::vector<uint8_t>& payload);
     void sendBlob(const LinkEndpoint& to, fph::link::BlobKind kind, uint8_t stream, const std::vector<uint8_t>& data);
@@ -195,6 +219,7 @@ private:
     void onLayoutGet(const fph::link::LayoutGet& m, const LinkEndpoint& from, double now);
     void onLayoutSet(const fph::link::LayoutSet& m, const LinkEndpoint& from, double now);
     void onBye(const fph::link::Bye& m, double now);
+    void onControlAction(const fph::link::ControlAction& m, const LinkEndpoint& from, double now);  // R3
 
     /** @return the Steam Link host IPs, looked up at most every kHostIpCacheSec */
     const std::vector<uint32_t>& hostIps(double now);

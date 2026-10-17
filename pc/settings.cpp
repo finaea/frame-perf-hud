@@ -23,7 +23,8 @@ namespace pc {
 
 bool Settings::operator==(const Settings& o) const {
     if (pcId != o.pcId || manualIp != o.manualIp || onTop != o.onTop || trayHintShown != o.trayHintShown ||
-        cameraFps != o.cameraFps) {
+        cameraFps != o.cameraFps || updateCheck != o.updateCheck || updateCheckedAt != o.updateCheckedAt ||
+        updateLatest != o.updateLatest || updatePage != o.updatePage) {
         return false;
     }
     if (window.valid != o.window.valid || window.x != o.window.x || window.y != o.window.y ||
@@ -139,6 +140,10 @@ std::string settingsToJson(const Settings& s) {
     o << "  \"on_top\": " << boolText(s.onTop) << ",\n";
     o << "  \"tray_hint_shown\": " << boolText(s.trayHintShown) << ",\n";
     o << "  \"camera_fps\": " << s.cameraFps << ",\n";
+    o << "  \"update_check\": " << boolText(s.updateCheck) << ",\n";  // Release G
+    o << "  \"update_checked_at\": " << s.updateCheckedAt << ",\n";
+    o << "  \"update_latest\": " << quote(s.updateLatest) << ",\n";
+    o << "  \"update_page\": " << quote(s.updatePage) << ",\n";
     o << "  \"window\": {\"valid\": " << boolText(s.window.valid) << ", \"x\": " << s.window.x
       << ", \"y\": " << s.window.y << ", \"width\": " << s.window.width << ", \"height\": " << s.window.height
       << ", \"maximized\": " << boolText(s.window.maximized) << "},\n";
@@ -177,6 +182,13 @@ bool settingsFromJson(const std::string& text, Settings& out, std::vector<std::s
     readBool(root, "on_top", s.onTop, warnings);
     readBool(root, "tray_hint_shown", s.trayHintShown, warnings);
     if (readInt(root, "camera_fps", s.cameraFps, warnings)) s.cameraFps = std::clamp(s.cameraFps, 1, 30);
+    readBool(root, "update_check", s.updateCheck, warnings);  // Release G
+    if (const JsonValue* at = root.get("update_checked_at");
+        at != nullptr && at->isNumber() && std::isfinite(at->number) && at->number >= 0 && at->number < 1e12) {
+        s.updateCheckedAt = static_cast<int64_t>(at->number);
+    }
+    readString(root, "update_latest", s.updateLatest, warnings);
+    readString(root, "update_page", s.updatePage, warnings);
     if (const JsonValue* w = root.get("window"); w != nullptr && w->isObject()) {
         WindowState ws;
         readBool(*w, "valid", ws.valid, warnings);

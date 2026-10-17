@@ -127,11 +127,30 @@ void LinkClient::backToDiscovery(double now, const char* why) {
     ++assemblerResets_;
     ++rediscoveries_;
     layoutLive_ = false;
+    // R3: the next headset may be another one (or an older HUD that never sends CONTROL_STATE): its tabs start empty
+    if (haveControl_) {
+        haveControl_ = false;
+        control_ = ControlState();
+        ++controlRevision_;
+    }
     nextHello_ = now;  // right away
 }
 
 void LinkClient::tick(double now) {
     blobs_.expire(now);
+    // R3: a button's action is resent until answered (the headset never does a request id twice), then given up
+    if (controlPending_) {
+        if (phase_ != LinkPhase::Subscribed || now - controlStarted_ > kControlGiveUpSec) {
+            ControlResult r;
+            r.requestId = controlAction_.requestId;
+            r.outcome = ControlOutcome::Failed;
+            r.message = "No answer from the headset";
+            finishControl(r);
+        } else if (now >= controlNextSend_) {
+            controlNextSend_ = now + kControlResendSec;
+            sendPacket(headsetEp_, PacketType::ControlAction, encodeControlAction(controlAction_));
+        }
+    }
     if (phase_ != LinkPhase::Discovery && now - lastHeard_ > kLeaseSec) {
         backToDiscovery(now, "6 s of silence");
     }
@@ -280,9 +299,72 @@ void LinkClient::handlePacket(const uint8_t* data, size_t size, const Endpoint& 
         case PacketType::Bye:
             backToDiscovery(now, "BYE from the headset");
             break;
-        default:
+        case PacketType::ControlState: {  // R3
+            ControlState state;
+            if (!decodeControlState(payload, h.length, state)) {
+                ++malformed_;
+                break;
+            }
+            if (!haveControl_ || !state.sameContent(control_)) ++controlRevision_;
+            control_ = state;
+            haveControl_ = true;
             break;
+        }
+        case PacketType::ControlResult: {  // R3
+            ControlResult result;
+            if (!decodeControlResult(payload, h.length, result)) {
+                ++malformed_;
+                break;
+            }
+            if (controlPending_ && result.requestId == controlAction_.requestId) finishControl(result);
+            break;
+        }
+        default:
+            break;  // newer headsets' types: ignored, not malformed
     }
+}
+
+bool LinkClient::sendControl(ControlKind kind, const std::string& profileId, const std::string& text, bool confirmed,
+                             uint32_t layoutVersion, double now) {
+    if (!subscribed() || !haveControl_ || controlPending_) return false;
+    ControlAction a;
+    a.pcId = pcId_;
+    // Random, not 1, 2, ...: the headset remembers its last answers per PC id across this app's restarts, so a
+    // counter starting at 1 again would get an old action's answer instead of being carried out
+    a.requestId = randomRequestId();
+    while (a.requestId == controlAction_.requestId) a.requestId = randomRequestId();
+    a.kind = kind;
+    a.flags = confirmed ? kControlConfirmed : 0;
+    a.layoutVersion = layoutVersion;
+    a.profileId = profileId;
+    a.text = text;
+    controlAction_ = a;
+    controlPending_ = true;
+    controlStarted_ = now;
+    controlNextSend_ = now + kControlResendSec;
+    sendPacket(headsetEp_, PacketType::ControlAction, encodeControlAction(a));
+    logLine("[link] CONTROL_ACTION %u (kind %u%s) sent", a.requestId, static_cast<unsigned>(kind),
+            confirmed ? ", confirmed" : "");
+    ++controlRevision_;
+    return true;
+}
+
+void LinkClient::finishControl(const ControlResult& result) {
+    controlPending_ = false;
+    controlResult_ = result;
+    controlResultKind_ = controlAction_.kind;
+    haveControlResult_ = true;
+    ++controlRevision_;
+    logLine("[link] CONTROL_RESULT %u: %s%s%s", result.requestId, controlOutcomeName(result.outcome),
+            result.message.empty() ? "" : ": ", result.message.c_str());
+}
+
+bool LinkClient::takeControlResult(ControlResult& result, ControlKind& kind) {
+    if (!haveControlResult_) return false;
+    haveControlResult_ = false;
+    result = controlResult_;
+    kind = controlResultKind_;
+    return true;
 }
 
 void LinkClient::onHelloAck(const HelloAck& ack, const Endpoint& from, double now) {

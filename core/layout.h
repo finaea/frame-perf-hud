@@ -60,7 +60,7 @@ struct WidgetInstance {
     bool operator!=(const WidgetInstance& o) const { return !(*this == o); }
 };
 
-/** @return true if the type has a Compact card (R2: Frame, Power, Battery, Temp) */
+/** @return true if the type has a Compact card (R2: Frame, Power, Battery, Temp; R3: Streaming) */
 bool hasCompactView(WidgetType type);
 
 /** One column, top to bottom. */
