@@ -77,7 +77,7 @@ private:
     Memory& memory_;
     uint64_t module_;
     Anchors anchors_;
-    uint64_t server_ = 0, head_ = 0, root_ = 0, uber_ = 0, bw_ = 0;
+    uint64_t server_ = 0, head_ = 0, root_ = 0, uber_ = 0, bw_ = 0, mapSize_ = 0, walkedSize_ = 0;
     std::array<uint64_t, 16> links_{};
     uint16_t index_ = 0;
     bool haveIndex_ = false, awaitAdvance_ = false;

@@ -403,10 +403,13 @@ bool Reader::walkMap(uint64_t head) {
         stack.push_back(at<uint64_t>(b, 0));
         stack.push_back(at<uint64_t>(b, 0x10));
     }
+    walkedSize_ = mapSize_;
     return !nodes_.empty();
 }
 bool Reader::named(std::map<std::string, double>& values) {
-    if (nodes_.empty() && !walkMap(head_))
+    // Keys keep arriving for seconds after vrserver starts (dbgEncTimeMS comes with the encoder), and cached
+    // nodes stay valid meanwhile. Walk again whenever the map's element count changes.
+    if ((nodes_.empty() || walkedSize_ != mapSize_) && !walkMap(head_))
         return false;
     for (unsigned attempt = 0; attempt < 2; ++attempt) {
         values.clear();
@@ -457,12 +460,14 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
         out.setText(kPcStreamL3Note, "loaded/disk build mismatch", now);
         return;
     }
-    uint64_t srv = 0, head = 0, root = 0, uber = 0, bw = 0;
+    uint64_t srv = 0, head = 0, root = 0, uber = 0, bw = 0, size = 0;
     std::array<uint64_t, 16> links{};
     uint16_t index = 0;
+    // MSVC std::map is {_Myhead, _Mysize}: the element count sits right after the head pointer.
     if (!anchors_.l1 || !memory_.get(module_ + anchors_.serverGlobal, srv) ||
         !rttiIs(memory_, srv, module_, anchors_.imageSize, ".?AVSVLServer@@") ||
-        !memory_.get(srv + anchors_.mapOffset, head) || !pointer(head) || !memory_.get(head + 8, root)) {
+        !memory_.get(srv + anchors_.mapOffset, head) || !pointer(head) || !memory_.get(head + 8, root) ||
+        !memory_.get(srv + anchors_.mapOffset + 8, size)) {
         nodes_.clear();
         frames_.clear();
         out.setText(kPcStreamL1Note, "server RTTI/map mismatch", now);
@@ -489,6 +494,7 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
     server_ = srv;
     head_ = head;
     root_ = root;
+    mapSize_ = size;
     uber_ = uber;
     bw_ = bw;
     links_ = links;
@@ -504,7 +510,6 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
         out.setText(kPcStreamL1Note, "named key/read mismatch", now);
         return;
     }
-    out.setText(kPcStreamL1Note, "", now);
     const std::pair<const char*, uint16_t> namedIds[] = {{"sPingMS", kPcStreamNamedPing},
                                                          {"dbgEncTimeMS", kPcStreamNamedEncode},
                                                          {"txTimeMS", kPcStreamNamedSend},
@@ -514,12 +519,22 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
                                                          {"nFramesSkippedPS", kPcStreamSkipped},
                                                          {"dFrmsLate", kPcStreamLate},
                                                          {"encResets", kPcStreamEncoderResets}};
+    std::string missing;
+    unsigned more = 0;
     for (auto kv : namedIds) {
         auto v = values.find(kv.first);
         if (v != values.end() && v->second >= 0 && v->second <= 1e12)
             out.setF32(kv.second, v->second, now);
+        else if (v == values.end() && missing.empty())
+            missing = std::string("missing ") + kv.first;
+        else if (v == values.end())
+            ++more;
     }
+    if (more)
+        missing += " +" + std::to_string(more);
     const bool live = values.count("sRXpps") && values["sRXpps"] > 0;
+    // Once streaming, every shown key should exist: name the missing ones instead of leaving rows silently N/A.
+    out.setText(kPcStreamL1Note, live ? missing : "", now);
     if (!live) {
         naRange(out, 1030, 1067, Reason::NoFrames, now);
         frames_.clear();

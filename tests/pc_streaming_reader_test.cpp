@@ -410,6 +410,7 @@ struct StatKv {
 
 void writeMap(FakeMemory& mem, uint64_t srv, uint64_t head, uint64_t rootBase, const std::vector<StatKv>& kvs) {
     mem.poke<uint64_t>(srv + kMapOffset, head);
+    mem.poke<uint64_t>(srv + kMapOffset + 8, static_cast<uint64_t>(kvs.size())); // MSVC std::map: {_Myhead, _Mysize}
     mem.poke<uint64_t>(head + 8, rootBase);
     // a simple right-chained list (left always the sentinel) satisfies walkMap's stack traversal fully.
     // Nodes are spaced 0x100 apart so each has 0x80 bytes of its own scratch space after it, for keys that
@@ -723,6 +724,54 @@ void testReaderL2RecoversIndependentlyOfDisabledL3() {
     }
 }
 
+/** 2026-10-17: SteamVR restarted under a running app. The reader walked the stats map 3 s after vrserver
+ *  started, when it held only sPingMS and sRXpps, and never walked it again because those two nodes stayed
+ *  valid. dbgEncTimeMS never arrived, so L3's encode cross-check failed on every retry. The map's root stays
+ *  put here, as it did live (no owner change was logged), so only the element count can trigger the re-walk. */
+void testReaderRewalksWhenStatsMapGrows() {
+    FakeMemory mem;
+    constexpr uint32_t kBuild = kKnownBuild;
+    setupModule(mem, kBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    setActiveServer(mem, w.srv);
+    const uint64_t head = w.srv + 0x90000, root = w.srv + 0x90100; // buildWorld's map, rewritten in place
+    writeMap(mem, w.srv, head, root, {{"sPingMS", 2.0}, {"sRXpps", 1059}});
+
+    Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, 72.0, store);
+    CHECK(isOkF32(store, metric::kPcStreamNamedPing, 2.0, 1e-6));
+    CHECK(notOk(store, metric::kPcStreamNamedEncode));
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "missing dbgEncTimeMS +7"); // 8 of the 9 shown keys
+    CHECK(noteOf(store, metric::kPcStreamL3Note) == "frame/bandwidth cross-check");
+
+    // the encoder starts and the rest of the keys appear: L1 picks them up on the next tick. The two cached
+    // nodes keep their address and key (a real insert never moves a node), so no cached key goes bad.
+    writeMap(mem, w.srv, head, root,
+             {{"sPingMS", 2.0},
+              {"sRXpps", 1059},
+              {"dbgEncTimeMS", 2.6},
+              {"txTimeMS", 0.18},
+              {"dEstLinkBW", 232.0},
+              {"rexmitReq", 4670},
+              {"rexmitSent", 4013},
+              {"nFramesSkippedPS", 0},
+              {"dFrmsLate", 0},
+              {"encResets", 3}});
+    reader.tick(10.5, 72.0, store);
+    CHECK(reader.resets() == 0);
+    CHECK(noteOf(store, metric::kPcStreamL1Note).empty());
+    CHECK(isOkF32(store, metric::kPcStreamNamedEncode, 2.6, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamEstimatedBandwidth, 232.0, 1e-6));
+    CHECK(noteOf(store, metric::kPcStreamL3Note) == "frame validation retry pending");
+
+    // and L3 passes its cross-check on its next retry
+    reader.tick(20.0, 72.0, store);
+    CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
+    CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamEncodeAvg, 2.6, 1e-6));
+}
+
 // ==================== readLinkEndpoint ====================
 
 void testReadLinkEndpointValid() {
@@ -852,6 +901,7 @@ int main() {
     testReaderRttiMismatchOnlyL2();
     testReaderOwnerChangeWaitsForNewBaseline();
     testReaderL2RecoversIndependentlyOfDisabledL3();
+    testReaderRewalksWhenStatsMapGrows();
     testReadLinkEndpointValid();
     testReadLinkEndpointGetterShapeChanged();
     testReadLinkEndpointBadFamily();
