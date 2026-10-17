@@ -178,7 +178,8 @@ struct UiText {
     const char* cardRecord;          ///< card title: Save and Record
     const char* rowRecord;           ///< Record On / Off
     const char* saveNow;             ///< Save button
-    const char* recordHint;          ///< under the buttons: what Save and Record write
+    const char* recordHint;          ///< under Record: what it writes
+    const char* saveHint;            ///< under Save: what it writes
     const char* cardCrash;           ///< card title: crash recorder
     const char* rowCrashRecorder;    ///< crash recorder On / Off
     const char* crashHint;           ///< what the crash recorder does

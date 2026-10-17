@@ -208,8 +208,9 @@ they are.
 Game sessions are logged by themselves. The samples stay in memory while playing, and when a game ends, its
 summary and timeline are written once. Samples are only taken while something is reading the sensors (the HUD
 shown and worn, the dashboard tab open, a connected PC or Record), so a session with less than a minute of samples
-is skipped, even if the game ran longer. A short trip to SteamVR Home doesn't split a game. The HUD also shows the
-session card for 10 seconds.
+is skipped, even if the game ran longer. A session ends a minute after its game quits with nothing else started: it
+ends at the moment the game left, and that minute isn't counted. A short trip to SteamVR Home, or the same game back
+within the minute, doesn't split a game. The HUD also shows the session card for 10 seconds.
 
 ### Bottom row
 

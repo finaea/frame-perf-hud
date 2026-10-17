@@ -19,8 +19,15 @@ SessionTracker::SessionTracker() : ids_(randomSessionId) {}
 SessionTracker::SessionTracker(IdSource ids) : ids_(std::move(ids)) {}
 
 bool SessionTracker::update(const std::string& appKey, const std::string& appName, int64_t nowUnix) {
-    if (appKey.empty()) return false;  // the compositor is showing: keep the current session
+    if (appKey.empty()) {
+        // T11: no scene app (the game quit, or the compositor between loading screens): the session is parked from
+        // the moment its app left, and ends if nothing comes back in time
+        if (current_.id != 0 && current_.leftUnix == 0) current_.leftUnix = nowUnix;
+        expire(nowUnix);
+        return false;
+    }
     if (current_.id != 0 && appKey == current_.appKey) {
+        current_.leftUnix = 0;  // still here, or back in time: the no-app stretch is a gap in the same session
         if (!appName.empty()) current_.appName = appName;
         return false;
     }
@@ -28,6 +35,7 @@ bool SessionTracker::update(const std::string& appKey, const std::string& appNam
         // T11: back to the previous app after a short detour: the detour is dropped, the old session goes on. Any
         // app counts as the detour on purpose, not just Home: Home's app key on the Frame isn't verified
         current_ = previous_;
+        current_.leftUnix = 0;
         previous_ = SessionInfo();
         if (!appName.empty()) current_.appName = appName;
         return true;
@@ -40,6 +48,15 @@ bool SessionTracker::update(const std::string& appKey, const std::string& appNam
     current_.appKey = appKey;
     current_.appName = appName;
     current_.startUnix = nowUnix;
+    current_.leftUnix = 0;
+    return true;
+}
+
+bool SessionTracker::expire(int64_t nowUnix) {
+    if (current_.id == 0 || current_.leftUnix == 0 || nowUnix - current_.leftUnix < kSessionDetourSec) return false;
+    // No app for a whole detour: the session is over, and the session before it can't come back either
+    current_ = SessionInfo();
+    previous_ = SessionInfo();
     return true;
 }
 

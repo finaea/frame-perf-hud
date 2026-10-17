@@ -61,8 +61,8 @@ const UiText kEnglish = {
     "Compact", "Hide system", ", no system",
     // T11: the Logs page
     "Logs", "Save and Record", "Record", "Save Logs",
-    "Save keeps the last 10 minutes and this session's summary. Record writes every second until you turn it off, "
-    "even with the HUD hidden",
+    "Writes the metrics to a CSV file once a second until you turn it off, even with the HUD hidden",
+    "Saves the last 10 minutes of metrics and this session's summary so far, right now",
     "Crash recorder", "Recorder",
     "Keeps the last 10 minutes of battery, power and temperatures on disk (1 write a second), so a crash or power "
     "cut leaves a log",

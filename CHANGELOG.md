@@ -72,7 +72,9 @@ numbers carry on from there; frame-perf-overlay's own history is in its CHANGELO
 - Game sessions are kept in memory and written once, when they end: a summary (averages, minimum, maximum, p95,
   histograms of frame and latency times, drops and throttling) and a compressed per-second timeline. The last 10
   are kept. Samples are taken while something is reading the sensors, so a session with less than a minute of
-  samples is skipped, even if the game ran longer. A short trip to SteamVR Home doesn't split a game.
+  samples is skipped, even if the game ran longer. A session ends a minute after its game quits with nothing else
+  started, at the moment the game left, without that minute. A short trip to SteamVR Home, or the same game back
+  within the minute, doesn't split a game.
 - An end-of-session card shows on the HUD for 10 seconds and stays on the Logs page.
 - **Save Logs** writes the last 10 minutes and the session so far, and **Record** writes every second until it's
   turned off.

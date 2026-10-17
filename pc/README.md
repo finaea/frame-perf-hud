@@ -34,7 +34,7 @@ Releasing both halves is in [`docs/RELEASING.md`](../docs/RELEASING.md).
 | `panel_view.*` | The widgets drawn as vectors at the window's scale (the shared `core/render` code) |
 | `pc_editor.*`, `editor_model.*` | The layout editor: hit-testing, drop logic, the palette and per-widget settings |
 | `pc_pages.*` | The Layout / Profiles / Logs tabs and the two pages |
-| `session_logs.*` | The PC's copy of the session logs, Save Logs, the save when the headset goes silent |
+| `session_logs.*` | The PC's copy of the session logs, Save Logs, the save when the headset goes silent. Sessions end like on the headset: a minute after the game quits, at the moment it left |
 | `updater.*` | The self-updater: GitHub's latest release (WinHTTP), SHA-256 check (BCrypt), the exe swap |
 | `camera_feed.*` | Camera pictures from the headset, decoded for the camera widgets |
 | `streaming/` | The Streaming widget's PC side: background OpenVR ping, read-only vrserver statistics, allow-listed vrlink log counters |

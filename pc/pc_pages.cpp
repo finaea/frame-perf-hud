@@ -226,7 +226,10 @@ void PcPages::drawLogs(const Pen& pen, const PageBox& area, double s, const Page
     const double bw = (aw - gap) / 2, bh = 36 * s;
     button(pen, PageAction::SaveLocal, "Save Logs", {ax, area.y + 46 * s, bw, bh}, s, true, true);
     button(pen, PageAction::OpenFolder, "Open logs folder", {ax + bw + gap, area.y + 46 * s, bw, bh}, s, true, false);
-    double y = area.y + 46 * s + bh + 26 * s;
+    double y = paragraph(pen, ax, area.y + 46 * s + bh + 22 * s, aw,
+                         "Save Logs writes the last 10 minutes of metrics and the headset session's summary to this "
+                         "PC's logs folder, right now",
+                         12 * s, kTextMuted) + 8 * s;
     if (!view.pcMessage.empty()) y = paragraph(pen, ax, y, aw, view.pcMessage, 13 * s, kText) + 6 * s;
     pen.text(ax, y + 6 * s, "Last session", 15 * s, kText, true);
     y += 30 * s;
@@ -260,9 +263,19 @@ void PcPages::drawLogs(const Pen& pen, const PageBox& area, double s, const Page
     };
     const bool recording = h != nullptr && (h->flags & link::kControlRecording) != 0;
     const bool crash = h != nullptr && (h->flags & link::kControlCrashRecorder) != 0;
-    pill(area.y + 46 * s, "Record", PageAction::RecordOn, PageAction::RecordOff, recording);
-    pill(area.y + 46 * s + pillH + 10 * s, "Crash recorder", PageAction::CrashOn, PageAction::CrashOff, crash);
-    y = area.y + 46 * s + 2 * pillH + 40 * s;
+    // Each switch has its hint underneath, shown connected or not so the switches never move
+    const double recordTop = area.y + 46 * s;
+    pill(recordTop, "Record", PageAction::RecordOn, PageAction::RecordOff, recording);
+    y = paragraph(pen, hx, recordTop + pillH + 20 * s, hw,
+                  "Writes the metrics to a CSV file on the headset once a second until you turn it off, even with the "
+                  "HUD hidden",
+                  12 * s, kTextMuted);
+    const double crashTop = y - 2 * s;
+    pill(crashTop, "Crash recorder", PageAction::CrashOn, PageAction::CrashOff, crash);
+    y = paragraph(pen, hx, crashTop + pillH + 20 * s, hw,
+                  "Keeps the last 10 minutes of battery, power and temperatures on the headset's disk, so a crash or "
+                  "power cut leaves a log",
+                  12 * s, kTextMuted) + 10 * s;
     if (h == nullptr) {
         y = paragraph(pen, hx, y, hw,
                       view.subscribed ? "This headset's HUD is older than this app: update it to control Record and "
@@ -272,10 +285,7 @@ void PcPages::drawLogs(const Pen& pen, const PageBox& area, double s, const Page
     } else {
         if (!h->recordStatus.empty()) y = paragraph(pen, hx, y, hw, h->recordStatus, 13 * s, recording ? kDanger : kText, recording);
         if (!h->crashStatus.empty()) y = paragraph(pen, hx, y, hw, h->crashStatus, 13 * s, kWarn, true);
-        y = paragraph(pen, hx, y, hw,
-                      "Record writes every second on the headset until it's off. The crash recorder keeps the last 10 "
-                      "minutes of battery, power and temperatures there",
-                      12 * s, kTextMuted) + 8 * s;
+        y += 8 * s;
         pen.text(hx, y, "Last power-off", 13 * s, kTextMuted);
         y = paragraph(pen, hx, y + 20 * s, hw, h->powerOff.empty() ? "unknown" : h->powerOff, 14 * s, kText, true);
         if (view.busy) y = paragraph(pen, hx, y + 6 * s, hw, "Waiting for the headset…", 13 * s, kTextMuted);

@@ -108,6 +108,11 @@ int columnIndex(const std::vector<LogColumn>& columns, uint16_t id) {
     return -1;
 }
 
+/** @return a histogram percentile kept inside the values actually seen (a bin's width can reach past them) */
+double clampTo(double v, const ColumnStats& st) {
+    return v == v ? std::clamp(v, static_cast<double>(st.min), static_cast<double>(st.max)) : v;
+}
+
 std::string durationText(int64_t seconds) {
     char buffer[32];
     if (seconds >= 3600) {
@@ -200,7 +205,8 @@ void ColumnStats::add(LogKind kind, float v) {
         case LogKind::Count: counted += v; break;
         case LogKind::Cumulative:
             // a counter that went down was restarted (the reader or vrlink): it counted v since then
-            if (samples > 1) counted += v >= last ? v - last : v;
+            if (samples > 1 && !rebase) counted += v >= last ? v - last : v;
+            rebase = false;
             break;
         case LogKind::Flag:
             if (v != 0 && !high) counted += 1;
@@ -210,13 +216,20 @@ void ColumnStats::add(LogKind kind, float v) {
     last = v;
 }
 
-void ColumnStats::merge(LogKind kind, const ColumnStats& later) {
-    if (later.samples == 0) return;
+void ColumnStats::merge(LogKind kind, const ColumnStats& later, bool bridge) {
+    if (later.samples == 0) {
+        // nothing read during the detour, but a gap before it still means the next value is a new baseline
+        if (kind == LogKind::Cumulative && (!bridge || later.rebase)) rebase = true;
+        return;
+    }
     if (samples == 0) {
         *this = later;
         return;
     }
-    if (kind == LogKind::Cumulative) counted += later.first >= last ? later.first - last : later.first;
+    if (kind == LogKind::Cumulative && bridge && !rebase) {
+        counted += later.first >= last ? later.first - last : later.first;
+    }
+    rebase = later.rebase;
     samples += later.samples;
     sum += later.sum;
     min = std::min(min, later.min);
@@ -376,26 +389,46 @@ void SessionLog::end(std::unique_ptr<SessionData> s) {
     ended_.push_back(std::move(s));
 }
 
-void SessionLog::observe(const SessionInfo& session, int64_t nowUnix) {
-    if (session.id == 0) return;
+void SessionLog::observe(const SessionInfo& in, int64_t nowUnix) {
+    if (in.id == 0) {
+        endAll();  // T11: no app for a whole detour (or no session at all): its end is when the app left
+        return;
+    }
+    SessionInfo session = in;
+    if (session.leftUnix == 0 && session.appKey.empty()) {
+        // LINK_STATE has no leftUnix: the PC copy's app left when it first saw the key empty
+        const SessionData* known = current_ && current_->info.id == in.id ? current_.get() : nullptr;
+        session.leftUnix = known && known->info.leftUnix != 0 ? known->info.leftUnix : nowUnix;
+    }
     if (!current_) {
         current_ = start(session);
     } else if (session.id == current_->info.id) {
-        current_->info.appKey = session.appKey;
+        if (!session.appKey.empty()) current_->info.appKey = session.appKey;
         if (!session.appName.empty()) current_->info.appName = session.appName;
+        if (current_->info.leftUnix != 0 && session.leftUnix == 0) {
+            // back after no app: what a running total rose by meanwhile isn't the session's. Pending per column,
+            // until that column's next value (a counter can come back later than the rest)
+            for (ColumnStats& st : current_->stats) st.rebase = true;
+        }
+        current_->info.leftUnix = session.leftUnix;
     } else if (parked_ && parked_->info.id == session.id) {
         // Back after a short detour (SessionTracker resumed the old id): the detour's data joins the game's
         SessionData& game = *parked_;
         SessionData& detour = *current_;
         game.timeline.append(detour.timeline, detour.info.startUnix - game.info.startUnix);
+        // T11: a no-app stretch on either side of the detour isn't counted: the game had left before it (no bridge
+        // from the game's last value), or the detour's app had left before the game came back (a new baseline)
+        const bool bridge = game.info.leftUnix == 0;
         for (size_t c = 0; c < columns_.size(); ++c) {
-            game.stats[c].merge(kinds_[c], detour.stats[c]);
+            game.stats[c].merge(kinds_[c], detour.stats[c], bridge);
+            if (detour.info.leftUnix != 0) game.stats[c].rebase = true;
             game.hist[c].merge(detour.hist[c]);
         }
         game.dataSeconds += detour.dataSeconds;
         game.lastUnix = std::max(game.lastUnix, detour.lastUnix);
         if (game.note.empty()) game.note = detour.note;
         if (!session.appName.empty()) game.info.appName = session.appName;
+        game.info.leftUnix = session.leftUnix;
         current_ = std::move(parked_);
     } else {
         end(std::move(parked_));
@@ -408,6 +441,7 @@ void SessionLog::observe(const SessionInfo& session, int64_t nowUnix) {
 
 void SessionLog::add(int64_t nowUnix, const std::vector<float>& values) {
     if (!current_ || values.size() != columns_.size() || !anyValue(values)) return;
+    if (current_->info.leftUnix != 0) return;  // T11: its app is gone: these seconds aren't the game's
     SessionData& s = *current_;
     if (s.dataSeconds > 0 && nowUnix <= s.lastUnix) return;  // once per second
     for (size_t c = 0; c < columns_.size(); ++c) {
@@ -497,9 +531,13 @@ std::string fileSafeApp(const SessionInfo& info) {
     return out.empty() ? "app" : out;
 }
 
+int64_t endUnix(const SessionData& s) {
+    return std::max(s.info.leftUnix != 0 ? s.info.leftUnix : s.lastUnix, s.info.startUnix);
+}
+
 std::string summaryJson(const SessionData& s, const std::vector<LogColumn>& columns) {
     std::ostringstream o;
-    const int64_t end = std::max(s.lastUnix, s.info.startUnix);
+    const int64_t end = endUnix(s);
     o << "{\n";
     o << "  \"format\": \"frame-perf-hud session 1\",\n";
     o << "  \"source\": " << jsonStr(s.source) << ",\n";
@@ -528,8 +566,9 @@ std::string summaryJson(const SessionData& s, const std::vector<LogColumn>& colu
         switch (columns[c].kind) {
             case LogKind::Gauge:
                 o << ", \"avg\": " << jsonNum(st.avg()) << ", \"min\": " << jsonNum(st.min)
-                  << ", \"max\": " << jsonNum(st.max) << ", \"p5\": " << jsonNum(s.hist[c].percentile(0.05))
-                  << ", \"p95\": " << jsonNum(s.hist[c].percentile(0.95));
+                  << ", \"max\": " << jsonNum(st.max)
+                  << ", \"p5\": " << jsonNum(clampTo(s.hist[c].percentile(0.05), st))
+                  << ", \"p95\": " << jsonNum(clampTo(s.hist[c].percentile(0.95), st));
                 break;
             case LogKind::Count: o << ", \"total\": " << jsonNum(st.counted, 0); break;
             case LogKind::Cumulative: o << ", \"count\": " << jsonNum(st.counted, 0); break;
@@ -611,7 +650,7 @@ std::vector<std::string> endCard(const SessionData& s, const std::vector<LogColu
     char line[160];
     const std::string app = s.info.appName.empty() ? s.info.appKey : s.info.appName;
     std::snprintf(line, sizeof(line), "%s · %s", app.c_str(),
-                  durationText(std::max(s.lastUnix, s.info.startUnix) - s.info.startUnix).c_str());
+                  durationText(endUnix(s) - s.info.startUnix).c_str());
     lines.push_back(line);
     if (const ColumnStats* fps = stat(metric::kFrameAppFps)) {
         const ColumnStats* dropped = stat(metric::kFrameDropped);

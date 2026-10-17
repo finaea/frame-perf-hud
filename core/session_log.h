@@ -2,7 +2,8 @@
 // - A Timeline holds one row per second of the log columns, 5 s rows past 4 h, coarser again past ~4 MB.
 // - Each column keeps running stats and a fixed-bin histogram (p95 without keeping every sample).
 // - SessionLog follows the session id (SessionTracker / LINK_STATE). The session it leaves is parked until the new one
-//   has run kSessionDetourSec, so a short detour that comes back (game → Home → game) is merged, not split.
+//   has run kSessionDetourSec, so a short detour that comes back (game → Home → game) is merged, not split. While the
+//   session's app is gone (leftUnix) nothing is added, and id 0 (no app for kSessionDetourSec) ends it.
 // - RecentRing: the last 10 minutes at 1 s, for Save.
 // - Files: <start>_<app>.json (summary) + .csv.gz (timeline), written atomically; old ones pruned by count.
 // Platform-free (zlib for the .gz, std::filesystem for listing).
@@ -72,9 +73,11 @@ struct ColumnStats {
     float first = 0, last = 0;  ///< Cumulative: the session's count is last − first (plus resets, below)
     double counted = 0;         ///< Count: sum; Cumulative: increase (a drop = the source restarted); Flag: rises
     bool high = false;          ///< Flag: last value was non-zero
+    bool rebase = false;        ///< Cumulative, T11: back after no app: the next value is a new baseline, not a rise
 
     void add(LogKind kind, float v);
-    void merge(LogKind kind, const ColumnStats& later);
+    /** @param bridge Cumulative: count the rise between this one's last value and later's first */
+    void merge(LogKind kind, const ColumnStats& later, bool bridge = true);
     double avg() const { return samples ? sum / static_cast<double>(samples) : 0.0; }
 };
 
@@ -143,9 +146,12 @@ public:
      */
     SessionLog(std::vector<LogColumn> columns, std::string source);
 
-    /** Follows the session (call on every change and every tick). id 0 = none yet. */
+    /**
+     * Follows the session (call on every change and every tick). id 0 = none: ends the open sessions. A session with
+     * an empty app key has no app now (LINK_STATE's form of leftUnix): parked from the first time it's seen so.
+     */
     void observe(const SessionInfo& session, int64_t nowUnix);
-    /** One 1 s sample for the current session (values from sampleColumns). Ignored with no session. */
+    /** One 1 s sample for the current session (values from sampleColumns). Ignored with no session or no app. */
     void add(int64_t nowUnix, const std::vector<float>& values);
     /** Ends every open session (agent exit). */
     void endAll();
@@ -205,6 +211,9 @@ std::string fileTime(int64_t unixTime);
 std::string clockTime(int64_t unixTime);
 /** @return the app name (key if no name) with anything but [A-Za-z0-9._-] made '-', at most 40 bytes */
 std::string fileSafeApp(const SessionInfo& info);
+
+/** @return when the session ended: when its app left, else its last sample (never before its start) */
+int64_t endUnix(const SessionData& s);
 
 /** @return the summary as JSON (counts, avg/min/max/p5/p95 per column, histograms, end card) */
 std::string summaryJson(const SessionData& s, const std::vector<LogColumn>& columns);

@@ -1728,7 +1728,9 @@ int runOverlay(const Options& options) {
         const double c1 = cpuSeconds();
         // T06: leases expire, METRICS (+ new process lists) go to lease holders, after the reads above
         if (metricsTick) linkService.tick(nowSeconds());
-        // T11: once a second: the session's row (only while someone looks), Record, the crash ring, ended sessions
+        // T11: once a second: the session's row (only while someone looks), Record, the crash ring, ended sessions.
+        // A session whose app has been gone a minute ends first
+        bridge.expireSession(nowSeconds());
         sessions.tick(nowSeconds(), someoneLooking(scheduler.demand()), bridge.session(), store);
 
         // ---- HUD redraw (2 Hz at most). Only while it's shown and the headset is in use: nobody sees it

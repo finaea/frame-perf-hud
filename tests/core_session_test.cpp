@@ -177,6 +177,98 @@ void resumeUpdatesName() {
     CHECK(t.current().appName == "A");
 }
 
+// ---- T11 R3: no scene app is a detour ----
+
+void noAppParksTheSessionAndBackKeepsIt() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(t.current().leftUnix == 0);
+    CHECK(!t.update("", "", 130));
+    CHECK(t.current().id == 1);
+    CHECK(t.current().leftUnix == 130);
+    CHECK(!t.update("", "", 140));  // still gone: leftUnix stays at the first time
+    CHECK(t.current().leftUnix == 130);
+    CHECK(t.current().appKey == "steam.app.1");
+    CHECK(!t.update("steam.app.1", "A", 160));  // back: the no-app time is a gap
+    CHECK(t.current().id == 1);
+    CHECK(t.current().leftUnix == 0);
+    CHECK(t.current().startUnix == 100);
+}
+
+void noAppForAMinuteEndsTheSession() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(!t.update("", "", 130));
+    CHECK(!t.update("", "", 189));  // 59 s
+    CHECK(t.current().id == 1);
+    CHECK(!t.expire(189));
+    CHECK(t.current().id == 1);
+    CHECK(!t.update("", "", 190));  // 60 s: over
+    CHECK(t.current().id == 0);
+    CHECK(t.current().appKey.empty());
+    // the same game afterwards is a NEW session, not a resume
+    CHECK(t.update("steam.app.1", "A", 200));
+    CHECK(t.current().id == 2);
+    CHECK(t.current().startUnix == 200);
+    CHECK(t.current().leftUnix == 0);
+}
+
+void expireWorksOnItsOwn() {
+    SessionTracker t(counter());
+    CHECK(!t.expire(50));  // nothing to expire
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(!t.expire(500));  // the app never left
+    CHECK(t.current().id == 1);
+    CHECK(!t.update("", "", 130));
+    CHECK(!t.expire(189));
+    CHECK(t.current().id == 1);
+    CHECK(t.expire(190));
+    CHECK(t.current().id == 0);
+    CHECK(!t.expire(10000));  // already over
+}
+
+void noAppThenOtherAppThenBack() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(!t.update("", "", 130));
+    CHECK(t.update("steam.app.2", "B", 150));  // another app: a new session, A is the detour's origin
+    CHECK(t.current().id == 2);
+    CHECK(t.update("steam.app.1", "A", 180));  // within 60 s of B's start: A resumes
+    CHECK(t.current().id == 1);
+    CHECK(t.current().startUnix == 100);
+    CHECK(t.current().leftUnix == 0);
+
+    SessionTracker u(counter());
+    CHECK(u.update("steam.app.1", "A", 100));
+    CHECK(!u.update("", "", 130));
+    CHECK(u.update("steam.app.2", "B", 150));
+    CHECK(u.update("steam.app.1", "A", 210));  // B ran 60 s: A is new
+    CHECK(u.current().id == 3);
+}
+
+void expiredNoAppForgetsThePreviousSession() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(t.update("steam.app.2", "B", 130));
+    CHECK(!t.update("", "", 140));
+    CHECK(!t.update("", "", 200));  // B has been gone 60 s: over, and A can't come back either
+    CHECK(t.current().id == 0);
+    CHECK(t.update("steam.app.1", "A", 210));
+    CHECK(t.current().id == 3);
+}
+
+void flickerKeepsTheId() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(!t.update("", "", 110));
+    CHECK(!t.update("steam.app.1", "A", 112));
+    CHECK(t.current().id == 1);
+    CHECK(t.current().leftUnix == 0);
+    // and it can leave again later with a fresh leftUnix
+    CHECK(!t.update("", "", 300));
+    CHECK(t.current().leftUnix == 300);
+}
+
 }  // namespace
 
 int main() {
@@ -194,6 +286,12 @@ int main() {
     flickerInsideDetourKeepsDetour();
     midGameFirstKeyIsASession();
     resumeUpdatesName();
+    noAppParksTheSessionAndBackKeepsIt();
+    noAppForAMinuteEndsTheSession();
+    expireWorksOnItsOwn();
+    noAppThenOtherAppThenBack();
+    expiredNoAppForgetsThePreviousSession();
+    flickerKeepsTheId();
     if (failures == 0) std::printf("core_session_test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

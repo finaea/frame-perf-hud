@@ -354,6 +354,24 @@ void SensorBridge::refreshSceneApp(double now) {
     store_.setI32(metric::kSessionStartUnix, static_cast<int32_t>(s.startUnix), now);
 }
 
+void SensorBridge::expireSession(double now) {
+    const int32_t id = session_.current().id;
+    const int64_t left = session_.current().leftUnix;
+    if (!session_.expire(static_cast<int64_t>(std::time(nullptr)))) return;
+    const std::time_t leftTime = static_cast<std::time_t>(left);
+    std::tm tm {};
+    localtime_r(&leftTime, &tm);
+    char since[16];
+    std::strftime(since, sizeof(since), "%H:%M:%S", &tm);
+    std::fprintf(stderr, "[session] Session %d ended: no app since %s (%lld s)\n", id, since,
+                 static_cast<long long>(fph::kSessionDetourSec));
+    previousSessionId_ = 0;
+    for (uint16_t metricId :
+         {metric::kSceneAppKey, metric::kSceneAppName, metric::kSessionId, metric::kSessionStartUnix}) {
+        store_.setNa(metricId, Reason::NotConnected, now);
+    }
+}
+
 void SensorBridge::readStreamLink(double now, bool resumed) {
     if (resumed) {
         streamDongle_.reset();

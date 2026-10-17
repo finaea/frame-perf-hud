@@ -5,6 +5,7 @@
 #include "stream_metrics.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -467,6 +468,157 @@ void saveKeepsTwentyAtMost() {
     CHECK(filesWith(r.logs.savesDir(), "_save.json").size() == static_cast<size_t>(slog::kKeepSaves));
 }
 
+// ---- T11 R3: no scene app ----
+
+/** Seconds where the PC's scene key reads ok but empty (no scene app), Streaming values still arriving. */
+void runStreamNoApp(Rig& r, int seconds) {
+    for (int i = 0; i < seconds; ++i) {
+        r.now += 1.0;
+        r.unixNow += 1;
+        r.store.setText(metric::kPcStreamSceneKey, "", r.now);
+        r.store.setText(metric::kPcStreamSceneName, "", r.now);
+        r.store.setF32(metric::kPcStreamTotalAvg, 20.0, r.now);
+        r.logs.tick(r.now, r.unixNow, r.headset, r.lastMetrics, r.store);
+        const std::string l = r.logs.takeLog();
+        if (!l.empty()) r.allLog += l + "\n";
+    }
+}
+
+// The headset says "no app" through LINK_STATE as an empty key (same id), then id 0 after a minute: the PC copy ends where
+// the app left, and counts what the headset's own log counts
+void pcCopyAgreesWithTheHeadsetAboutNoApp() {
+    Rig r("noapp-copy");
+    r.headset = session(7, "Game", kBase + 1);
+    // the headset side, as it would log the same feed itself
+    const std::vector<LogColumn> cols = {
+        {metric::kFrameAppFps, LogKind::Gauge, 0, 150, 150, true},
+        {metric::kPowerVphW, LogKind::Gauge, 0, 30, 300, false},
+    };
+    slog::SessionLog headsetSide(cols, "headset");
+    const auto feed = [&](const SessionInfo& s) {
+        headsetSide.observe(s, r.unixNow);
+        headsetSide.add(r.unixNow, {60.0f, 5.0f});
+    };
+    for (int i = 0; i < 120; ++i) {
+        r.sec(true);
+        feed(r.headset);
+    }
+    const int64_t left = r.unixNow + 1;  // the first tick that sees the empty key
+    SessionInfo away = r.headset;
+    away.appKey.clear();  // the PC copy's form
+    SessionInfo awayOnHeadset = r.headset;
+    awayOnHeadset.leftUnix = left;  // the headset's own form
+    r.headset = away;
+    for (int i = 0; i < 59; ++i) {
+        r.sec(true);  // values keep arriving: they must not count
+        feed(awayOnHeadset);
+    }
+    CHECK(filesWith(r.logs.sessionsDir(), ".json").empty());  // parked: nothing written yet
+    r.headset = SessionInfo();  // the headset gave up: id 0
+    r.sec(true);
+    headsetSide.observe(SessionInfo(), r.unixNow);
+    auto ended = headsetSide.takeEnded();
+    CHECK(ended.size() == 1);
+
+    const std::vector<fs::path> json = filesWith(r.logs.sessionsDir(), ".json");
+    CHECK(json.size() == 1);
+    if (json.size() != 1 || ended.size() != 1) return;
+    JsonValue root;
+    CHECK(parse(json[0], root));
+    const double endUnix = root.get("end_unix") != nullptr ? root.get("end_unix")->number : 0;
+    CHECK(std::fabs(endUnix - static_cast<double>(left)) <= 1.0);
+    CHECK(std::fabs(endUnix - static_cast<double>(slog::endUnix(*ended[0]))) <= 1.0);
+    const double data = root.get("data_s") != nullptr ? root.get("data_s")->number : 0;
+    CHECK(std::fabs(data - static_cast<double>(ended[0]->dataSeconds)) <= 1.0);
+    CHECK(std::fabs(data - 120.0) <= 1.0);
+    CHECK(root.get("duration_s") != nullptr &&
+          std::fabs(root.get("duration_s")->number - static_cast<double>(left - (kBase + 1))) <= 1.0);
+    CHECK(filesWith(r.logs.sessionsDir(), ".csv.gz").size() == 1);
+}
+
+// The app comes back inside the minute: one session, the gap isn't data
+void pcCopyKeepsOneSessionWhenTheAppReturns() {
+    Rig r("noapp-back");
+    r.headset = session(7, "Game", kBase + 1);
+    r.run(100, true);
+    SessionInfo away = r.headset;
+    away.appKey.clear();
+    r.headset = away;
+    r.run(20, true);
+    r.headset = session(7, "Game", kBase + 1);
+    r.run(40, true);
+    r.logs.shutdown();
+    const std::vector<fs::path> json = filesWith(r.logs.sessionsDir(), ".json");
+    CHECK(json.size() == 1);
+    if (json.size() == 1) {
+        JsonValue root;
+        CHECK(parse(json[0], root));
+        CHECK(root.get("data_s") != nullptr && root.get("data_s")->number == 140);
+    }
+}
+
+// The PC's own scene app: an ok empty key parks the stream session and a minute of it ends it at the moment it left
+void pcStreamNoAppEndsTheStreamSession() {
+    Rig r("stream-noapp");
+    r.run(90, false, true);
+    const int64_t left = r.unixNow + 1;
+    runStreamNoApp(r, 1);
+    const MetricValue* key = r.store.get(metric::kPcStreamSceneKey);
+    CHECK(key != nullptr && key->ok && key->text.empty());  // the premise: ok and empty
+    runStreamNoApp(r, 58);
+    CHECK(filesWith(r.logs.streamDir(), ".json").empty());  // parked
+    runStreamNoApp(r, 2);                                   // a minute without an app
+    const std::vector<fs::path> json = filesWith(r.logs.streamDir(), ".json");
+    CHECK(json.size() == 1);
+    if (json.size() == 1) {
+        JsonValue root;
+        CHECK(parse(json[0], root));
+        CHECK(root.get("end_unix") != nullptr &&
+              std::fabs(root.get("end_unix")->number - static_cast<double>(left)) <= 1.0);
+        CHECK(root.get("data_s") != nullptr && root.get("data_s")->number == 90);  // the no-app values aren't data
+        CHECK(root.get("source") != nullptr && root.get("source")->text == "pc stream");
+    }
+    // the same game afterwards is a new session
+    r.run(70, false, true);
+    r.logs.shutdown();
+    CHECK(filesWith(r.logs.streamDir(), ".json").size() == 2);
+}
+
+void pcStreamNoAppThenBackIsOneSession() {
+    Rig r("stream-noapp-back");
+    r.run(80, false, true);
+    runStreamNoApp(r, 30);
+    r.run(40, false, true);
+    r.logs.shutdown();
+    const std::vector<fs::path> json = filesWith(r.logs.streamDir(), ".json");
+    CHECK(json.size() == 1);
+    if (json.size() == 1) {
+        JsonValue root;
+        CHECK(parse(json[0], root));
+        CHECK(root.get("data_s") != nullptr && root.get("data_s")->number == 120);
+    }
+}
+
+// Paused / not-yet-read say nothing about the app: the session isn't parked or ended, however long it lasts
+void pcStreamPausedNeverParks() {
+    Rig r("stream-paused-long");
+    r.run(90, false, true);
+    runStreamNa(r, 150, Reason::Paused);  // far past a minute
+    CHECK(filesWith(r.logs.streamDir(), ".json").empty());
+    CHECK(r.allLog.find("not saved") == std::string::npos);
+    runStreamNa(r, 70, Reason::NotSampledYet);
+    CHECK(filesWith(r.logs.streamDir(), ".json").empty());
+    r.run(30, false, true);  // the same app is still there
+    r.logs.shutdown();
+    const std::vector<fs::path> json = filesWith(r.logs.streamDir(), ".json");
+    CHECK(json.size() == 1);  // one session all along
+    if (json.size() == 1) {
+        JsonValue root;
+        CHECK(parse(json[0], root));
+        CHECK(root.get("data_s") != nullptr && root.get("data_s")->number == 120);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -487,6 +639,11 @@ int main() {
     noSteamVrCountersAreNotData();  // re-check 2
     shortGameThenQuitIsNotSaved();
     saveCutsOldRows();                 // review M2
+    pcCopyAgreesWithTheHeadsetAboutNoApp();
+    pcCopyKeepsOneSessionWhenTheAppReturns();
+    pcStreamNoAppEndsTheStreamSession();
+    pcStreamNoAppThenBackIsOneSession();
+    pcStreamPausedNeverParks();
     if (failures == 0) std::printf("pc_session_logs_test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

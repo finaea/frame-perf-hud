@@ -545,7 +545,7 @@ void SettingsPanel::layoutButtons() {
     if (mode_ == ButtonMode::Logs) {  // T11
         const double inner1 = kPad + kCardPad;
         segmented(inner1 + kLogLabelW, rowY(0), kSegmentW, {SettingsAction::RecordOn, SettingsAction::RecordOff});
-        add(SettingsAction::SaveNow, inner1, rowY(1), kLogCard1W - 2 * kCardPad, kButtonH);
+        add(SettingsAction::SaveNow, inner1, rowY(2), kLogCard1W - 2 * kCardPad, kButtonH);  // row 1: Record's hint
         segmented(kLogCard2X + kCardPad + kLogLabelW, rowY(0), kSegmentW,
                   {SettingsAction::CrashRecorderOn, SettingsAction::CrashRecorderOff});
         return;
@@ -1499,7 +1499,7 @@ std::vector<std::string> wrapText(const Pen& pen, const std::string& text, doubl
 
 void SettingsPanel::drawLogsPage(const Pen& pen, const UiText& text, const Config& /*config*/,
                                  const LogsUiState& logs) const {
-    const double bottom = kCardY + kCardH - kCardPad - 24;  // the last line is the folder hint
+    double bottom = kCardY + kCardH - kCardPad;  // the last card lowers it for the folder hint
     /** Wrapped lines from baseline y down, never past the card's bottom. @return the next line's baseline */
     const auto paragraph = [&](double x, double y, double w, const std::string& body, double size, Color c, bool bold) {
         for (const std::string& line : wrapText(pen, body, size, w, bold)) {
@@ -1510,7 +1510,7 @@ void SettingsPanel::drawLogsPage(const Pen& pen, const UiText& text, const Confi
         return y;
     };
     const double labelSize = 22;
-    // Save and Record (red edge while recording)
+    // Record and Save, each with its hint underneath, then their status lines (red edge while recording)
     {
         const double x = kPad + kCardPad;
         const double w = kLogCard1W - 2 * kCardPad;
@@ -1518,13 +1518,13 @@ void SettingsPanel::drawLogsPage(const Pen& pen, const UiText& text, const Confi
         pen.text(x, kCardY + 42, text.cardRecord, 24, kText, true);
         pen.text(x, centerBaseline(rowY(0), kButtonH, labelSize), text.rowRecord, labelSize, kTextMuted);
         drawSegmented(pen, text, {SettingsAction::RecordOn, SettingsAction::RecordOff}, logs.recording ? 0 : 1, true);
+        paragraph(x, rowY(0) + kButtonH + 26, w, text.recordHint, 16, kTextMuted, false);
         drawButton(pen, text, SettingsAction::SaveNow, false, 24);
-        double y = rowY(2) + 30;
+        double y = paragraph(x, rowY(2) + kButtonH + 26, w, text.saveHint, 16, kTextMuted, false) + 10;
         if (!logs.recordStatus.empty()) {
             y = paragraph(x, y, w, logs.recordStatus, 18, logs.recording ? kDanger : kText, logs.recording);
         }
-        if (!logs.saveStatus.empty()) y = paragraph(x, y, w, logs.saveStatus, 18, kText, false);
-        paragraph(x, y + 6, w, text.recordHint, 16, kTextMuted, false);
+        if (!logs.saveStatus.empty()) paragraph(x, y, w, logs.saveStatus, 18, kText, false);
     }
     // Crash recorder and the last power-off
     {
@@ -1548,6 +1548,7 @@ void SettingsPanel::drawLogsPage(const Pen& pen, const UiText& text, const Confi
         const double w = kLogCard3W - 2 * kCardPad;
         drawCard(pen, kLogCard3X, kCardY, kLogCard3W, kCardH, 20, kCard, kCard, 0);
         pen.text(x, kCardY + 42, text.cardLastSession, 24, kText, true);
+        bottom -= 24;  // the last line is the folder hint
         double y = kCardY + 90;
         if (logs.lastCard.empty()) {
             paragraph(x, y, w, text.noSessionYet, 18, kTextMuted, false);

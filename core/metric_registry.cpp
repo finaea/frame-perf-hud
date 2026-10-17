@@ -245,7 +245,7 @@ const std::vector<LogColumn> kLogColumns = {
     {metric::kPowerVphW, K::Gauge, 0, 30, 300, false},
     {metric::kPowerRailsW, K::Gauge, 0, 30, 300, false},
     {metric::kBatteryPct, K::Gauge, 0, 100, 100, false},
-    {metric::kBatteryVoltageV, K::Gauge, 3, 4.5f, 150, false},
+    {metric::kBatteryVoltageV, K::Gauge, 6, 9, 150, false},  // the 2-cell pack: 7.4-8.5 V
     {metric::kBatteryCurrentMa, K::Gauge, -6000, 6000, 240, false},
     {metric::kBatteryPowerW, K::Gauge, -30, 30, 240, false},
     {metric::kTempCpuC, K::Gauge, 0, 120, 240, false},
@@ -275,7 +275,7 @@ const std::vector<LogColumn> kLogColumns = {
     // PC streaming (ticket 08): the latency stages, rates and the PC's counters since its reader started
     {metric::kPcStreamPing, K::Gauge, 0, 100, 200, false},
     {metric::kPcStreamEstimatedBandwidth, K::Gauge, 0, 2000, 200, false},
-    {metric::kPcStreamRetransmitRequests, K::Gauge, 0, 1000, 100, false},
+    {metric::kPcStreamRetransmitRequests, K::Cumulative, 0, 0, 0, false},  // a running total since the stream started
     {metric::kPcStreamSkipped, K::Gauge, 0, 100, 100, false},
     {metric::kPcStreamLate, K::Gauge, 0, 100, 100, false},
     {metric::kPcStreamFps, K::Gauge, 0, 150, 150, false},
@@ -285,7 +285,7 @@ const std::vector<LogColumn> kLogColumns = {
     {metric::kPcStreamSendAvg, K::Gauge, 0, 50, 200, true},
     {metric::kPcStreamNetworkAvg, K::Gauge, 0, 50, 200, true},
     {metric::kPcStreamDecodeAvg, K::Gauge, 0, 50, 200, true},
-    {metric::kPcStreamSlackAvg, K::Gauge, -50, 50, 200, true},
+    {metric::kPcStreamSlackAvg, K::Gauge, -50, 150, 200, true},
     {metric::kPcStreamTotalAvg, K::Gauge, 0, 150, 300, true},
     {metric::kPcStreamStreamResets, K::Cumulative, 0, 0, 0, false},
     {metric::kPcStreamBadLinks, K::Cumulative, 0, 0, 0, false},

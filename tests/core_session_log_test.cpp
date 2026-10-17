@@ -847,6 +847,474 @@ void sampleColumnsFreshness() {
     CHECK(std::isnan(v[0]));  // stale: a gap, not the last value
 }
 
+// ---- T11 R3: no scene app, histogram ranges, running totals ----
+
+/** @return the session's own copy of sessionLogColumns() entry for id */
+LogColumn colOf(uint16_t id) {
+    for (const LogColumn& c : sessionLogColumns()) {
+        if (c.id == id) return c;
+    }
+    std::printf("FAIL: column %u isn't in sessionLogColumns()\n", static_cast<unsigned>(id));
+    ++failures;
+    return LogColumn {id, LogKind::Gauge, 0, 1, 1, false};
+}
+
+/** The tracker's form of a session whose app left at leftUnix. */
+SessionInfo gone(SessionInfo s, int64_t leftUnix) {
+    s.leftUnix = leftUnix;
+    return s;
+}
+
+/** One session of one column, fed one value a second, ended. */
+std::unique_ptr<SessionData> solo(const LogColumn& col, const std::vector<float>& values) {
+    SessionLog log({col}, "headset");
+    const SessionInfo a = info(1, "k1", "A", 1000);
+    int64_t t = 1000;
+    for (float v : values) {
+        log.observe(a, t);
+        log.add(t, {v});
+        ++t;
+    }
+    log.endAll();
+    auto ended = log.takeEnded();
+    return ended.empty() ? nullptr : std::move(ended[0]);
+}
+
+const JsonValue* metricOf(const JsonValue& root, uint16_t id) {
+    const JsonValue* metrics = root.get("metrics");
+    return metrics != nullptr ? metrics->get(findMetric(id)->name) : nullptr;
+}
+
+void noAppEndsTheSessionWhereTheAppLeft() {
+    SessionLog log(smallColumns(), "headset");
+    const SessionInfo game = info(1, "steam.app.1", "A", 1000);
+    run(log, game, 1000, 120);
+    const SessionInfo away = gone(game, 1120);
+    for (int64_t t = 1120; t < 1180; ++t) {  // 60 s of no app, values still arriving
+        log.observe(away, t);
+        log.add(t, sample(60.0f));
+    }
+    CHECK(log.takeEnded().empty());  // parked, not over yet
+    log.observe(SessionInfo(), 1180);  // the tracker gave up: id 0
+    auto ended = log.takeEnded();
+    CHECK(ended.size() == 1);
+    CHECK(log.current() == nullptr);
+    if (ended.size() != 1) return;
+    const SessionData& s = *ended[0];
+    CHECK(s.dataSeconds == 120);  // the no-app seconds aren't counted
+    CHECK(endUnix(s) == 1120);
+    CHECK(s.timeline.rows() == 120);
+    CHECK(s.timeline.row(s.timeline.rows() - 1).offset == 119);  // no rows after T
+    JsonValue root;
+    std::string error;
+    CHECK(parseJson(summaryJson(s, smallColumns()), root, error));
+    CHECK(root.get("end_unix") != nullptr && root.get("end_unix")->number == 1120);
+    CHECK(root.get("duration_s") != nullptr && root.get("duration_s")->number == 120);
+    CHECK(root.get("data_s") != nullptr && root.get("data_s")->number == 120);
+    const std::vector<std::string> card = endCard(s, smallColumns());
+    CHECK(!card.empty() && card[0] == "A · 2 min 00 s");
+}
+
+void backFromNoAppIsOneSessionWithAGap() {
+    SessionLog log(smallColumns(), "headset");
+    const SessionInfo game = info(1, "steam.app.1", "A", 1000);
+    run(log, game, 1000, 120);
+    const SessionInfo away = gone(game, 1120);
+    for (int64_t t = 1120; t < 1150; ++t) {
+        log.observe(away, t);
+        log.add(t, sample(60.0f));
+    }
+    run(log, game, 1150, 50);  // the app is back
+    CHECK(log.takeEnded().empty());
+    log.endAll();
+    auto ended = log.takeEnded();
+    CHECK(ended.size() == 1);
+    if (ended.size() != 1) return;
+    const SessionData& s = *ended[0];
+    CHECK(s.info.id == 1);
+    CHECK(s.dataSeconds == 170);
+    CHECK(s.stats[0].samples == 170);
+    CHECK(s.timeline.rows() == 170);
+    if (s.timeline.rows() == 170) {
+        CHECK(s.timeline.row(119).offset == 119);
+        CHECK(s.timeline.row(120).offset == 150);  // the gap: offsets 120..149 have no rows
+    }
+    CHECK(endUnix(s) == 1199);
+    CHECK(s.info.leftUnix == 0);
+}
+
+void shutdownWhileParkedEndsAtTheLeave() {
+    SessionLog log(smallColumns(), "headset");
+    const SessionInfo game = info(1, "steam.app.1", "A", 1000);
+    run(log, game, 1000, 120);
+    const SessionInfo away = gone(game, 1120);
+    for (int64_t t = 1120; t < 1140; ++t) {
+        log.observe(away, t);
+        log.add(t, sample(60.0f));
+    }
+    log.endAll();  // the HUD is shutting down
+    auto ended = log.takeEnded();
+    CHECK(ended.size() == 1);
+    if (ended.size() != 1) return;
+    CHECK(endUnix(*ended[0]) == 1120);
+    CHECK(ended[0]->dataSeconds == 120);
+}
+
+void linkStateFormEmptyKeyParksAtFirstSight() {
+    // the PC copy: same id, appKey "" from the moment the app left; no leftUnix on the wire
+    SessionLog log(smallColumns(), "pc copy");
+    const SessionInfo game = info(1, "steam.app.1", "A", 1000);
+    run(log, game, 1000, 100);
+    SessionInfo empty = game;
+    empty.appKey.clear();
+    for (int64_t t = 1100; t < 1130; ++t) {
+        log.observe(empty, t);
+        log.add(t, sample(60.0f));
+    }
+    CHECK(log.current() != nullptr && log.current()->info.leftUnix == 1100);
+    CHECK(log.current() != nullptr && log.current()->info.appKey == "steam.app.1");  // the key is kept
+    CHECK(log.current() != nullptr && log.current()->dataSeconds == 100);
+    log.observe(SessionInfo(), 1160);
+    auto ended = log.takeEnded();
+    CHECK(ended.size() == 1);
+    if (!ended.empty()) {
+        CHECK(endUnix(*ended[0]) == 1100);
+        CHECK(ended[0]->dataSeconds == 100);
+    }
+    // back with the key again: the gap closes
+    SessionLog back(smallColumns(), "pc copy");
+    run(back, game, 1000, 100);
+    for (int64_t t = 1100; t < 1120; ++t) {
+        back.observe(empty, t);
+        back.add(t, sample(60.0f));
+    }
+    run(back, game, 1120, 30);
+    CHECK(back.current() != nullptr && back.current()->dataSeconds == 130);
+    CHECK(back.current() != nullptr && back.current()->info.leftUnix == 0);
+}
+
+void idZeroWithNothingOpenIsHarmless() {
+    SessionLog log(smallColumns(), "headset");
+    log.observe(SessionInfo(), 100);
+    CHECK(log.takeEnded().empty());
+    CHECK(log.current() == nullptr);
+}
+
+void runningTotalIsRebasedAfterNoApp() {
+    SessionLog log(smallColumns(), "headset");  // column 3 = kPcStreamStreamResets, Cumulative
+    const SessionInfo game = info(1, "steam.app.1", "A", 1000);
+    for (int64_t t = 1000; t < 1060; ++t) {  // 10 for 30 s, then 12
+        log.observe(game, t);
+        log.add(t, {60.0f, 0.0f, 0.0f, t < 1030 ? 10.0f : 12.0f});
+    }
+    const SessionInfo away = gone(game, 1060);
+    for (int64_t t = 1060; t < 1090; ++t) {  // the counter climbs to 50 while no app runs
+        log.observe(away, t);
+        log.add(t, {60.0f, 0.0f, 0.0f, static_cast<float>(12 + (t - 1060) * 38 / 29)});
+    }
+    log.observe(game, 1090);
+    log.add(1090, {60.0f, 0.0f, 0.0f, 51.0f});
+    log.observe(game, 1091);
+    log.add(1091, {60.0f, 0.0f, 0.0f, 52.0f});
+    CHECK(log.current() != nullptr);
+    if (log.current() == nullptr) return;
+    // 2 before the gap + 0 for the jump over the gap + 1 after
+    CHECK(near(log.current()->stats[3].counted, 3.0));
+}
+
+void batteryVoltageHistogramCoversThePack() {
+    std::vector<float> v;
+    for (int i = 0; i < 100; ++i) v.push_back(7.4f + 1.1f * static_cast<float>(i) / 99.0f);
+    const auto s = solo(colOf(metric::kBatteryVoltageV), v);
+    CHECK(s != nullptr);
+    if (!s) return;
+    JsonValue root;
+    std::string error;
+    CHECK(parseJson(summaryJson(*s, {colOf(metric::kBatteryVoltageV)}), root, error));
+    const JsonValue* m = metricOf(root, metric::kBatteryVoltageV);
+    CHECK(m != nullptr);
+    if (m == nullptr) return;
+    const double p5 = m->get("p5")->number, p95 = m->get("p95")->number;
+    CHECK(p5 >= 7.4 - 1e-6 && p5 <= 7.6);
+    CHECK(p95 >= 8.3 && p95 <= 8.5 + 1e-6);
+    CHECK(p95 > 5.0);  // not the old 3..4.5 V range's clamp
+    CHECK(s->hist[0].counts().back() == 0);
+    CHECK(s->hist[0].counts().front() == 0);
+}
+
+void retransmitRequestsIsARunningTotal() {
+    const LogColumn col = colOf(metric::kPcStreamRetransmitRequests);
+    CHECK(col.kind == LogKind::Cumulative);
+    std::vector<float> v;
+    for (int i = 0; i < 100; ++i) v.push_back(static_cast<float>(11964 + (867 * i + 49) / 99));
+    v.back() = 12831;
+    const auto s = solo(col, v);
+    CHECK(s != nullptr);
+    if (!s) return;
+    JsonValue root;
+    std::string error;
+    CHECK(parseJson(summaryJson(*s, {col}), root, error));
+    const JsonValue* m = metricOf(root, metric::kPcStreamRetransmitRequests);
+    CHECK(m != nullptr && m->get("count") != nullptr);
+    if (m != nullptr) {
+        CHECK(m->get("count") != nullptr && near(m->get("count")->number, 867.0));
+        CHECK(m->get("p95") == nullptr && m->get("p5") == nullptr && m->get("avg") == nullptr);
+    }
+    // histograms keep out of it too
+    CHECK(root.get("histograms") != nullptr && root.get("histograms")->get(findMetric(col.id)->name) == nullptr);
+
+    // the counter restarted in the middle: 12000 -> 12100, then 40, then 90
+    std::vector<float> w;
+    for (int i = 0; i < 10; ++i) w.push_back(12000.0f);
+    for (int i = 0; i < 10; ++i) w.push_back(12100.0f);
+    for (int i = 0; i < 10; ++i) w.push_back(40.0f);
+    for (int i = 0; i < 10; ++i) w.push_back(90.0f);
+    const auto s2 = solo(col, w);
+    CHECK(s2 != nullptr);
+    if (!s2) return;
+    JsonValue root2;
+    CHECK(parseJson(summaryJson(*s2, {col}), root2, error));
+    const JsonValue* m2 = metricOf(root2, metric::kPcStreamRetransmitRequests);
+    CHECK(m2 != nullptr && m2->get("count") != nullptr && near(m2->get("count")->number, 100 + 40 + 50));
+}
+
+void gaugePercentilesStayInsideWhatWasSeen() {
+    // a constant display rate: the bin's upper part (72.95) must not show
+    const auto hz = solo(colOf(metric::kFrameDisplayHz), std::vector<float>(100, 72.0f));
+    CHECK(hz != nullptr);
+    if (hz) {
+        JsonValue root;
+        std::string error;
+        CHECK(parseJson(summaryJson(*hz, {colOf(metric::kFrameDisplayHz)}), root, error));
+        const JsonValue* m = metricOf(root, metric::kFrameDisplayHz);
+        CHECK(m != nullptr && m->get("p5") != nullptr && near(m->get("p5")->number, 72.0, 1e-6));
+        CHECK(m != nullptr && m->get("p95") != nullptr && near(m->get("p95")->number, 72.0, 1e-6));
+    }
+    // a fan whose highest reading is 3809.5
+    std::vector<float> fan;
+    for (int i = 0; i < 100; ++i) fan.push_back(3000.0f + 809.5f * static_cast<float>(i) / 99.0f);
+    const auto f = solo(colOf(metric::kFanRpm), fan);
+    CHECK(f != nullptr);
+    if (f) {
+        JsonValue root;
+        std::string error;
+        CHECK(parseJson(summaryJson(*f, {colOf(metric::kFanRpm)}), root, error));
+        const JsonValue* m = metricOf(root, metric::kFanRpm);
+        CHECK(m != nullptr && m->get("p95") != nullptr && m->get("p95")->number <= 3809.5 + 1e-3);
+        CHECK(m != nullptr && m->get("p95") != nullptr && m->get("p95")->number > 3700.0);
+        CHECK(m != nullptr && m->get("p5") != nullptr && m->get("p5")->number >= 3000.0 - 1e-6);
+    }
+}
+
+void slackHistogramSpansHighValues() {
+    const LogColumn col = colOf(metric::kPcStreamSlackAvg);
+    CHECK(col.histMax >= 150.0f && col.bins == 200 && col.histMin == -50.0f);
+    std::vector<float> v;
+    for (int i = 0; i < 100; ++i) v.push_back(60.0f + 80.0f * static_cast<float>(i) / 99.0f);
+    const auto s = solo(col, v);
+    CHECK(s != nullptr);
+    if (!s) return;
+    CHECK(s->hist[0].counts().back() == 0);  // not piled in the last bin
+    JsonValue root;
+    std::string error;
+    CHECK(parseJson(summaryJson(*s, {col}), root, error));
+    const JsonValue* m = metricOf(root, metric::kPcStreamSlackAvg);
+    CHECK(m != nullptr && m->get("p95") != nullptr);
+    if (m != nullptr && m->get("p95") != nullptr) {
+        CHECK(m->get("p95")->number < 150.0);
+        CHECK(m->get("p95")->number >= 130.0 && m->get("p95")->number <= 140.0 + 1e-6);
+        CHECK(m->get("p5")->number >= 60.0 - 1e-6 && m->get("p5")->number <= 70.0);
+    }
+}
+
+// ---- T11 R3 review: running totals across no-app gaps and detours ----
+
+/** fps (Gauge) + the retransmit running total (Cumulative), the review probe's columns. */
+std::vector<LogColumn> totalColumns() {
+    return {{metric::kFrameAppFps, LogKind::Gauge, 0, 150, 150, true},
+            {metric::kPcStreamRetransmitRequests, LogKind::Cumulative, 0, 0, 0, false}};
+}
+
+void feedTotal(SessionLog& l, const SessionInfo& s, int64_t t, float count) {
+    l.observe(s, t);
+    l.add(t, {72.0f, count});
+}
+
+// M1: back from no app, the first row has fps but the counter is N/A: the counter's baseline is still reset
+void totalRebasesWhenTheFirstRowAfterTheGapHasNoCounter() {
+    SessionLog log(totalColumns(), "probe");
+    const SessionInfo a = info(1, "A", "A", 1000);
+    SessionInfo awayA = a;
+    awayA.leftUnix = 1060;
+    feedTotal(log, a, 1000, 10);
+    feedTotal(log, a, 1059, 12);
+    feedTotal(log, awayA, 1060, 50);  // ignored: no app
+    feedTotal(log, a, 1090, kNaN);
+    CHECK(log.current() != nullptr && log.current()->stats[1].rebase);  // still pending after a row without it
+    feedTotal(log, a, 1091, 50);
+    CHECK(log.current() != nullptr && !log.current()->stats[1].rebase);
+    feedTotal(log, a, 1092, 51);
+    CHECK(log.current() != nullptr && near(log.current()->stats[1].counted, 3.0));  // 2 before, 1 after (was 41)
+}
+
+// M2a: A -> no app -> B (< 60 s) -> A: A's gap isn't bridged
+void totalNotBridgedOverAGapBeforeADetour() {
+    SessionLog log(totalColumns(), "probe");
+    const SessionInfo a = info(1, "A", "A", 1000), b = info(2, "B", "B", 1090);
+    SessionInfo awayA = a;
+    awayA.leftUnix = 1060;
+    feedTotal(log, a, 1000, 10);
+    feedTotal(log, a, 1059, 12);
+    feedTotal(log, awayA, 1060, 50);
+    feedTotal(log, b, 1090, 50);
+    feedTotal(log, b, 1099, 55);
+    feedTotal(log, a, 1100, 55);
+    CHECK(log.current() != nullptr && log.current()->info.id == 1);
+    CHECK(log.current() != nullptr && near(log.current()->stats[1].counted, 7.0));  // 2 in A + 5 in B (was 45)
+}
+
+// M2b: A -> B -> B's app leaves -> A: the rise while B had no app isn't counted
+void totalNotBridgedOverAGapAfterADetour() {
+    SessionLog log(totalColumns(), "probe");
+    const SessionInfo a = info(1, "A", "A", 1000), b = info(2, "B", "B", 1090);
+    SessionInfo awayB = b;
+    awayB.leftUnix = 1100;
+    feedTotal(log, a, 1000, 10);
+    feedTotal(log, a, 1059, 12);
+    feedTotal(log, b, 1090, 12);
+    feedTotal(log, b, 1099, 15);
+    feedTotal(log, awayB, 1100, 50);
+    feedTotal(log, a, 1120, 50);
+    CHECK(log.current() != nullptr && log.current()->info.id == 1);
+    CHECK(log.current() != nullptr && near(log.current()->stats[1].counted, 5.0));  // 2 in A + 3 in B (was 40)
+}
+
+// A plain detour with no gap still bridges the counter between the two sessions
+void totalStillBridgesAPlainDetour() {
+    SessionLog log(totalColumns(), "probe");
+    const SessionInfo a = info(1, "A", "A", 1000), b = info(2, "B", "B", 1090);
+    feedTotal(log, a, 1000, 10);
+    feedTotal(log, a, 1059, 12);
+    feedTotal(log, b, 1090, 15);
+    feedTotal(log, b, 1099, 18);
+    feedTotal(log, a, 1100, 18);
+    CHECK(log.current() != nullptr && log.current()->info.id == 1);
+    CHECK(log.current() != nullptr && near(log.current()->stats[1].counted, 8.0));  // 2 + bridge 3 + 3
+    CHECK(log.current() != nullptr && log.current()->stats[1].samples == 5);
+}
+
+void columnStatsMergeBridgeAndRebase() {
+    ColumnStats a, b;
+    for (float v : {10.0f, 12.0f}) a.add(LogKind::Cumulative, v);  // counted 2, last 12
+    for (float v : {20.0f, 25.0f}) b.add(LogKind::Cumulative, v);  // counted 5, first 20
+    ColumnStats bridged = a;
+    bridged.merge(LogKind::Cumulative, b);  // default: the 12 -> 20 rise is counted
+    CHECK(near(bridged.counted, 2 + 8 + 5));
+    ColumnStats unbridged = a;
+    unbridged.merge(LogKind::Cumulative, b, false);
+    CHECK(near(unbridged.counted, 2 + 5));
+    CHECK(unbridged.samples == 4 && near(unbridged.last, 25));
+
+    // a rebase pending on this side: no bridge either, and the flag follows the later side
+    ColumnStats pending = a;
+    pending.rebase = true;
+    pending.merge(LogKind::Cumulative, b);
+    CHECK(near(pending.counted, 2 + 5));
+    CHECK(!pending.rebase);
+    ColumnStats later = b;
+    later.rebase = true;
+    ColumnStats first = a;
+    first.merge(LogKind::Cumulative, later);
+    CHECK(first.rebase);
+
+    // the next valid value is a new baseline, not a rise, and clears the flag
+    ColumnStats s;
+    for (float v : {10.0f, 12.0f}) s.add(LogKind::Cumulative, v);
+    s.rebase = true;
+    s.add(LogKind::Cumulative, 50.0f);
+    CHECK(!s.rebase);
+    CHECK(near(s.counted, 2.0));
+    s.add(LogKind::Cumulative, 51.0f);
+    CHECK(near(s.counted, 3.0));
+    // a Count column isn't affected by the bridge flag
+    ColumnStats c1, c2;
+    c1.add(LogKind::Count, 3.0f);
+    c2.add(LogKind::Count, 4.0f);
+    c1.merge(LogKind::Count, c2, false);
+    CHECK(near(c1.counted, 7.0));
+}
+
+// ---- T11 R3 re-review: a detour that never read the counter ----
+
+// M2b2: A -> no app -> B (counter N/A throughout) -> A: the rise during the gap isn't counted, either form
+void totalRebasedWhenTheDetourHadNoCounter() {
+    for (int pcForm = 0; pcForm < 2; ++pcForm) {
+        SessionLog log(totalColumns(), "probe");
+        const SessionInfo a = info(1, "A", "A", 1000), b = info(2, "B", "B", 1090);
+        SessionInfo away = a;
+        if (pcForm) away.appKey.clear();  // LINK_STATE's form: same id, empty key
+        else away.leftUnix = 1060;        // the headset's own form
+        feedTotal(log, a, 1000, 10);
+        feedTotal(log, a, 1059, 12);
+        feedTotal(log, away, 1060, 50);   // ignored: no app
+        feedTotal(log, b, 1090, kNaN);
+        feedTotal(log, b, 1099, kNaN);
+        feedTotal(log, a, 1100, 50);
+        feedTotal(log, a, 1101, 51);
+        CHECK(log.current() != nullptr && log.current()->info.id == 1);
+        CHECK(log.current() != nullptr && near(log.current()->stats[1].counted, 3.0));  // 2 before + 1 after (was 41)
+    }
+}
+
+// Nothing left and B never read the counter: the rise is bridged as before
+void totalBridgedOverADetourWithoutCounter() {
+    SessionLog log(totalColumns(), "probe");
+    const SessionInfo a = info(1, "A", "A", 1000), b = info(2, "B", "B", 1090);
+    feedTotal(log, a, 1000, 10);
+    feedTotal(log, a, 1059, 12);
+    feedTotal(log, b, 1090, kNaN);
+    feedTotal(log, b, 1099, kNaN);
+    feedTotal(log, a, 1100, 15);
+    feedTotal(log, a, 1101, 16);
+    CHECK(log.current() != nullptr && log.current()->info.id == 1);
+    CHECK(log.current() != nullptr && near(log.current()->stats[1].counted, 6.0));  // 2 + bridge 3 + 1
+}
+
+void columnStatsEmptyMerge() {
+    ColumnStats base;
+    for (float v : {10.0f, 12.0f}) base.add(LogKind::Cumulative, v);
+    const ColumnStats none;
+
+    ColumnStats noBridge = base;  // a gap before the detour: the next value is a new baseline
+    noBridge.merge(LogKind::Cumulative, none, false);
+    CHECK(noBridge.rebase);
+    CHECK(noBridge.samples == 2 && near(noBridge.counted, 2.0) && near(noBridge.last, 12.0));
+
+    ColumnStats laterFlag = base;  // the detour's own app had left
+    ColumnStats flagged;
+    flagged.rebase = true;
+    laterFlag.merge(LogKind::Cumulative, flagged, true);
+    CHECK(laterFlag.rebase);
+
+    ColumnStats plain = base;  // a plain detour with nothing read: untouched
+    plain.merge(LogKind::Cumulative, none, true);
+    CHECK(!plain.rebase);
+    CHECK(plain.samples == 2 && near(plain.counted, 2.0));
+
+    ColumnStats pending = base;  // a rebase that's already pending is kept
+    pending.rebase = true;
+    pending.merge(LogKind::Cumulative, none, true);
+    CHECK(pending.rebase);
+    pending.merge(LogKind::Cumulative, none, false);
+    CHECK(pending.rebase);
+
+    // the flag only means something for a Cumulative column
+    ColumnStats gauge;
+    gauge.add(LogKind::Gauge, 5.0f);
+    gauge.merge(LogKind::Gauge, none, false);
+    CHECK(!gauge.rebase);
+}
+
 }  // namespace
 
 int main() {
@@ -880,6 +1348,24 @@ int main() {
     recordWriterFlushesOnBoundary();
     endCardLines();
     sampleColumnsFreshness();
+    noAppEndsTheSessionWhereTheAppLeft();
+    backFromNoAppIsOneSessionWithAGap();
+    shutdownWhileParkedEndsAtTheLeave();
+    linkStateFormEmptyKeyParksAtFirstSight();
+    idZeroWithNothingOpenIsHarmless();
+    runningTotalIsRebasedAfterNoApp();
+    batteryVoltageHistogramCoversThePack();
+    retransmitRequestsIsARunningTotal();
+    gaugePercentilesStayInsideWhatWasSeen();
+    slackHistogramSpansHighValues();
+    totalRebasesWhenTheFirstRowAfterTheGapHasNoCounter();
+    totalNotBridgedOverAGapBeforeADetour();
+    totalNotBridgedOverAGapAfterADetour();
+    totalStillBridgesAPlainDetour();
+    columnStatsMergeBridgeAndRebase();
+    totalRebasedWhenTheDetourHadNoCounter();
+    totalBridgedOverADetourWithoutCounter();
+    columnStatsEmptyMerge();
     if (failures == 0) std::printf("core_session_log_test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

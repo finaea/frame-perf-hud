@@ -52,6 +52,12 @@ public:
      * @param now monotonic seconds
      */
     void refreshSceneApp(double now);
+    /**
+     * T11: ends the session once its app has been gone kSessionDetourSec. The scene app is only re-queried on
+     * events, so call this every tick.
+     * @param now monotonic seconds
+     */
+    void expireSession(double now);
 
     /** @return the process lists from the last scan (widgets 7 / 8; BLOBs on the link in ticket 06) */
     const ProcessLists& processLists() const { return processes_.lists(); }

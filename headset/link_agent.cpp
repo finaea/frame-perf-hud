@@ -73,7 +73,9 @@ fph::link::LinkState AgentLinkEnv::linkState() {
     fph::link::LinkState state;
     state.sessionId = s.id;
     state.sessionStartUnix = s.startUnix;
-    state.appKey = s.appKey;
+    // T11: LINK_STATE has no room for leftUnix (values follow it), so a session whose app is gone goes with an empty
+    // key: the PC copy parks it from then, like the headset's log
+    state.appKey = s.leftUnix != 0 ? std::string() : s.appKey;
     state.appName = s.appName;
     return state;
 }

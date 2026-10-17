@@ -77,7 +77,9 @@ void PcSessionLogs::tick(double now, int64_t unixNow, const SessionInfo& headset
     headset_.observe(headset, unixNow);
     // PC SteamVR gone (the reader marks the scene NoSteamVr for kSteamVrGoneSec straight): the stream session ends, and
     // the same game after a SteamVR restart is a new one. Shorter NoSteamVr stretches are the reader reconnecting
-    // (a Streaming pause → resume), not a quit. An empty key (the compositor) and Paused keep the session open
+    // (a Streaming pause → resume), not a quit. T11: an empty key (no scene app) parks the session like on the headset
+    // (SessionTracker: back within a minute goes on, a minute without an app ends it at the moment the app left);
+    // Paused / not read yet say nothing about the app, so they leave it as it was
     const MetricValue* scene = store.get(metric::kPcStreamSceneKey);
     const bool noSteamVr = scene != nullptr && !scene->ok && scene->reason == Reason::NoSteamVr;
     if (noSteamVr) {
@@ -91,7 +93,11 @@ void PcSessionLogs::tick(double now, int64_t unixNow, const SessionInfo& headset
         }
     } else {
         noSteamVrSince_ = -1;
-        pcScene_.update(textOf(store, metric::kPcStreamSceneKey), textOf(store, metric::kPcStreamSceneName), unixNow);
+        if (scene != nullptr && scene->ok) {
+            pcScene_.update(scene->text, textOf(store, metric::kPcStreamSceneName), unixNow);
+        } else {
+            pcScene_.expire(unixNow);
+        }
         stream_.observe(pcScene_.current(), unixNow);
     }
     // A paused source or a silent headset gives NaN (not fresh), so those seconds are gaps, not data

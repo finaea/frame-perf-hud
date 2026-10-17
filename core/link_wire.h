@@ -255,7 +255,7 @@ struct LinkState {
     uint32_t layoutVersion = 0;
     int32_t sessionId = 0;         ///< 0 = no session yet
     int64_t sessionStartUnix = 0;
-    std::string appKey;            ///< ≤ 63 bytes on the wire
+    std::string appKey;            ///< ≤ 63 bytes on the wire; T11: empty while the session's app is gone
     std::string appName;           ///< ≤ 63 bytes on the wire
 
     bool operator==(const LinkState& o) const {
