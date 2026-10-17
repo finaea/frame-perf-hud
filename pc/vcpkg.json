@@ -1,6 +1,6 @@
 {
   "name": "frame-perf-hud-pc",
-  "version-string": "0.1.0",
+  "version-string": "0.4.0",
   "description": "frame-perf-hud's Windows app: cairo + freetype for the shared widget renderer, libjpeg-turbo for camera frames (ticket 10).",
   "builtin-baseline": "e456309491fd875487bf02b8a0dca76c1b1b00cc",
   "dependencies": [

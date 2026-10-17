@@ -1,6 +1,8 @@
 {
   "visible": true,
   "update_check": true,
+  "crash_recorder": false,
+  "active_profile": "",
   "language": "en",
   "attachment": "head",
   "position": { "x": -0.15, "y": -0.12, "z": -0.5 },
@@ -9,6 +11,7 @@
   "right_wrist": { "x": 0, "y": 0.05, "z": 0.08, "pitch": -90, "yaw": 0, "roll": 0 },
   "wrist_fade": true,
   "wrist_fade_end_deg": 75,
+  "detached_curve_deg": 0,
   "clock_format": 24,
   "width_m": 0.2,
   "alpha": 0.9,
@@ -44,8 +47,9 @@
       [ { "type": "frame" }, { "type": "cpu" }, { "type": "gpu_ram" }, { "type": "general" } ],
       [ { "type": "power" }, { "type": "battery" }, { "type": "temp" } ],
       [ { "type": "network", "adapter": "dongle" }, { "type": "network", "adapter": "home" },
-        { "type": "cpu_items", "max_items": 15, "sum_same_name": false },
-        { "type": "ram_items", "max_items": 15, "sum_same_name": false } ]
+        { "type": "cpu_items", "max_items": 15, "sum_same_name": false, "hide_system": false },
+        { "type": "ram_items", "max_items": 15, "sum_same_name": false, "hide_system": false } ]
     ]
-  }
+  },
+  "link": { "port": 47630, "headset_id": "", "allowed_pcs": [] }
 }
