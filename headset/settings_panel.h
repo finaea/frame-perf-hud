@@ -6,6 +6,7 @@
 #include "layout_editor.h"  // T05
 #include "link_ui.h"        // T05: PC pairing banner (ticket 06's state)
 #include "logs_ui.h"        // T11: the Logs page
+#include "profiles_ui.h"    // R2: the Profiles page
 #include "update_check.h"  // vendor/frame-updater/cpp（CMake の include dir で見つかる）
 
 #include <cstdint>
@@ -54,6 +55,8 @@ enum class SettingsAction {
     FadeOff,      ///< 手首のとき、傾けても消さない
     FadeAngleDown,  ///< 消える角度を 5° 小さく（35° まで）
     FadeAngleUp,    ///< 消える角度を 5° 大きく（90° まで）
+    CurveDown,      ///< R2 Detached: one step flatter (config.detachedCurve, saved)
+    CurveUp,        ///< R2 Detached: one step more curved
     SizeDown,
     SizeUp,
     AlphaDown,
@@ -86,10 +89,27 @@ enum class SettingsAction {
     SaveNow,           ///< save the last 10 minutes + this session's summary (the caller does it)
     CrashRecorderOn,   ///< config.crashRecorder (saved)
     CrashRecorderOff,
+    // R2: the Profiles page. The caller does them on selectedProfileId(); Use / Reset with unsaved changes and Delete
+    // only come back on the second tap
+    PageProfiles,     ///< show the Profiles page (handled inside the panel)
+    ProfileRow0,      ///< select row 0-7 (ProfileRow0 + i; handled inside the panel)
+    ProfileRow1,
+    ProfileRow2,
+    ProfileRow3,
+    ProfileRow4,
+    ProfileRow5,
+    ProfileRow6,
+    ProfileRow7,
+    ProfileNew,       ///< save the live layout as a new profile
+    ProfileUse,       ///< load the selected profile as the live layout
+    ProfileSave,      ///< overwrite the active profile with the live layout
+    ProfileRename,    ///< SteamVR's keyboard for the selected profile's name
+    ProfileDelete,    ///< delete the selected profile
+    ProfileReset,     ///< live layout -> the built-in default (profiles untouched)
 };
 
 /** T05: which page the dashboard tab shows. */
-enum class SettingsPage { Layout, Placement, Logs };  // T11: Logs
+enum class SettingsPage { Layout, Placement, Logs, Profiles };  // T11: Logs, R2: Profiles
 
 /**
  * 操作を設定に反映する（Quit と None は何もしない）。位置と向きのボタンは、今の固定先（頭・左手・右手）の値を動かす。
@@ -123,7 +143,8 @@ public:
      * @param update 新しい版の確認・インストールの今の状態
      */
     void render(const Config& config, const AutostartStatus& autostart, const frame_updater::UpdateStatus& update,
-                const LinkUiState& link = LinkUiState(), const LogsUiState& logs = LogsUiState());
+                const LinkUiState& link = LinkUiState(), const LogsUiState& logs = LogsUiState(),
+                const ProfilesUiState& profiles = ProfilesUiState());
 
     /**
      * T05: hands the editor the current layout. Call before each batch of pointer events, so a press works on the
@@ -163,6 +184,26 @@ public:
 
     /** T05: @return the PC the pairing banner asks about (its id), "" when no banner is shown */
     const std::string& bannerPcId() const { return bannerPcId_; }
+
+    /** R2: @return the profile selected on the Profiles page ("" = none) */
+    const std::string& selectedProfileId() const { return selectedProfile_; }
+    /** R2: selects a profile (tests, --dump-settings-png) */
+    void selectProfile(const std::string& id) { selectedProfile_ = id; }
+
+    /**
+     * R2: whether the live layout has unsaved changes right now. Call before each pointerDown: Use / Reset ask for a
+     * second tap on this, not on the state the page was last drawn with (a PC's edit may have come in since).
+     */
+    void setProfilesUnsaved(bool unsaved) { lastProfiles_.unsaved = unsaved; }
+
+    /** R2 (tests): the centre of a button as last laid out. @return false if it isn't on the tab */
+    bool buttonCenter(SettingsAction action, double& x, double& y) const {
+        const Button* b = findButton(action);
+        if (b == nullptr) return false;
+        x = b->x + b->w / 2;
+        y = b->y + b->h / 2;
+        return true;
+    }
 
     /** T05: @return the editor (tests) */
     const LayoutEditor& editor() const { return editor_; }
@@ -244,9 +285,9 @@ private:
     std::vector<uint8_t> rgba_;
     std::vector<Button> buttons_;
     /** T05: which set of card buttons is laid out (was upstream's wristLayout_ bool). */
-    enum class ButtonMode { Layout, Head, Wrist, Detached, Logs };  // T11: Logs
+    enum class ButtonMode { Layout, Head, Wrist, Detached, Logs, Profiles };  // T11: Logs, R2: Profiles
     ButtonMode mode_ = ButtonMode::Head;  ///< 今のボタンの配置（固定先・ページが変わったら render() で置き直す）
-    SettingsPage page_ = SettingsPage::Layout;  ///< T05: the editor is the tab's first page
+    SettingsPage page_ = SettingsPage::Placement;  ///< R2: the tab opens on Placement, the first page
     LayoutEditor editor_;                       ///< T05
     std::string bannerPcId_;                    ///< T05: the PC the banner shows ("" = no banner)
     bool forgetEnabled_ = false;                ///< T05: "Forget PCs" is pressable (some PC is allowed)
@@ -256,6 +297,13 @@ private:
     bool quitArmed_ = false;
     double quitArmedUntil_ = 0.0;
     bool updateConfirmArmed_ = false;  ///< 「更新する」を 1 回押して、確認の表示を出している間
+    // R2: the Profiles page
+    std::string selectedProfile_;                    ///< "" = none
+    std::vector<std::string> profileRowIds_;         ///< the ids of the rows as last drawn
+    ProfilesUiState lastProfiles_;                   ///< as last drawn (the two-tap rule needs `unsaved`)
+    SettingsAction profileArmed_ = SettingsAction::None;  ///< Use / Reset / Delete waiting for the second tap
+    double profileArmedUntil_ = 0.0;
+    std::vector<SettingsAction> profileDisabled_;    ///< Profiles page buttons drawn disabled (not hittable)
     double angleStepDeg_ = 1.0;        ///< 向きのボタンの刻み（度）。「1° ずつ / 5° ずつ」で切り替える（起動中だけ覚える）
 
     /**
@@ -346,6 +394,12 @@ private:
 
     /** T11: the Logs page's three cards (Save and Record, Crash recorder, Last session). */
     void drawLogsPage(const Pen& pen, const UiText& text, const Config& config, const LogsUiState& logs) const;
+
+    /** R2: the Profiles page: the list (left) and the selected profile's actions (right). Places its buttons. */
+    void drawProfilesPage(const Pen& pen, const UiText& text, const ProfilesUiState& profiles);
+    /** R2: a Profiles page button; a disabled one is drawn faded and isn't hittable */
+    void drawProfileButton(const Pen& pen, const UiText& text, SettingsAction action, double x, double y, double w,
+                           bool enabled, bool primary);
 
     /**
      * 左のカード「パネル」（表示・大きさ・透明度・時計・既定に戻す）を描く。

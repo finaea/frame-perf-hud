@@ -57,13 +57,15 @@ public:
     const ProcessLists& processLists() const { return processes_.lists(); }
     /** Sets list sizes and "sum same name" (ticket 04 wires the widget settings); used from the next scan. */
     void setProcessListOptions(const ProcessListOptions& options) { processOptions_ = options; }
+    /** R2: the rules Hide system uses (not owned; nullptr = nothing hidden) */
+    void setHideRules(HideRules* rules) { processes_.setHideRules(rules); }
 
     /** T04: the process lists as the widgets draw them (exe basename when readable, else comm) */
     fph::ProcessListsView processListsView() const;
 
     /**
      * T04: scan options for a layout: the largest max_items of the list widgets, and each list's "sum same
-     * name" (on if any instance of that list asks for it).
+     * name" (on if any instance of that list asks for it). R2: "hide system" works the same way.
      */
     static ProcessListOptions processOptionsFor(const fph::Layout& layout);
 

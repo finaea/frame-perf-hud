@@ -14,6 +14,20 @@ constexpr double kDetachedNudgeM = 0.02;
 /** Step of the Near / Far buttons in Detached mode (m). */
 constexpr double kDetachedDepthStepM = 0.05;
 
+/** R2: Config::detachedCurve's steps (flat, slight, medium, strong). */
+constexpr int kDetachedCurveSteps = 4;
+
+/**
+ * R2: the cylinder a Detached HUD is bent to, by its radius rather than its curvature, so a wider layout bends the
+ * same per metre. Medium is kDetachedFrontDistanceM: a HUD brought in front of you curves around your head.
+ * @param step Config::detachedCurve (clamped to 0..3)
+ * @return the radius (m); 0 = flat
+ */
+inline double detachedCurveRadiusM(int step) {
+    constexpr double kRadii[kDetachedCurveSteps] = {0.0, 2.0, kDetachedFrontDistanceM, 0.6};
+    return kRadii[step < 0 ? 0 : (step >= kDetachedCurveSteps ? kDetachedCurveSteps - 1 : step)];
+}
+
 /** @return the pose as an OpenVR matrix */
 vr::HmdMatrix34_t toHmdMatrix(const DetachedPose& pose);
 

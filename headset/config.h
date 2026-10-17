@@ -89,6 +89,7 @@ struct Config {
     WristPose leftWrist;            ///< 左手に固定するときの位置と向き
     WristPose rightWrist;           ///< 右手に固定するときの位置と向き
     DetachedPose detachedPose;      ///< T05: where the HUD sits in the room ("detached_pose")
+    int detachedCurve = 0;          ///< R2: Detached only, 0 = flat .. 3 = strong ("detached_curve"; detachedCurveRadiusM)
     bool wristFade = true;          ///< 手首のとき、パネルの面が目から外れるほど薄くして消す
     double wristFadeEndDeg = 75.0;  ///< 消えきる角度（度、35〜90）。その 30° 手前から薄くなり始める
     int clockFormat = 24;           ///< 性能パネルの時計（0 = 出さない、12 = 12 時間制、24 = 24 時間制。本体の時刻）
@@ -103,6 +104,7 @@ struct Config {
     bool layoutInFile = false;  ///< T04: the file had a usable "layout" (false = first run, or it was unreadable)
     LinkConfig link;            ///< T06: the PC link ("link" key)
     bool crashRecorder = false;  ///< T11: the 1 Hz crash ring ("crash_recorder"); off by default
+    std::string activeProfile;   ///< R2: the profile last used / saved ("active_profile", e.g. "profile-2"); "" = none
 };
 
 /**

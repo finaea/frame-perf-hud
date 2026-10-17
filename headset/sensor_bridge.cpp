@@ -464,9 +464,11 @@ ProcessListOptions SensorBridge::processOptionsFor(const fph::Layout& layout) {
             if (w.type == fph::WidgetType::CpuItems) {
                 options.cpuMax = std::max<size_t>(options.cpuMax, w.maxItems);
                 options.sumSameName = options.sumSameName || w.sumSameName;
+                options.cpuHideSystem = options.cpuHideSystem || w.hideSystem;
             } else if (w.type == fph::WidgetType::RamItems) {
                 options.ramMax = std::max<size_t>(options.ramMax, w.maxItems);
                 ramSum = ramSum || w.sumSameName;
+                options.ramHideSystem = options.ramHideSystem || w.hideSystem;
             }
         }
     }

@@ -27,10 +27,10 @@ constexpr double kBoxMaxH = 260;
 constexpr double kAutoScrollEdge = 40;  // dragging this close to the lanes' top / bottom scrolls them
 constexpr double kAutoScrollStep = 18;
 constexpr double kScrollPxPerUnit = 120;  // VREvent_ScrollSmooth ydelta → px (verify on device)
-constexpr int kChipColumns = 3;
+constexpr int kChipColumns = 4;  // R2: 4 × 4 (was 3 × 5) to fit the lists' third settings row (Hide system)
 constexpr double kChipH = 40;
 constexpr double kChipGap = 8;
-constexpr int kChipRows = 5;
+constexpr int kChipRows = 4;
 constexpr double kRowH = 44;          // settings rows
 constexpr double kRowGap = 8;
 constexpr double kFpsStepperW = 200;  // T10: the camera widgets' FPS − n + (no room for a third settings row)
@@ -71,7 +71,7 @@ std::string cardDetail(const fph::WidgetInstance& w, const UiText& text) {
     if (!isList(w.type)) return "";
     char buffer[64];
     std::snprintf(buffer, sizeof(buffer), text.rowsFormat, w.maxItems);
-    return std::string(buffer) + (w.sumSameName ? text.summedSuffix : "");
+    return std::string(buffer) + (w.sumSameName ? text.summedSuffix : "") + (w.hideSystem ? text.hiddenSuffix : "");
 }
 
 }  // namespace
@@ -155,6 +155,12 @@ void LayoutEditor::relayout() {
         settings_.push_back({Setting::RowsUp, {controlX + controlW - step, rowA, step, kRowH}});
         settings_.push_back({Setting::SameNameOn, {controlX, rowB, controlW / 2, kRowH}});
         settings_.push_back({Setting::SameNameOff, {controlX + controlW / 2, rowB, controlW / 2, kRowH}});
+        const double rowC = rowB + kRowH + kRowGap;  // R2
+        settings_.push_back({Setting::HideSystemOn, {controlX, rowC, controlW / 2, kRowH}});
+        settings_.push_back({Setting::HideSystemOff, {controlX + controlW / 2, rowC, controlW / 2, kRowH}});
+    } else if (fph::hasCompactView(w->type)) {  // R2
+        settings_.push_back({Setting::CompactOn, {controlX, rowA, controlW / 2, kRowH}});
+        settings_.push_back({Setting::CompactOff, {controlX + controlW / 2, rowA, controlW / 2, kRowH}});
     } else if (w->type == fph::WidgetType::Network) {
         settings_.push_back({Setting::AdapterDongle, {controlX, rowA, controlW / 2, kRowH}});
         settings_.push_back({Setting::AdapterHome, {controlX + controlW / 2, rowA, controlW / 2, kRowH}});
@@ -300,6 +306,10 @@ void LayoutEditor::applySetting(Setting setting) {
         case Setting::FullSizeToggle: e.cameraFullSize = !e.cameraFullSize; break;
         case Setting::FpsDown: e.cameraFps = fph::cameraFpsStep(e.cameraFps, -1, e.type); break;
         case Setting::FpsUp: e.cameraFps = fph::cameraFpsStep(e.cameraFps, +1, e.type); break;
+        case Setting::CompactOn: e.compact = true; break;  // R2
+        case Setting::CompactOff: e.compact = false; break;
+        case Setting::HideSystemOn: e.hideSystem = true; break;
+        case Setting::HideSystemOff: e.hideSystem = false; break;
         case Setting::Remove: break;
     }
     if (e != *w) queueCommit(edited, selected_);
@@ -658,6 +668,14 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
         pen.text(sx, centerBaseline(rowB, kRowH, labelSize), text.rowSameName, labelSize, kTextMuted);
         button(Setting::SameNameOn, text.on, w->sumSameName);
         button(Setting::SameNameOff, text.off, !w->sumSameName);
+        const double rowC = rowB + kRowH + kRowGap;  // R2
+        pen.text(sx, centerBaseline(rowC, kRowH, 20), text.rowHideSystem, 20, kTextMuted);
+        button(Setting::HideSystemOn, text.on, w->hideSystem);
+        button(Setting::HideSystemOff, text.off, !w->hideSystem);
+    } else if (fph::hasCompactView(w->type)) {  // R2
+        pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowCompact, 20, kTextMuted);
+        button(Setting::CompactOn, text.on, w->compact);
+        button(Setting::CompactOff, text.off, !w->compact);
     } else if (w->type == fph::WidgetType::Network) {
         pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowAdapter, 20, kTextMuted);
         button(Setting::AdapterDongle, text.adapterDongle, w->adapter == fph::NetAdapter::Dongle);

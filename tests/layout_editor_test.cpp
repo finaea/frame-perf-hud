@@ -751,11 +751,15 @@ void testSettingsButtons() {
     {
         Rig rig(make({{W::Frame, W::CpuItems, W::Network}}));
         rig.tap(rig.centre({0, 0}));
-        CHECK(rig.hasSetting(Setting::Remove) && rig.ed.settingButtons().size() == 1);
+        CHECK(rig.hasSetting(Setting::Remove) && rig.hasSetting(Setting::CompactOn) &&
+              rig.hasSetting(Setting::CompactOff) && rig.ed.settingButtons().size() == 3);  // R2
+        CHECK(!rig.hasSetting(Setting::HideSystemOn));
         rig.tap(rig.centre({0, 1}));
         CHECK(rig.hasSetting(Setting::RowsDown) && rig.hasSetting(Setting::RowsUp) && rig.hasSetting(Setting::SameNameOn) &&
               rig.hasSetting(Setting::SameNameOff) && rig.hasSetting(Setting::Remove));
         CHECK(!rig.hasSetting(Setting::AdapterHome));
+        CHECK(rig.hasSetting(Setting::HideSystemOn) && rig.hasSetting(Setting::HideSystemOff));  // R2
+        CHECK(!rig.hasSetting(Setting::CompactOn));
         rig.tap(rig.centre({0, 2}));
         CHECK(rig.hasSetting(Setting::AdapterDongle) && rig.hasSetting(Setting::AdapterHome) && rig.hasSetting(Setting::Remove));
         CHECK(!rig.hasSetting(Setting::RowsUp));
@@ -826,6 +830,36 @@ void testSettingsButtons() {
         rig.set(l);
         CHECK(!pressSetting(rig, Setting::AdapterHome, {0, 1}, out));
         CHECK(pressSetting(rig, Setting::AdapterDongle, {0, 1}, out) && out.adapter == NetAdapter::Dongle);
+    }
+
+    // R2: Compact buttons exist for Frame / Power / Battery / Temp only; Hide system for the lists only
+    for (const W type : {W::Frame, W::Power, W::Battery, W::Temp, W::Streaming, W::Network, W::Cpu, W::CpuItems, W::RamItems}) {
+        Rig rig(make({{type}}));
+        rig.tap(rig.centre({0, 0}));
+        const bool compact = type == W::Frame || type == W::Power || type == W::Battery || type == W::Temp;
+        const bool hide = type == W::CpuItems || type == W::RamItems;
+        CHECK(rig.hasSetting(Setting::CompactOn) == compact && rig.hasSetting(Setting::CompactOff) == compact);
+        CHECK(rig.hasSetting(Setting::HideSystemOn) == hide && rig.hasSetting(Setting::HideSystemOff) == hide);
+        for (const auto& b : rig.ed.settingButtons()) {
+            CHECK(b.second.x >= kPaletteCard.x && b.second.x + b.second.w <= kPaletteCard.x + kPaletteCard.w);
+            CHECK(b.second.y + b.second.h <= kPaletteCard.y + kPaletteCard.h);
+            for (const auto& chip : rig.ed.chips()) CHECK(b.second.y >= chip.second.y + chip.second.h);
+        }
+        // pressing flips only that field; a no-op press queues nothing
+        WidgetInstance out;
+        WidgetInstance want = rig.layout.columns[0].widgets[0];
+        if (compact) {
+            CHECK(!pressSetting(rig, Setting::CompactOff, {0, 0}, out));
+            CHECK(pressSetting(rig, Setting::CompactOn, {0, 0}, out));
+            want.compact = true;
+            CHECK(out == want);
+        }
+        if (hide) {
+            CHECK(!pressSetting(rig, Setting::HideSystemOff, {0, 0}, out));
+            CHECK(pressSetting(rig, Setting::HideSystemOn, {0, 0}, out));
+            want.hideSystem = true;
+            CHECK(out == want);
+        }
     }
 
     // A settings edit keeps the selection (once applied) and bases on the press-time version
@@ -915,7 +949,8 @@ void testPanelLeaveCancelsDrag() {
     FontSet fonts;
     fonts.load(paths::resolveFontPath(cfg.fontPath, false), paths::resolveFontPath(cfg.boldFontPath, true));
     SettingsPanel panel(fonts);
-    CHECK(panel.page() == SettingsPage::Layout);  // the editor is the first page
+    CHECK(panel.page() == SettingsPage::Placement);  // R2: Placement is the first page now
+    panel.showPage(SettingsPage::Layout);           // this test drives the editor
     const AutostartStatus service {AutostartStatus::State::Enabled, false, false};
     cfg.layout = baseLayout(9);  // render() takes the layout from the config, like the agent's loop
     panel.syncLayout(cfg.layout);
@@ -964,6 +999,242 @@ void testPanelLeaveCancelsDrag() {
     panel.showPage(SettingsPage::Placement);
     CHECK(panel.page() == SettingsPage::Placement);
     CHECK(!panel.editorBusy());
+}
+
+// ---- R2: the Profiles page (two-tap Use / Delete, selection, disabled buttons) ----
+
+// Lane B review: the two-tap rule uses "unsaved" as of the press (a PC's edit after the last draw), and any other
+// press, even one that returns early (Quit, a page tab), cancels a pending second tap
+void testProfilesReviewFixes() {
+    Config cfg;
+    cfg.language = Language::En;
+    FontSet fonts;
+    fonts.load(paths::resolveFontPath(cfg.fontPath, false), paths::resolveFontPath(cfg.boldFontPath, true));
+    SettingsPanel panel(fonts);
+    const AutostartStatus service {AutostartStatus::State::Enabled, false, false};
+    panel.syncLayout(cfg.layout);
+    ProfilesUiState ui;
+    ui.items = {{"profile-1", "Gaming"}, {"profile-2", "Desk"}};
+    ui.activeId = "profile-1";
+    ui.unsaved = false;  // drawn clean...
+    panel.showPage(SettingsPage::Profiles);
+    panel.render(cfg, service, {}, LinkUiState(), LogsUiState(), ui);
+    double ux = 0, uy = 0, rx = 0, ry = 0, qx = 0, qy = 0;
+    CHECK(panel.buttonCenter(SettingsAction::ProfileUse, ux, uy));
+    CHECK(panel.buttonCenter(SettingsAction::ProfileReset, rx, ry));
+    CHECK(panel.buttonCenter(SettingsAction::Quit, qx, qy));
+
+    // ...then a PC's edit lands before the next draw: the agent passes the current state before the press
+    panel.setProfilesUnsaved(true);
+    CHECK(panel.pointerDown(ux, uy, 10) == SettingsAction::None);  // asks first: the PC's edit isn't silently lost
+    panel.pointerUp(ux, uy);
+    CHECK(panel.pointerDown(ux, uy, 11) == SettingsAction::ProfileUse);
+    panel.pointerUp(ux, uy);
+    CHECK(panel.pointerDown(rx, ry, 12) == SettingsAction::None);  // Reset the same
+    panel.pointerUp(rx, ry);
+    CHECK(panel.pointerDown(rx, ry, 13) == SettingsAction::ProfileReset);
+    panel.pointerUp(rx, ry);
+
+    // Use → Quit → Use: Quit (an early return) cancels the armed Use, so the last tap only arms again
+    CHECK(panel.pointerDown(ux, uy, 20) == SettingsAction::None);
+    panel.pointerUp(ux, uy);
+    CHECK(panel.pointerDown(qx, qy, 20.5) == SettingsAction::None);  // Quit's first tap
+    panel.pointerUp(qx, qy);
+    CHECK(panel.pointerDown(ux, uy, 21) == SettingsAction::None);
+    panel.pointerUp(ux, uy);
+    CHECK(panel.pointerDown(ux, uy, 21.5) == SettingsAction::ProfileUse);
+    panel.pointerUp(ux, uy);
+
+    // and back to clean: Use goes on the first tap
+    panel.setProfilesUnsaved(false);
+    CHECK(panel.pointerDown(ux, uy, 30) == SettingsAction::ProfileUse);
+    panel.pointerUp(ux, uy);
+}
+
+void testProfilesPanel() {
+    Config cfg;
+    cfg.language = Language::En;
+    FontSet fonts;
+    fonts.load(paths::resolveFontPath(cfg.fontPath, false), paths::resolveFontPath(cfg.boldFontPath, true));
+    SettingsPanel panel(fonts);
+    const AutostartStatus service {AutostartStatus::State::Enabled, false, false};
+    CHECK(panel.page() == SettingsPage::Placement);  // the tab opens on the first page
+    panel.syncLayout(cfg.layout);
+
+    ProfilesUiState ui;
+    ui.items = {{"profile-1", "Gaming"}, {"profile-2", "Desk"}};
+    ui.activeId = "profile-1";
+    ui.unsaved = true;
+    panel.showPage(SettingsPage::Profiles);
+    panel.render(cfg, service, {}, LinkUiState(), LogsUiState(), ui);
+    CHECK(panel.selectedProfileId() == "profile-1");  // the active one is selected first
+
+    const auto centre = [&](SettingsAction a, double& x, double& y) {
+        const bool ok = panel.buttonCenter(a, x, y);
+        CHECK(ok);
+        return ok;
+    };
+    double x = 0, y = 0;
+
+    // tab bar order: Placement | Layout | Profiles | Logs
+    double px, py, lx, ly, fx, fy, gx, gy;
+    CHECK(centre(SettingsAction::PagePlacement, px, py) && centre(SettingsAction::PageLayout, lx, ly) &&
+          centre(SettingsAction::PageProfiles, fx, fy) && centre(SettingsAction::PageLogs, gx, gy));
+    CHECK(px < lx && lx < fx && fx < gx);
+    CHECK(py == ly && ly == fy && fy == gy);
+
+    // Use with unsaved changes: two taps within 3 s
+    CHECK(centre(SettingsAction::ProfileUse, x, y));
+    CHECK(panel.pointerDown(x, y, 100) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    CHECK(panel.pointerDown(x, y, 101.5) == SettingsAction::ProfileUse);
+    panel.pointerUp(x, y);
+    // ...and the arm is spent: the next tap arms again
+    CHECK(panel.pointerDown(x, y, 102) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    // an arm expires: tick(now + 4) drops it
+    CHECK(panel.tick(106));
+    CHECK(panel.pointerDown(x, y, 106.5) == SettingsAction::None);  // re-arms, not a confirm
+    panel.pointerUp(x, y);
+    CHECK(panel.pointerDown(x, y, 107) == SettingsAction::ProfileUse);
+    panel.pointerUp(x, y);
+    // even without a tick, a second tap after the 3 s is a fresh first tap
+    CHECK(panel.pointerDown(x, y, 200) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    CHECK(panel.pointerDown(x, y, 204) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    // arming Use then tapping another button cancels it
+    double rx, ry;
+    CHECK(centre(SettingsAction::ProfileRename, rx, ry));
+    CHECK(panel.pointerDown(rx, ry, 205) == SettingsAction::ProfileRename);
+    panel.pointerUp(rx, ry);
+    CHECK(panel.pointerDown(x, y, 205.5) == SettingsAction::None);  // Use was disarmed by Rename
+
+    // Delete always needs two taps, unsaved or not
+    double dx, dy;
+    CHECK(centre(SettingsAction::ProfileDelete, dx, dy));
+    CHECK(panel.pointerDown(dx, dy, 300) == SettingsAction::None);
+    panel.pointerUp(dx, dy);
+    CHECK(panel.pointerDown(dx, dy, 301) == SettingsAction::ProfileDelete);
+    panel.pointerUp(dx, dy);
+    CHECK(panel.pointerDown(dx, dy, 302) == SettingsAction::None);  // spent
+    panel.pointerUp(dx, dy);
+    CHECK(panel.tick(310));
+    CHECK(panel.pointerDown(dx, dy, 311) == SettingsAction::None);
+    panel.pointerUp(dx, dy);
+    // Use then Delete: the armed action is Delete's, so Use is not confirmed by Delete's second tap
+    CHECK(panel.pointerDown(x, y, 320) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    CHECK(panel.pointerDown(dx, dy, 320.5) == SettingsAction::None);
+    panel.pointerUp(dx, dy);
+
+    // Reset with unsaved changes is two taps too
+    double zx, zy;
+    CHECK(centre(SettingsAction::ProfileReset, zx, zy));
+    CHECK(panel.pointerDown(zx, zy, 400) == SettingsAction::None);
+    panel.pointerUp(zx, zy);
+    CHECK(panel.pointerDown(zx, zy, 401) == SettingsAction::ProfileReset);
+    panel.pointerUp(zx, zy);
+
+    // unsaved = false: Use and Reset go through on the first tap; Delete still needs two
+    ui.unsaved = false;
+    ui.revision++;
+    panel.render(cfg, service, {}, LinkUiState(), LogsUiState(), ui);
+    CHECK(centre(SettingsAction::ProfileUse, x, y));
+    CHECK(panel.pointerDown(x, y, 500) == SettingsAction::ProfileUse);
+    panel.pointerUp(x, y);
+    CHECK(centre(SettingsAction::ProfileReset, zx, zy));
+    CHECK(panel.pointerDown(zx, zy, 501) == SettingsAction::ProfileReset);
+    panel.pointerUp(zx, zy);
+    CHECK(centre(SettingsAction::ProfileDelete, dx, dy));
+    CHECK(panel.pointerDown(dx, dy, 502) == SettingsAction::None);
+    panel.pointerUp(dx, dy);
+
+    // Tapping row 2 selects profile-2; tapping a row also cancels an armed Delete
+    CHECK(centre(SettingsAction::ProfileRow1, x, y));
+    CHECK(panel.pointerDown(x, y, 503) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    CHECK(panel.selectedProfileId() == "profile-2");
+    CHECK(panel.pointerDown(dx, dy, 504) == SettingsAction::None);  // Delete armed again (cancelled by the row tap)
+    panel.pointerUp(dx, dy);
+    CHECK(centre(SettingsAction::ProfileRow0, x, y));
+    CHECK(panel.pointerDown(x, y, 504.5) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    CHECK(panel.selectedProfileId() == "profile-1");
+    CHECK(panel.pointerDown(dx, dy, 505) == SettingsAction::None);  // not confirmed: the row tap disarmed it
+    panel.pointerUp(dx, dy);
+    // selectProfile() is what the caller / tests use
+    panel.selectProfile("profile-2");
+    CHECK(panel.selectedProfileId() == "profile-2");
+    // a row that doesn't exist (only 2 items) has no button to hit
+    double ox, oy;
+    CHECK(!panel.buttonCenter(SettingsAction::ProfileRow5, ox, oy) ||
+          panel.pointerDown(ox, oy, 506) == SettingsAction::None);
+    CHECK(panel.selectedProfileId() == "profile-2");
+
+    // New: not hittable with 8 items
+    CHECK(centre(SettingsAction::ProfileNew, x, y));
+    CHECK(panel.pointerDown(x, y, 600) == SettingsAction::ProfileNew);  // 2 of 8: fine
+    panel.pointerUp(x, y);
+    ProfilesUiState full = ui;
+    full.items.clear();
+    for (int i = 1; i <= 8; ++i) full.items.push_back({"profile-" + std::to_string(i), "P" + std::to_string(i)});
+    full.revision++;
+    panel.render(cfg, service, {}, LinkUiState(), LogsUiState(), full);
+    CHECK(centre(SettingsAction::ProfileNew, x, y));
+    CHECK(panel.pointerDown(x, y, 601) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    // the 8th row is selectable
+    CHECK(centre(SettingsAction::ProfileRow7, x, y));
+    CHECK(panel.pointerDown(x, y, 602) == SettingsAction::None);
+    CHECK(panel.selectedProfileId() == "profile-8");
+    panel.pointerUp(x, y);
+
+    // Save: not hittable with no active profile, hittable with one
+    ProfilesUiState none = ui;
+    none.activeId = "";
+    none.revision++;
+    panel.render(cfg, service, {}, LinkUiState(), LogsUiState(), none);
+    CHECK(centre(SettingsAction::ProfileSave, x, y));
+    CHECK(panel.pointerDown(x, y, 700) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    // an active id that isn't in the list counts as none
+    ProfilesUiState gone = ui;
+    gone.activeId = "profile-7";
+    gone.revision++;
+    panel.render(cfg, service, {}, LinkUiState(), LogsUiState(), gone);
+    CHECK(centre(SettingsAction::ProfileSave, x, y));
+    CHECK(panel.pointerDown(x, y, 701) == SettingsAction::None);
+    panel.pointerUp(x, y);
+    panel.render(cfg, service, {}, LinkUiState(), LogsUiState(), ui);  // active = profile-1
+    CHECK(centre(SettingsAction::ProfileSave, x, y));
+    CHECK(panel.pointerDown(x, y, 702) == SettingsAction::ProfileSave);
+    panel.pointerUp(x, y);
+
+    // nothing selected (no profiles): Use / Rename / Delete are not hittable
+    ProfilesUiState empty;
+    empty.revision = 99;
+    SettingsPanel blank(fonts);
+    blank.showPage(SettingsPage::Profiles);
+    blank.syncLayout(cfg.layout);
+    blank.render(cfg, service, {}, LinkUiState(), LogsUiState(), empty);
+    CHECK(blank.selectedProfileId().empty());
+    for (const SettingsAction a : {SettingsAction::ProfileUse, SettingsAction::ProfileRename, SettingsAction::ProfileDelete,
+                                   SettingsAction::ProfileSave}) {
+        if (blank.buttonCenter(a, x, y)) CHECK(blank.pointerDown(x, y, 800) == SettingsAction::None);
+    }
+    if (blank.buttonCenter(SettingsAction::ProfileNew, x, y)) CHECK(blank.pointerDown(x, y, 801) == SettingsAction::ProfileNew);
+
+    // Page buttons switch pages and drop an armed second tap
+    CHECK(centre(SettingsAction::PagePlacement, px, py));
+    CHECK(panel.pointerDown(px, py, 900) == SettingsAction::None);
+    CHECK(panel.page() == SettingsPage::Placement);
+    panel.pointerUp(px, py);
+    panel.render(cfg, service, {}, LinkUiState(), LogsUiState(), ui);
+    CHECK(centre(SettingsAction::PageProfiles, fx, fy));
+    CHECK(panel.pointerDown(fx, fy, 901) == SettingsAction::None);
+    CHECK(panel.page() == SettingsPage::Profiles);
+    panel.pointerUp(fx, fy);
 }
 
 // ---- Detached mode through the settings buttons ----
@@ -1027,6 +1298,29 @@ void testApplyDetachedActions() {
     CHECK(c.detachedPose == kept && c.posX != posX);
 }
 
+// R2: the curve buttons step Config::detachedCurve 0..3, and report a change only when it moved
+void testApplyCurveActions() {
+    Config c;
+    CHECK(c.detachedCurve == 0);
+    CHECK(!applySettingsAction(SettingsAction::CurveDown, c));  // already flat
+    CHECK(c.detachedCurve == 0);
+    for (int want = 1; want <= 3; ++want) {
+        CHECK(applySettingsAction(SettingsAction::CurveUp, c));
+        CHECK(c.detachedCurve == want);
+    }
+    CHECK(!applySettingsAction(SettingsAction::CurveUp, c));  // clamped at the top
+    CHECK(c.detachedCurve == 3);
+    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurve == 2);
+    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurve == 1);
+    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurve == 0);
+    CHECK(!applySettingsAction(SettingsAction::CurveDown, c));
+    // Out-of-range values (hand-set) come back into range
+    c.detachedCurve = 9;
+    CHECK(applySettingsAction(SettingsAction::CurveUp, c) && c.detachedCurve == 3);
+    c.detachedCurve = -4;
+    CHECK(applySettingsAction(SettingsAction::CurveDown, c) && c.detachedCurve == 0);
+}
+
 // Review fix: sync() says whether the tab must redraw, so a PC's edit (no pointer event) refreshes the open tab
 void testSyncReportsChange() {
     Rig rig(baseLayout(1));
@@ -1059,6 +1353,7 @@ int main() {
     testSyncReportsChange();
     testShrinkClampsScroll();
     testApplyDetachedActions();
+    testApplyCurveActions();
     testGeometry();
     testDragWithinColumn();
     testDragBetweenColumns();
@@ -1078,6 +1373,8 @@ int main() {
     testSettingsButtons();
     testRenderMatchesHitBoxes();
     testPanelLeaveCancelsDrag();
+    testProfilesPanel();
+    testProfilesReviewFixes();  // lane B review
     if (failures == 0) std::printf("layout-editor-test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

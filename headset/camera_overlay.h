@@ -7,6 +7,7 @@
 
 #include "camera_frame.h"
 #include "camera_service.h"
+#include "camera_tile_place.h"  // PanelPlacement, placeTile (R2: header-only)
 #include "grid_renderer.h"
 #include "openvr.h"
 #include "vk_texture.h"
@@ -15,34 +16,6 @@
 #include <memory>
 #include <utility>
 #include <vector>
-
-/** How the HUD panel is placed right now (VrOverlay::panelPlacement). */
-struct PanelPlacement {
-    bool valid = false;          ///< a transform has been applied
-    bool shown = false;          ///< the panel overlay is shown
-    float alpha = 1.0f;          ///< its applied alpha
-    bool absolute = false;       ///< Detached: standing-space transform; else relative to `device`
-    uint32_t device = 0;
-    vr::HmdMatrix34_t transform {};
-    float widthM = 0.2f;         ///< the whole panel overlay's width (m)
-    int textureWidth = 1;        ///< panel texture px
-    int visibleHeight = 1;       ///< panel texture rows shown
-    uint64_t revision = 0;       ///< bumps whenever anything above changes
-    uint64_t poseRevision = 0;   ///< bumps when the transform, size or device changes (not alpha / shown)
-};
-
-/** The pure maths: where a tile's overlay goes relative to the panel. */
-struct TilePlacement {
-    vr::HmdMatrix34_t offset {};  ///< panel-local transform of the tile overlay's centre
-    float widthM = 0.0f;
-};
-
-/**
- * @param rect the tile's picture rect in unscaled panel px (slot + fitFrame)
- * @param geometry the grid (unscaled width/height, scale)
- * @param panel the panel's placement (width and visible height)
- */
-TilePlacement placeTile(const fph::cam::Rect& rect, const fph::GridGeometry& geometry, const PanelPlacement& panel);
 
 class CameraOverlays {
 public:
@@ -89,6 +62,7 @@ private:
         bool hasFrame = false;
         bool visible = false;
         uint64_t placedRevision = 0;
+        float curvature = 0.0f;  ///< R2: what SetOverlayCurvature last took on `handle` (a new overlay is flat)
     };
 
     VulkanContext& vulkan_;

@@ -43,6 +43,11 @@ WidgetInstance instance(WidgetType type, NetAdapter adapter = NetAdapter::Dongle
 
 }  // namespace
 
+bool hasCompactView(WidgetType type) {
+    return type == WidgetType::Frame || type == WidgetType::Power || type == WidgetType::Battery ||
+           type == WidgetType::Temp;
+}
+
 uint8_t cameraFpsMax(WidgetType type) {
     return type == WidgetType::HeadsetCamera ? 15 : 30;
 }
@@ -134,6 +139,9 @@ std::string layoutToJson(const Layout& layout, int indent) {
             if (w.type == WidgetType::HeadsetCamera || w.type == WidgetType::EyeCamera) {  // T10
                 out += "," + sp + "\"fps\":" + sp + std::to_string(w.cameraFps);
             }
+            // R2: only when on, so a layout without them reads the same as before (and older apps don't warn)
+            if (w.compact && hasCompactView(w.type)) out += "," + sp + "\"compact\":" + sp + "true";
+            if (w.hideSystem && isList(w.type)) out += "," + sp + "\"hide_system\":" + sp + "true";
             out += sp + "}";
         }
         out += (widgets.empty() ? "" : sp) + "]";
@@ -195,7 +203,9 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
             }
             for (const auto& member : item.members) {
                 const std::string& k = member.first;
-                const bool known = k == "type" || ((k == "max_items" || k == "sum_same_name") && isList(w.type)) ||
+                const bool known = k == "type" ||
+                                   ((k == "max_items" || k == "sum_same_name" || k == "hide_system") && isList(w.type)) ||
+                                   (k == "compact" && hasCompactView(w.type)) ||
                                    (k == "adapter" && w.type == WidgetType::Network) ||
                                    ((k == "cameras" || k == "full_size") && w.type == WidgetType::HeadsetCamera) ||
                                    (k == "fps" &&
@@ -216,6 +226,16 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
                 if (const JsonValue* sum = item.get("sum_same_name")) {
                     if (sum->isBool()) w.sumSameName = sum->boolean;
                     else warnings.push_back(at + ".sum_same_name must be true or false");
+                }
+                if (const JsonValue* hide = item.get("hide_system")) {  // R2
+                    if (hide->isBool()) w.hideSystem = hide->boolean;
+                    else warnings.push_back(at + ".hide_system must be true or false");
+                }
+            }
+            if (hasCompactView(w.type)) {  // R2
+                if (const JsonValue* compact = item.get("compact")) {
+                    if (compact->isBool()) w.compact = compact->boolean;
+                    else warnings.push_back(at + ".compact must be true or false");
                 }
             }
             if (w.type == WidgetType::Network) {

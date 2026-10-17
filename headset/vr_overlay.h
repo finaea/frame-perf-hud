@@ -51,6 +51,9 @@ struct VrEvents {
     bool sceneAppChanged = false;       ///< VREvent_SceneApplicationChanged arrived: re-query the scene app
     std::vector<GrabInput> grab;        ///< T05: laser presses on the HUD (Detached grab)
     bool dashboardClosed = false;       ///< T05: VREvent_DashboardDeactivated arrived
+    bool keyboardDone = false;          ///< R2: Done on the keyboard showKeyboard() opened; keyboardText has the text
+    std::string keyboardText;
+    bool keyboardClosed = false;        ///< R2: the keyboard closed without Done
 };
 
 /** The app drawing the scene (IVRApplications). */
@@ -240,6 +243,18 @@ public:
     bool submitSettings(const uint8_t* rgba);
 
     /**
+     * R2: SteamVR's keyboard for the dashboard tab (profile names). The text comes back in VrEvents::keyboardText
+     * when Done is pressed.
+     * @param description shown above the keys
+     * @param existing the text it starts with
+     * @param maxChars longest text allowed
+     * @param error why it didn't open
+     * @return true if the keyboard is up
+     */
+    bool showKeyboard(const std::string& description, const std::string& existing, uint32_t maxChars,
+                      std::string& error);
+
+    /**
      * T05: lets the laser hit the HUD (input method Mouse) or not (None). Mouse only while the dashboard is open and
      * the HUD is Detached, so the HUD never takes game input. A new overlay (reconnect) starts at None.
      * @param interactive Mouse if true
@@ -272,6 +287,12 @@ private:
     vr::HmdMatrix34_t appliedTransform_ {};
     std::unique_ptr<CameraOverlays> cameras_;
     void notePlacement();
+
+    // R2: the Detached HUD's curve. The radius stays put and the curvature follows the panel's width
+    double curveRadiusM_ = 0.0;      ///< 0 = flat (head, wrist, or Detached set to Flat)
+    float appliedCurvature_ = 0.0f;  ///< what SetOverlayCurvature last took
+    /** Sends the curvature for curveRadiusM_ and the panel's width, when it changed. */
+    void applyCurvature();
 
     bool panelInteractive_ = false;  ///< T05: the HUD's input method is Mouse
     DetachedPose appliedDetached_;   ///< T05: the room pose last given to SetOverlayTransformAbsolute

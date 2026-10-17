@@ -138,6 +138,8 @@ struct UiText {
     const char* bringInFront;        ///< Detached: put it 1 m in front of the HMD
     const char* detachedHint;        ///< Detached: how to move it with the laser
     const char* roomNotPlaced;       ///< Detached: no pose yet
+    const char* rowCurve;            ///< R2 Detached: the curvature row
+    const char* curveSteps[4];       ///< R2 Detached: Config::detachedCurve 0..3 (flat → strong)
     const char* editorTitle;         ///< layout card title
     const char* editorHint;          ///< layout card hint
     const char* editorNewColumn;     ///< the empty lane on the right
@@ -165,6 +167,9 @@ struct UiText {
     const char* rowCameras;          ///< T10 Headset camera: which outward cams
     const char* rowFullSize;         ///< T10 Headset camera: full-size frames in the headset
     const char* rowFps;              ///< T10 camera widgets: headset frame rate
+    const char* rowCompact;          ///< R2: Frame, Power, Battery, Temp: the short card
+    const char* rowHideSystem;       ///< R2 process lists: leave SteamOS / Steam / SteamVR out (hide_rules.json)
+    const char* hiddenSuffix;        ///< R2: card detail after rowsFormat when Hide system is on
     // ---- T11: the Logs page ----
     const char* pageLogs;            ///< page switch: session logs, Save / Record, crash recorder
     const char* cardRecord;          ///< card title: Save and Record
@@ -178,6 +183,24 @@ struct UiText {
     const char* cardLastSession;     ///< card title: the last session's card
     const char* noSessionYet;        ///< no session ended since start
     const char* logsFolder;          ///< where the files are
+    // ---- R2: the Profiles page ----
+    const char* pageProfiles;        ///< page switch
+    const char* cardProfiles;        ///< the list's title
+    const char* profileCountFormat;  ///< "%zu / %zu" profiles used
+    const char* profileNone;         ///< no profiles yet
+    const char* profileActive;       ///< chip on the active profile
+    const char* profileUnsaved;      ///< chip: the live layout differs from it
+    const char* profileUse;
+    const char* profileSave;         ///< overwrite the active profile
+    const char* profileRename;
+    const char* profileDelete;
+    const char* profileNew;
+    const char* profileReset;        ///< live layout -> the built-in default
+    const char* profileTapAgain;     ///< Use / Reset armed: the live layout's changes would be lost
+    const char* profileDeleteAgain;  ///< Delete armed
+    const char* profileNotSaved;     ///< no active profile and the live layout isn't saved in any
+    const char* profileHint;         ///< what a profile holds
+    const char* profileKeyboard;     ///< the keyboard's description when renaming
 };
 
 /**

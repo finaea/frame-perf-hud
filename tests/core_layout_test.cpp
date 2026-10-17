@@ -197,6 +197,78 @@ void testWidgetOffDropsRefs() {
     }
 }
 
+// R2: compact / hide_system keys
+void testCompactAndHideSystem() {
+    // round trip, keys only emitted when on
+    Layout l;
+    l.columns.resize(1);
+    WidgetInstance frame = inst(W::Frame);
+    frame.compact = true;
+    WidgetInstance cpuItems = inst(W::CpuItems);
+    cpuItems.hideSystem = true;
+    WidgetInstance ramItems = inst(W::RamItems);  // off: no key
+    l.columns[0].widgets = {frame, cpuItems, ramItems, inst(W::Power)};
+    const std::string text = layoutToJson(l, 0);
+    CHECK(text.find("\"compact\":true") != std::string::npos);
+    CHECK(text.find("\"hide_system\":true") != std::string::npos);
+    size_t count = 0;
+    for (size_t at = text.find("hide_system"); at != std::string::npos; at = text.find("hide_system", at + 1)) ++count;
+    CHECK(count == 1);
+    count = 0;
+    for (size_t at = text.find("compact"); at != std::string::npos; at = text.find("compact", at + 1)) ++count;
+    CHECK(count == 1);
+
+    Layout back;
+    std::vector<std::string> warnings;
+    std::string error;
+    CHECK(parseLayoutText(text, back, warnings, error));
+    CHECK(warnings.empty());
+    CHECK(back.sameWidgets(l));
+    CHECK(back.columns[0].widgets[0].compact && !back.columns[0].widgets[0].hideSystem);
+    CHECK(back.columns[0].widgets[1].hideSystem && !back.columns[0].widgets[1].compact);
+    CHECK(!back.columns[0].widgets[2].hideSystem && !back.columns[0].widgets[3].compact);
+
+    // old layouts: false, and re-serialised without the new keys
+    const Layout def = defaultLayout();
+    const std::string defText = layoutToJson(def, 2);
+    CHECK(defText.find("compact") == std::string::npos && defText.find("hide_system") == std::string::npos);
+    Layout old;
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"version":1,"columns":[[{"type":"frame"},{"type":"cpu_items","max_items":5}]]})", old,
+                          warnings, error));
+    CHECK(warnings.empty());
+    CHECK(!old.columns[0].widgets[0].compact && !old.columns[0].widgets[1].hideSystem);
+    const std::string oldText = layoutToJson(old, 0);
+    CHECK(oldText.find("compact") == std::string::npos && oldText.find("hide_system") == std::string::npos);
+
+    // wrong type: warns (unknown key) and is ignored
+    Layout wrong;
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"cpu","compact":true},{"type":"streaming","compact":true},)"
+                          R"({"type":"frame","hide_system":true}]]})",
+                          wrong, warnings, error));
+    CHECK(warnings.size() == 3);
+    CHECK(wrong.columns[0].widgets.size() == 3);
+    for (const WidgetInstance& w : wrong.columns[0].widgets) CHECK(!w.compact && !w.hideSystem);
+
+    // non-bool value: warns, stays false
+    Layout bad;
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"temp","compact":"yes"},{"type":"ram_items","hide_system":1}]]})", bad,
+                          warnings, error));
+    CHECK(warnings.size() == 2);
+    CHECK(!bad.columns[0].widgets[0].compact && !bad.columns[0].widgets[1].hideSystem);
+
+    // operator== sees both fields
+    WidgetInstance a = inst(W::Frame), b = inst(W::Frame);
+    CHECK(a == b);
+    b.compact = true;
+    CHECK(a != b);
+    WidgetInstance c = inst(W::CpuItems), d = inst(W::CpuItems);
+    d.hideSystem = true;
+    CHECK(c != d);
+}
+
 }  // namespace
 
 int main() {
@@ -204,6 +276,7 @@ int main() {
     testRoundTrip();
     testBadInput();
     testWidgetOffDropsRefs();
+    testCompactAndHideSystem();
     if (failures == 0) std::printf("core-layout-test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

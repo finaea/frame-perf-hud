@@ -10,8 +10,6 @@
 
 namespace {
 
-constexpr float kTileLiftM = 0.001f;  ///< tiles sit 1 mm in front of the panel (+z is the panel's front)
-
 double nowMs() {
     using namespace std::chrono;
     return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
@@ -24,23 +22,6 @@ bool check(const char* what, vr::EVROverlayError e) {
 }
 
 }  // namespace
-
-TilePlacement placeTile(const fph::cam::Rect& rect, const fph::GridGeometry& geometry, const PanelPlacement& panel) {
-    TilePlacement p;
-    const double width = std::max(1, geometry.width);
-    const double scale = geometry.scale > 0.0 ? geometry.scale : 1.0;
-    const double visibleH = panel.visibleHeight / scale;  // unscaled panel px shown
-    const double metersPerPx = panel.widthM / width;
-    const double cx = rect.x + rect.w / 2.0;
-    const double cy = rect.y + rect.h / 2.0;
-    p.widthM = static_cast<float>(rect.w * metersPerPx);
-    for (int r = 0; r < 3; ++r)
-        for (int c = 0; c < 3; ++c) p.offset.m[r][c] = r == c ? 1.0f : 0.0f;
-    p.offset.m[0][3] = static_cast<float>((cx - width / 2.0) * metersPerPx);
-    p.offset.m[1][3] = static_cast<float>((visibleH / 2.0 - cy) * metersPerPx);  // panel +y is up, px y is down
-    p.offset.m[2][3] = kTileLiftM;
-    return p;
-}
 
 void CameraOverlays::setGeometry(const fph::GridGeometry& geometry) {
     std::vector<Tile> next;
@@ -57,6 +38,7 @@ void CameraOverlays::setGeometry(const fph::GridGeometry& geometry) {
     // reuse overlays (and textures, when the camera stays the same) by position
     for (size_t k = 0; k < next.size() && k < tiles_.size(); ++k) {
         next[k].handle = tiles_[k].handle;
+        next[k].curvature = tiles_[k].curvature;  // R2: the overlay's, so it goes with the handle
         tiles_[k].handle = 0;
         if (next[k].camera == tiles_[k].camera) {
             next[k].texture = std::move(tiles_[k].texture);
@@ -103,6 +85,11 @@ void CameraOverlays::place(Tile& t) {
     const TilePlacement p = placeTile(rect, geometry_, panel_);
     vr::IVROverlay* overlay = vr::VROverlay();
     check("SetOverlayWidthInMeters(camera)", overlay->SetOverlayWidthInMeters(t.handle, p.widthM));
+    // R2: only when it changed (place() runs on every pose update, e.g. at the laser grab's rate)
+    if (p.curvature != t.curvature &&
+        check("SetOverlayCurvature(camera)", overlay->SetOverlayCurvature(t.handle, p.curvature))) {
+        t.curvature = p.curvature;
+    }
     const vr::HmdMatrix34_t m = composeTransform(panel_.transform, p.offset);
     const bool ok = panel_.absolute
                         ? check("SetOverlayTransformAbsolute(camera)",
@@ -141,6 +128,7 @@ void CameraOverlays::onFrame(uint8_t camera, const CameraImage& image) {
             const std::string name = std::string("Frame Perf HUD ") + fph::cam::cameraName(camera);
             if (!check("CreateOverlay(camera)", overlay->CreateOverlay(key.c_str(), name.c_str(), &h))) continue;
             t.handle = h;
+            t.curvature = 0.0f;  // R2: a new overlay is flat
             overlay->SetOverlaySortOrder(h, 1);  // above the panel it sits on
             t.placedRevision = 0;
         }

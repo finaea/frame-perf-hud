@@ -51,6 +51,8 @@ struct WidgetContext {
 struct WidgetHistory {
     History a;  ///< main series (fps, vph W, CPU °C, GPU busy %)
     History b;  ///< second series (GPU °C)
+    History c;  ///< R2 Frame: worst CPU frame time per read (ms)
+    History d;  ///< R2 Frame: worst GPU frame time per read (ms)
 };
 
 /** A throughput as text, value and unit apart so they can be styled differently. */
@@ -67,7 +69,8 @@ struct RateText {
 RateText formatRate(double mbps);
 
 /**
- * Natural height of a widget's card (px). Battery follows its visible rows when a context is supplied.
+ * Natural height of a widget's card (px). Battery follows its visible rows when a context is supplied. A Compact
+ * instance (R2) is shorter.
  * @param w the instance
  * @return height
  */

@@ -576,6 +576,72 @@ void testConfigMalformedPose() {
     CHECK(anyWarningMentions(warnings, "attachment"));
 }
 
+// R2: Detached curvature steps and the detached_curve config key
+void testCurveSteps() {
+    CHECK(kDetachedCurveSteps == 4);
+    CHECK(detachedCurveRadiusM(0) == 0.0);
+    CHECK(detachedCurveRadiusM(1) == 2.0);
+    CHECK(detachedCurveRadiusM(2) == 1.0);
+    CHECK(detachedCurveRadiusM(3) == 0.6);
+    CHECK(detachedCurveRadiusM(-5) == 0.0);  // clamps
+    CHECK(detachedCurveRadiusM(4) == 0.6);
+    CHECK(detachedCurveRadiusM(99) == 0.6);
+}
+
+void testConfigCurve() {
+    std::string error;
+    std::vector<std::string> warnings;
+    CHECK(Config().detachedCurve == 0);
+
+    // Round trip of every step
+    for (int step = 0; step <= 3; ++step) {
+        const std::string path = tempDir + "/curve.json";
+        Config c;
+        c.detachedCurve = step;
+        CHECK(saveConfig(path, c, error));
+        CHECK(readFile(path).find("\"detached_curve\": " + std::to_string(step)) != std::string::npos);
+        Config back;
+        back.detachedCurve = 2;  // must be overwritten
+        warnings.clear();
+        CHECK(loadConfig(path, back, warnings, error));
+        CHECK(back.detachedCurve == step);
+        CHECK(!anyWarningMentions(warnings, "detached_curve"));
+        CHECK(!anyWarningMentions(warnings, "unknown"));
+    }
+    // Clamped on load
+    const struct { const char* text; int want; } cases[] = {{"7", 3}, {"-2", 0}, {"3", 3}, {"0", 0}, {"1", 1}};
+    int n = 0;
+    for (const auto& k : cases) {
+        const std::string path = tempDir + "/curveclamp" + std::to_string(n++) + ".json";
+        writeFile(path, std::string("{ \"detached_curve\": ") + k.text + " }");
+        Config c;
+        warnings.clear();
+        CHECK(loadConfig(path, c, warnings, error));
+        CHECK(c.detachedCurve == k.want);
+    }
+    // Missing key: 0, no warning
+    {
+        const std::string path = tempDir + "/curvemissing.json";
+        writeFile(path, "{ \"attachment\": \"detached\" }");
+        Config c;
+        c.detachedCurve = 2;  // loadConfig starts from the defaults, or leaves it? either way must not warn
+        warnings.clear();
+        CHECK(loadConfig(path, c, warnings, error));
+        CHECK(!anyWarningMentions(warnings, "detached_curve"));
+        Config fresh;
+        warnings.clear();
+        CHECK(loadConfig(path, fresh, warnings, error));
+        CHECK(fresh.detachedCurve == 0);
+    }
+    // resetDisplaySettings
+    {
+        Config c;
+        c.detachedCurve = 3;
+        resetDisplaySettings(c);
+        CHECK(c.detachedCurve == 0);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -598,6 +664,8 @@ int main() {
     testConfigRoundTrip();
     testConfigNoPoseNoKey();
     testConfigMalformedPose();
+    testCurveSteps();
+    testConfigCurve();
 
     std::error_code ec;
     std::filesystem::remove_all(tempDir, ec);

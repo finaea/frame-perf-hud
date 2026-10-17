@@ -222,11 +222,12 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
                     {"visible", "update_check", "language", "attachment", "position", "rotation", "left_wrist",
                      "right_wrist", "wrist_fade", "wrist_fade_end_deg", "clock_format", "width_m", "alpha",
                      "update_interval_ms", "graph_seconds", "font", "font_bold", "thresholds", "layout",
-                     "detached_pose", "link", "crash_recorder"},  // T05, T06, T11
+                     "detached_pose", "link", "crash_recorder", "active_profile", "detached_curve"},  // T05, T06, T11, R2
                     "", warnings);
     readBool(root, "visible", config.visible, warnings);
     readBool(root, "update_check", config.updateCheck, warnings);
     readBool(root, "crash_recorder", config.crashRecorder, warnings);  // T11
+    readString(root, "active_profile", config.activeProfile, warnings);  // R2
     std::string language = languageCode(config.language);
     readString(root, "language", language, warnings);
     if (!parseLanguage(language, config.language)) warnings.push_back("language must be \"en\"");
@@ -252,6 +253,7 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
             warnings.push_back("detached_pose must be 12 numbers (a 3x4 matrix, row by row); it will be placed again");
         }
     }
+    readInt(root, "detached_curve", 0, 3, config.detachedCurve, warnings);  // R2
     if (const JsonValue* position = root.get("position")) {
         if (position->isObject()) {
             warnUnknownKeys(*position, {"x", "y", "z"}, "position.", warnings);
@@ -421,6 +423,7 @@ bool saveConfig(const std::string& path, const Config& config, std::string& erro
         << "  \"visible\": " << (config.visible ? "true" : "false") << ",\n"
         << "  \"update_check\": " << (config.updateCheck ? "true" : "false") << ",\n"
         << "  \"crash_recorder\": " << (config.crashRecorder ? "true" : "false") << ",\n"  // T11
+        << "  \"active_profile\": " << jsonString(config.activeProfile) << ",\n"            // R2
         << "  \"language\":\"" << languageCode(config.language) << "\",\n"
         << "  \"attachment\": " << jsonString(attachmentName(config.attachment)) << ",\n"
         << "  \"position\": { \"x\": " << jsonNumber(config.posX) << ", \"y\": " << jsonNumber(config.posY)
@@ -430,6 +433,7 @@ bool saveConfig(const std::string& path, const Config& config, std::string& erro
         << "  \"left_wrist\": " << poseJson(config.leftWrist) << ",\n"
         << "  \"right_wrist\": " << poseJson(config.rightWrist) << ",\n"
         << detachedJson(config.detachedPose)  // T05: "" until placed
+        << "  \"detached_curve\": " << config.detachedCurve << ",\n"  // R2
         << "  \"wrist_fade\": " << (config.wristFade ? "true" : "false") << ",\n"
         << "  \"wrist_fade_end_deg\": " << jsonNumber(config.wristFadeEndDeg) << ",\n"
         << "  \"clock_format\": " << config.clockFormat << ",\n"
@@ -486,6 +490,7 @@ void resetDisplaySettings(Config& config) {
     config.clockFormat = defaults.clockFormat;
     config.widthM = defaults.widthM;
     config.alpha = defaults.alpha;
+    config.detachedCurve = defaults.detachedCurve;  // R2
 }
 
 namespace {

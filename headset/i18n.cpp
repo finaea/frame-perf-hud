@@ -47,6 +47,7 @@ const UiText kEnglish = {
     "Layout", "Placement", "Room", "Bring it in front of me",
     "Point the laser at the HUD and hold the trigger to move it",
     "Not placed yet",
+    "Curve", {"Flat", "Slight", "Medium", "Strong"},  // R2: Detached curvature
     "Layout", "Drag a widget to move it, tap it to change its settings", "New column", "Drop here to remove",
     "Widgets", "Network", "soon",
     "Tap a widget on the left to change it", "No settings", "Remove",
@@ -56,6 +57,8 @@ const UiText kEnglish = {
     "PC \"%s\" wants to connect", "Allow", "Deny", "Forget PCs (%zu)",
     // T10: camera widget settings
     "Cameras", "Full size", "FPS",
+    // R2: Compact cards, Hide system
+    "Compact", "Hide system", ", no system",
     // T11: the Logs page
     "Logs", "Save and Record", "Record", "Save last 10 min",
     "Save keeps the last 10 minutes and this session's summary. Record writes every second until you turn it off, "
@@ -65,6 +68,14 @@ const UiText kEnglish = {
     "cut leaves a log",
     "Last power-off", "Last session", "No session has ended since the HUD started",
     "Files: ~/.local/state/frame-perf-hud/ (sessions, saves, crashes)",
+    // R2: the Profiles page
+    "Profiles", "Profiles", "%zu / %zu", "No profiles yet. New profile saves the layout you have now",
+    "Active", "unsaved changes",
+    "Use", "Save", "Rename", "Delete", "New profile", "Reset to default",
+    "Tap again: the layout's changes are lost", "Tap again to delete",
+    "The layout you have now isn't saved in a profile",
+    "A profile is the layout only: columns, widgets and their settings. Placement and app settings aren't part of it",
+    "Profile name",
 };
 
 /** @return the value with no decimals */

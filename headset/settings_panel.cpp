@@ -63,7 +63,7 @@ constexpr double kQuitW = 230;
 // T05: the Layout page: the lanes on the left, the palette on the right (same height as the placement cards)
 constexpr double kEditorCardW = 1000;
 constexpr double kPaletteCardX = kPad + kEditorCardW + kCardGap;
-constexpr double kPageSwitchW = 420;  // T11: three pages
+constexpr double kPageSwitchW = 560;  // T11, R2: four pages
 constexpr double kForgetW = 260;
 // T11: the Logs page: Save and Record | Crash recorder | Last session
 constexpr double kLogCard1W = 500;
@@ -72,6 +72,13 @@ constexpr double kLogCard2W = 470;
 constexpr double kLogCard3X = kLogCard2X + kLogCard2W + kCardGap;
 constexpr double kLogCard3W = kWidth - kPad - kLogCard3X;
 constexpr double kLogLabelW = 150;  // row label left of the On / Off switch
+// R2: the Profiles page: the list (left), the selected profile's actions (right)
+constexpr double kProfListW = 640;
+constexpr double kProfRowH = 44;
+constexpr double kProfRowGap = 4;
+constexpr double kProfRowY0 = kCardY + 64;
+constexpr double kProfCard2X = kPad + kProfListW + kCardGap;
+constexpr double kProfCard2W = kWidth - kPad - kProfCard2X;
 
 constexpr double kNudgeM = 0.02;       // 頭: 上下左右の微調整（m）
 constexpr double kDepthStepM = 0.05;   // 頭: 前後の微調整（m）
@@ -290,6 +297,7 @@ bool sameDisplaySettings(const Config& a, const Config& b) {
            a.rollDeg == b.rollDeg && !(a.leftWrist != b.leftWrist) && !(a.rightWrist != b.rightWrist) &&
            a.wristFade == b.wristFade && a.wristFadeEndDeg == b.wristFadeEndDeg && a.clockFormat == b.clockFormat &&
            a.widthM == b.widthM && a.alpha == b.alpha && a.detachedPose == b.detachedPose &&
+           a.detachedCurve == b.detachedCurve &&  // R2
            a.crashRecorder == b.crashRecorder;  // T11
 }
 
@@ -431,6 +439,12 @@ bool applySettingsAction(SettingsAction action, Config& config, double angleStep
         case SettingsAction::FadeAngleUp:
             config.wristFadeEndDeg = std::clamp(config.wristFadeEndDeg + kFadeAngleStepDeg, 35.0, 90.0);
             break;
+        case SettingsAction::CurveDown:  // R2
+            config.detachedCurve = std::clamp(config.detachedCurve - 1, 0, kDetachedCurveSteps - 1);
+            break;
+        case SettingsAction::CurveUp:
+            config.detachedCurve = std::clamp(config.detachedCurve + 1, 0, kDetachedCurveSteps - 1);
+            break;
         case SettingsAction::SizeDown: config.widthM = std::clamp(roundMm(config.widthM - 0.02), 0.06, 1.0); break;
         case SettingsAction::SizeUp: config.widthM = std::clamp(roundMm(config.widthM + 0.02), 0.06, 1.0); break;
         case SettingsAction::AlphaDown:
@@ -465,6 +479,21 @@ bool applySettingsAction(SettingsAction action, Config& config, double angleStep
         case SettingsAction::RecordOn:
         case SettingsAction::RecordOff:
         case SettingsAction::SaveNow:
+        case SettingsAction::PageProfiles:  // R2: profiles change the layout through the caller (LayoutAuthority)
+        case SettingsAction::ProfileRow0:
+        case SettingsAction::ProfileRow1:
+        case SettingsAction::ProfileRow2:
+        case SettingsAction::ProfileRow3:
+        case SettingsAction::ProfileRow4:
+        case SettingsAction::ProfileRow5:
+        case SettingsAction::ProfileRow6:
+        case SettingsAction::ProfileRow7:
+        case SettingsAction::ProfileNew:
+        case SettingsAction::ProfileUse:
+        case SettingsAction::ProfileSave:
+        case SettingsAction::ProfileRename:
+        case SettingsAction::ProfileDelete:
+        case SettingsAction::ProfileReset:
         case SettingsAction::None: break;
         case SettingsAction::CrashRecorderOn: config.crashRecorder = true; break;
         case SettingsAction::CrashRecorderOff: config.crashRecorder = false; break;
@@ -512,6 +541,7 @@ void SettingsPanel::layoutButtons() {
 
     // T05: the Layout page's cards are the editor's; only the header and the footer have buttons here
     if (mode_ == ButtonMode::Layout) return;
+    if (mode_ == ButtonMode::Profiles) return;  // R2: its rows and buttons are placed as they're drawn
     if (mode_ == ButtonMode::Logs) {  // T11
         const double inner1 = kPad + kCardPad;
         segmented(inner1 + kLogLabelW, rowY(0), kSegmentW, {SettingsAction::RecordOn, SettingsAction::RecordOff});
@@ -574,6 +604,10 @@ void SettingsPanel::layoutButtons() {
     if (detached) {
         // T05 Room: turn it to face the HMD (upright)
         add(SettingsAction::FaceMe, kFacingInnerX, rowY(3), kFacingInnerW, kButtonH);
+        // R2: Curve (− value +), laid out like the wrist's fade angle
+        const double right = kFacingInnerX + kFacingInnerW;
+        add(SettingsAction::CurveDown, right - kControlW, rowY(4), kStepButtonW, kButtonH);
+        add(SettingsAction::CurveUp, right - kStepButtonW, rowY(4), kStepButtonW, kButtonH);
     } else if (wristLayout) {
         // 手首: 傾けると消す（オン / オフ）と、消える角度（− 値 ＋）。見出しは左、ボタンは右詰め
         const double right = kFacingInnerX + kFacingInnerW;
@@ -624,10 +658,12 @@ std::string SettingsPanel::labelOf(SettingsAction action, const UiText& text) co
         case SettingsAction::FadeOff: return text.off;
         case SettingsAction::SizeDown:
         case SettingsAction::AlphaDown:
-        case SettingsAction::FadeAngleDown: return "−";
+        case SettingsAction::FadeAngleDown:
+        case SettingsAction::CurveDown: return "−";
         case SettingsAction::SizeUp:
         case SettingsAction::AlphaUp:
-        case SettingsAction::FadeAngleUp: return "+";  // the bundled Noto Sans has no fullwidth plus
+        case SettingsAction::FadeAngleUp:
+        case SettingsAction::CurveUp: return "+";  // the bundled Noto Sans has no fullwidth plus
         case SettingsAction::ClockOff: return text.off;
         case SettingsAction::Clock12: return text.clock12;
         case SettingsAction::Clock24: return text.clock24;
@@ -654,6 +690,26 @@ std::string SettingsPanel::labelOf(SettingsAction action, const UiText& text) co
         case SettingsAction::RecordOff:
         case SettingsAction::CrashRecorderOff: return text.off;
         case SettingsAction::SaveNow: return text.saveNow;
+        case SettingsAction::PageProfiles: return text.pageProfiles;  // R2
+        case SettingsAction::ProfileNew: return text.profileNew;
+        case SettingsAction::ProfileSave: return text.profileSave;
+        case SettingsAction::ProfileRename: return text.profileRename;
+        case SettingsAction::ProfileUse:
+        case SettingsAction::ProfileReset: {
+            if (profileArmed_ != action) return action == SettingsAction::ProfileUse ? text.profileUse : text.profileReset;
+            const std::string again = text.profileTapAgain;  // "Tap again: ..." -> "Tap again" on the button
+            return again.substr(0, again.find(':'));
+        }
+        case SettingsAction::ProfileDelete:
+            return profileArmed_ == action ? text.profileDeleteAgain : text.profileDelete;
+        case SettingsAction::ProfileRow0:  // the rows draw their own names
+        case SettingsAction::ProfileRow1:
+        case SettingsAction::ProfileRow2:
+        case SettingsAction::ProfileRow3:
+        case SettingsAction::ProfileRow4:
+        case SettingsAction::ProfileRow5:
+        case SettingsAction::ProfileRow6:
+        case SettingsAction::ProfileRow7: return "";
         case SettingsAction::None: break;
     }
     return "";
@@ -663,6 +719,8 @@ SettingsAction SettingsPanel::hitTest(double x, double y) const {
     for (const auto& b : buttons_) {
         const bool isAutostart = b.action == SettingsAction::AutostartOn || b.action == SettingsAction::AutostartOff;
         if (isAutostart && !autostartInstalled_) continue;  // ユニットが無いときは押せない
+        // R2: a Profiles page button drawn disabled (nothing selected, all 8 used, no active profile)
+        if (std::find(profileDisabled_.begin(), profileDisabled_.end(), b.action) != profileDisabled_.end()) continue;
         if (b.action == SettingsAction::PcForgetAll && !forgetEnabled_) continue;  // T05: no PC to forget
         if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b.action;
     }
@@ -684,6 +742,8 @@ bool SettingsPanel::scroll(double dy) {
 
 SettingsAction SettingsPanel::pointerDown(double x, double y, double now) {
     hover_ = hitTest(x, y);
+    // R2: any press but the armed profile button cancels the pending second tap (before the early returns below)
+    if (hover_ != profileArmed_) profileArmed_ = SettingsAction::None;
     // T05: off the header / footer buttons, the Layout page's press goes to the editor
     if (hover_ == SettingsAction::None && page_ == SettingsPage::Layout) {
         quitArmed_ = false;
@@ -693,13 +753,15 @@ SettingsAction SettingsPanel::pointerDown(double x, double y, double now) {
     }
     pressed_ = hover_;
     if (pressed_ == SettingsAction::PageLayout || pressed_ == SettingsAction::PagePlacement ||
-        pressed_ == SettingsAction::PageLogs) {
+        pressed_ == SettingsAction::PageLogs || pressed_ == SettingsAction::PageProfiles) {
         page_ = pressed_ == SettingsAction::PageLayout      ? SettingsPage::Layout
                 : pressed_ == SettingsAction::PagePlacement ? SettingsPage::Placement
-                                                            : SettingsPage::Logs;  // T11
+                : pressed_ == SettingsAction::PageProfiles  ? SettingsPage::Profiles  // R2
+                                                            : SettingsPage::Logs;     // T11
         editor_.pointerLeave();
         quitArmed_ = false;
         updateConfirmArmed_ = false;
+        profileArmed_ = SettingsAction::None;
         return SettingsAction::None;
     }
     if (pressed_ == SettingsAction::Quit) {
@@ -721,6 +783,24 @@ SettingsAction SettingsPanel::pointerDown(double x, double y, double now) {
     }
     // ここまで来たら確認の表示は終わり（Yes で実行するときも、ほかのボタンを押して取り消すときも）
     updateConfirmArmed_ = false;
+    // R2: Profiles page. A row selects; Delete always, and Use / Reset when the live layout would be lost, need a
+    // second tap within kQuitConfirmSec. Any other press cancels a pending one
+    if (pressed_ >= SettingsAction::ProfileRow0 && pressed_ <= SettingsAction::ProfileRow7) {
+        const size_t row = static_cast<size_t>(pressed_) - static_cast<size_t>(SettingsAction::ProfileRow0);
+        if (row < profileRowIds_.size()) selectedProfile_ = profileRowIds_[row];
+        profileArmed_ = SettingsAction::None;
+        return SettingsAction::None;
+    }
+    if (pressed_ == SettingsAction::ProfileUse || pressed_ == SettingsAction::ProfileReset ||
+        pressed_ == SettingsAction::ProfileDelete) {
+        const bool twoTaps = pressed_ == SettingsAction::ProfileDelete || lastProfiles_.unsaved;
+        if (twoTaps && !(profileArmed_ == pressed_ && now <= profileArmedUntil_)) {
+            profileArmed_ = pressed_;
+            profileArmedUntil_ = now + kQuitConfirmSec;
+            return SettingsAction::None;
+        }
+    }
+    profileArmed_ = SettingsAction::None;
     if (pressed_ == SettingsAction::AngleStep1 || pressed_ == SettingsAction::AngleStep5) {
         // 刻みはこのパネルの中だけで覚える（設定ファイルには保存しない）
         angleStepDeg_ = pressed_ == SettingsAction::AngleStep5 ? 5.0 : 1.0;
@@ -745,9 +825,16 @@ bool SettingsPanel::pointerLeave() {
 }
 
 bool SettingsPanel::tick(double now) {
-    if (!quitArmed_ || now <= quitArmedUntil_) return false;
-    quitArmed_ = false;
-    return true;
+    bool changed = false;
+    if (quitArmed_ && now > quitArmedUntil_) {
+        quitArmed_ = false;
+        changed = true;
+    }
+    if (profileArmed_ != SettingsAction::None && now > profileArmedUntil_) {  // R2
+        profileArmed_ = SettingsAction::None;
+        changed = true;
+    }
+    return changed;
 }
 
 void SettingsPanel::armQuitForPreview() {
@@ -1007,6 +1094,16 @@ void SettingsPanel::drawFacingCard(const Pen& pen, const UiText& text, const Con
                   true);
     if (mode_ == ButtonMode::Detached) {
         drawButton(pen, text, SettingsAction::FaceMe, false, 24);
+        // R2: Curve  − Flat / Slight / Medium / Strong +
+        const double right = kFacingInnerX + kFacingInnerW;
+        const double labelSize = fitSize(pen, text.rowCurve, 24, 16, kFacingInnerW - kControlW - 12, false);
+        pen.text(kFacingInnerX, centerBaseline(rowY(4), kButtonH, labelSize), text.rowCurve, labelSize, kTextMuted);
+        const char* value = text.curveSteps[std::clamp(config.detachedCurve, 0, kDetachedCurveSteps - 1)];
+        const double valueSize = fitSize(pen, value, 28, 18, kValueW - 20, true);
+        textCentered(pen, right - kStepButtonW - kValueW / 2, centerBaseline(rowY(4), kButtonH, valueSize), value,
+                     valueSize, kText, true);
+        drawButton(pen, text, SettingsAction::CurveDown, false, 30);
+        drawButton(pen, text, SettingsAction::CurveUp, false, 30);
     } else if (mode_ == ButtonMode::Wrist) {
         // 傾けると消す（オン / オフ）と、消える角度（薄くなり始める角度〜消えきる角度）
         const double right = kFacingInnerX + kFacingInnerW;
@@ -1266,14 +1363,147 @@ void SettingsPanel::drawUpdateBar(const Pen& pen, const UiText& text, const Conf
 }
 
 double SettingsPanel::drawPageSwitch(const Pen& pen, const UiText& text, double left) {
+    // R2: Placement | Layout | Profiles | Logs (Jack's order)
     const double y = kHeaderY + (kHeaderH - kButtonH) / 2;
-    const double part = kPageSwitchW / 3;
-    placeFooterButton(SettingsAction::PageLayout, left, y, part, kButtonH);
-    placeFooterButton(SettingsAction::PagePlacement, left + part, y, part, kButtonH);
-    placeFooterButton(SettingsAction::PageLogs, left + 2 * part, y, part, kButtonH);  // T11
-    drawSegmented(pen, text, {SettingsAction::PageLayout, SettingsAction::PagePlacement, SettingsAction::PageLogs},
-                  page_ == SettingsPage::Layout ? 0 : page_ == SettingsPage::Placement ? 1 : 2, true);
+    const double part = kPageSwitchW / 4;
+    placeFooterButton(SettingsAction::PagePlacement, left, y, part, kButtonH);
+    placeFooterButton(SettingsAction::PageLayout, left + part, y, part, kButtonH);
+    placeFooterButton(SettingsAction::PageProfiles, left + 2 * part, y, part, kButtonH);
+    placeFooterButton(SettingsAction::PageLogs, left + 3 * part, y, part, kButtonH);  // T11
+    const int selected = page_ == SettingsPage::Placement ? 0
+                         : page_ == SettingsPage::Layout  ? 1
+                         : page_ == SettingsPage::Profiles ? 2
+                                                           : 3;
+    drawSegmented(pen, text,
+                  {SettingsAction::PagePlacement, SettingsAction::PageLayout, SettingsAction::PageProfiles,
+                   SettingsAction::PageLogs},
+                  selected, true);
     return left + kPageSwitchW;
+}
+
+void SettingsPanel::drawProfileButton(const Pen& pen, const UiText& text, SettingsAction action, double x, double y,
+                                      double w, bool enabled, bool primary) {
+    placeFooterButton(action, x, y, w, kButtonH);
+    if (enabled && profileArmed_ != action) {
+        drawButton(pen, text, action, primary, 22, 0, false);
+        return;
+    }
+    if (!enabled) profileDisabled_.push_back(action);
+    // disabled: faded, no border; armed (waiting for the second tap): red like Quit's confirm
+    const bool armed = enabled;
+    pen.color(armed ? kDanger : kControl);
+    pen.roundedRect(x, y, w, kButtonH, 18);
+    cairo_fill(pen.cr);
+    const std::string label = labelOf(action, text);
+    const double size = fitSize(pen, label, 22, 14, w - 20, true);
+    textCentered(pen, x + w / 2, centerBaseline(y, kButtonH, size), label, size, armed ? kOnAccent : kTextDisabled, true);
+}
+
+void SettingsPanel::drawProfilesPage(const Pen& pen, const UiText& text, const ProfilesUiState& profiles) {
+    lastProfiles_ = profiles;
+    profileDisabled_.clear();
+    profileRowIds_.clear();
+    for (const auto& item : profiles.items) profileRowIds_.push_back(item.id);
+    const auto has = [&](const std::string& id) {
+        return std::find(profileRowIds_.begin(), profileRowIds_.end(), id) != profileRowIds_.end();
+    };
+    if (!has(selectedProfile_)) {
+        selectedProfile_ = has(profiles.activeId) ? profiles.activeId
+                           : profileRowIds_.empty() ? std::string()
+                                                    : profileRowIds_.front();
+    }
+    // Rows that no longer exist mustn't stay hittable
+    buttons_.erase(std::remove_if(buttons_.begin(), buttons_.end(),
+                                  [](const Button& b) {
+                                      return b.action >= SettingsAction::ProfileRow0 &&
+                                             b.action <= SettingsAction::ProfileRow7;
+                                  }),
+                   buttons_.end());
+
+    // The list
+    const double lx = kPad + kCardPad;
+    const double lw = kProfListW - 2 * kCardPad;
+    drawCard(pen, kPad, kCardY, kProfListW, kCardH, 20, kCard, kCard, 0);
+    pen.text(lx, kCardY + 42, text.cardProfiles, 24, kText, true);
+    char count[32];
+    std::snprintf(count, sizeof(count), text.profileCountFormat, profiles.items.size(), profiles.maxProfiles);
+    pen.text(kPad + kProfListW - kCardPad - pen.measure(count, 18, false), kCardY + 42, count, 18, kTextMuted);
+    if (profiles.items.empty()) pen.text(lx, kProfRowY0 + 30, text.profileNone, fitSize(pen, text.profileNone, 18, 12, lw, false), kTextMuted);
+    for (size_t i = 0; i < profiles.items.size() && i < 8; ++i) {
+        const auto& item = profiles.items[i];
+        const SettingsAction action = static_cast<SettingsAction>(static_cast<int>(SettingsAction::ProfileRow0) + static_cast<int>(i));
+        const double y = kProfRowY0 + static_cast<double>(i) * (kProfRowH + kProfRowGap);
+        placeFooterButton(action, lx, y, lw, kProfRowH);
+        const bool selected = item.id == selectedProfile_;
+        const bool active = item.id == profiles.activeId;
+        pen.color(selected || hover_ == action || pressed_ == action ? kControlHover : kControl);
+        pen.roundedRect(lx, y, lw, kProfRowH, 12);
+        cairo_fill(pen.cr);
+        if (selected) strokeRounded(pen, lx, y, lw, kProfRowH, 12, kAccent, 2);
+        // right: "Active" (+ "unsaved changes"), left: the name in what's left
+        double right = lx + lw - 14;
+        if (active) {
+            if (profiles.unsaved) {
+                right -= pen.measure(text.profileUnsaved, 16, true);
+                pen.text(right, centerBaseline(y, kProfRowH, 16), text.profileUnsaved, 16, kWarn, true);
+                right -= 14;
+            }
+            right -= pen.measure(text.profileActive, 16, true);
+            pen.text(right, centerBaseline(y, kProfRowH, 16), text.profileActive, 16, kAccentText, true);
+            right -= 16;
+        }
+        const double nameW = right - (lx + 16);
+        pen.text(lx + 16, centerBaseline(y, kProfRowH, 20), item.name, fitSize(pen, item.name, 20, 13, nameW, active),
+                 kText, active);
+    }
+
+    // The selected profile: its actions, then the live layout's state
+    const double x = kProfCard2X + kCardPad;
+    const double w = kProfCard2W - 2 * kCardPad;
+    drawCard(pen, kProfCard2X, kCardY, kProfCard2W, kCardH, 20, kCard, kCard, 0);
+    std::string title = "-";
+    for (const auto& item : profiles.items) {
+        if (item.id == selectedProfile_) title = item.name;
+    }
+    pen.text(x, kCardY + 42, title, fitSize(pen, title, 24, 14, w, true), kText, true);
+    const bool haveSelected = !selectedProfile_.empty();
+    const bool haveActive = has(profiles.activeId);
+    const double bw = (w - 2 * kGap) / 3;
+    const double row0 = kCardY + 70;
+    const double row1 = row0 + kButtonH + kGap;
+    drawProfileButton(pen, text, SettingsAction::ProfileUse, x, row0, bw, haveSelected, true);
+    drawProfileButton(pen, text, SettingsAction::ProfileRename, x + bw + kGap, row0, bw, haveSelected, false);
+    drawProfileButton(pen, text, SettingsAction::ProfileDelete, x + 2 * (bw + kGap), row0, bw, haveSelected, false);
+    drawProfileButton(pen, text, SettingsAction::ProfileNew, x, row1, bw, profiles.items.size() < profiles.maxProfiles,
+                      false);
+    drawProfileButton(pen, text, SettingsAction::ProfileSave, x + bw + kGap, row1, bw, haveActive, false);
+    drawProfileButton(pen, text, SettingsAction::ProfileReset, x + 2 * (bw + kGap), row1, bw, true, false);
+
+    double y = row1 + kButtonH + 40;
+    std::string state;
+    Color stateColor = kTextMuted;
+    if (haveActive) {
+        std::string activeName;
+        for (const auto& item : profiles.items) {
+            if (item.id == profiles.activeId) activeName = item.name;
+        }
+        state = std::string(text.profileActive) + ": " + activeName +
+                (profiles.unsaved ? std::string(" · ") + text.profileUnsaved : std::string());
+        if (profiles.unsaved) stateColor = kWarn;
+    } else if (profiles.unsaved) {
+        state = text.profileNotSaved;
+        stateColor = kWarn;
+    }
+    if (!state.empty()) {
+        pen.text(x, y, state, fitSize(pen, state, 19, 13, w, true), stateColor, true);
+        y += 30;
+    }
+    if (profileArmed_ == SettingsAction::ProfileUse || profileArmed_ == SettingsAction::ProfileReset) {
+        pen.text(x, y, text.profileTapAgain, fitSize(pen, text.profileTapAgain, 18, 12, w, true), kDanger, true);
+        y += 28;
+    }
+    if (!profiles.status.empty()) pen.text(x, y, profiles.status, fitSize(pen, profiles.status, 18, 12, w, false), kText);
+    pen.text(x, kCardY + kCardH - kCardPad, text.profileHint, fitSize(pen, text.profileHint, 16, 11, w, false), kTextMuted);
 }
 
 namespace {
@@ -1390,12 +1620,14 @@ void SettingsPanel::drawPairingBanner(const Pen& pen, const UiText& text, const 
 }
 
 void SettingsPanel::render(const Config& config, const AutostartStatus& autostart,
-                            const frame_updater::UpdateStatus& update, const LinkUiState& link, const LogsUiState& logs) {
+                            const frame_updater::UpdateStatus& update, const LinkUiState& link, const LogsUiState& logs,
+                            const ProfilesUiState& profiles) {
     const Pen pen {cr_, &fonts_};
     const UiText& t = uiText(config.language);
     // 固定先・ページが変わったら、カードのボタンを置き直す（下の段と更新の帯はこのあと置き直す）
     const ButtonMode mode = page_ == SettingsPage::Layout                ? ButtonMode::Layout
-                            : page_ == SettingsPage::Logs               ? ButtonMode::Logs  // T11
+                            : page_ == SettingsPage::Logs               ? ButtonMode::Logs      // T11
+                            : page_ == SettingsPage::Profiles           ? ButtonMode::Profiles  // R2
                             : config.attachment == Attachment::Head     ? ButtonMode::Head
                             : config.attachment == Attachment::Detached ? ButtonMode::Detached
                                                                         : ButtonMode::Wrist;
@@ -1438,6 +1670,11 @@ void SettingsPanel::render(const Config& config, const AutostartStatus& autostar
         drawFacingCard(pen, t, config);
     }
     if (page_ == SettingsPage::Logs) drawLogsPage(pen, t, config, logs);  // T11
+    if (page_ == SettingsPage::Profiles) {
+        drawProfilesPage(pen, t, profiles);  // R2
+    } else {
+        profileDisabled_.clear();  // its buttons are gone with the page (layoutButtons), so nothing to skip
+    }
     drawFooter(pen, t, config, autostart, link);
     if (page_ == SettingsPage::Layout) editor_.render(pen, t);  // last: a dragged card is drawn over everything
 

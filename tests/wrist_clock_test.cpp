@@ -714,7 +714,10 @@ void controls(const std::string& directory) {
         checkButtons(panel, common, 3);
         checkButtons(panel, detachedOnly, 3);
         CHECK(panel.pointerDown(600, 380, 3) == SettingsAction::None);   // no head presets
-        CHECK(panel.pointerDown(1340, 504, 3) == SettingsAction::None);  // no fade angle
+        // no fade angle: R2's Curve − value + takes its row (the label's left side hits nothing)
+        CHECK(panel.pointerDown(1150, 538, 3) == SettingsAction::None);
+        CHECK(panel.pointerDown(1305, 538, 3) == SettingsAction::CurveDown);
+        CHECK(panel.pointerDown(1510, 538, 3) == SettingsAction::CurveUp);
         panel.pointerLeave();
         panel.render(c, service, {});
         CHECK(panel.writePng(directory + "/room-" + code + ".png"));

@@ -61,6 +61,8 @@ enum MenuId : UINT {
     kMenuRows5,  // + 0..4: 5, 10, 15, 25, 50 rows
     kMenuSave = kMenuRows5 + 5,  // T11: the last 10 minutes + the session's summary
     kMenuOpenLogs,               // T11: the data folder (sessions, saves) in Explorer
+    kMenuCompact,                // R2: Frame, Power, Battery, Temp
+    kMenuHideSystem,             // R2: process lists
 };
 constexpr uint32_t kRowChoices[] = {5, 10, 15, 25, 50};
 
@@ -570,6 +572,7 @@ void App::showCardMenu(POINT screen, int slot) {
     HMENU menu = CreatePopupMenu();
     if (w->type == WidgetType::CpuItems || w->type == WidgetType::RamItems) {
         AppendMenuW(menu, MF_STRING | (w->sumSameName ? MF_CHECKED : 0), kMenuSumSameName, L"One row per process name");
+        AppendMenuW(menu, MF_STRING | (w->hideSystem ? MF_CHECKED : 0), kMenuHideSystem, L"Hide system");
         HMENU rows = CreatePopupMenu();
         for (size_t i = 0; i < 5; ++i) {
             AppendMenuW(rows, MF_STRING | (w->maxItems == kRowChoices[i] ? MF_CHECKED : 0),
@@ -582,6 +585,9 @@ void App::showCardMenu(POINT screen, int slot) {
                     L"Steam Link dongle (wlanap)");
         AppendMenuW(menu, MF_STRING | (w->adapter == NetAdapter::Home ? MF_CHECKED : 0), kMenuAdapterHome,
                     L"Home Wi-Fi (wlan0)");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    } else if (hasCompactView(w->type)) {
+        AppendMenuW(menu, MF_STRING | (w->compact ? MF_CHECKED : 0), kMenuCompact, L"Compact");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
     AppendMenuW(menu, MF_STRING, kMenuRemove, L"Remove");
@@ -596,6 +602,10 @@ void App::showCardMenu(POINT screen, int slot) {
         removeWidget(edited, ref);
     } else if (cmd == kMenuSumSameName) {
         target.sumSameName = !target.sumSameName;
+    } else if (cmd == kMenuHideSystem) {
+        target.hideSystem = !target.hideSystem;
+    } else if (cmd == kMenuCompact) {
+        target.compact = !target.compact;
     } else if (cmd == kMenuAdapterDongle || cmd == kMenuAdapterHome) {
         target.adapter = cmd == kMenuAdapterDongle ? NetAdapter::Dongle : NetAdapter::Home;
     } else if (cmd >= kMenuRows5 && cmd < kMenuRows5 + 5) {

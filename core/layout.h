@@ -49,13 +49,19 @@ struct WidgetInstance {
     bool cameraFullSize = false;      ///< T10 Headset camera: full-size frames in the headset (default: 2x down)
     uint8_t cameraFps = 15;           ///< T10 both camera widgets: headset frame rate, 5 / 10 / 15 (12) or / 30 (13):
                                       ///< cameraFpsMax
+    bool compact = false;             ///< R2: the short card (hasCompactView types only)
+    bool hideSystem = false;          ///< R2 CPU / RAM usage items: SteamOS / Steam / SteamVR processes left out
 
     bool operator==(const WidgetInstance& o) const {
         return type == o.type && maxItems == o.maxItems && sumSameName == o.sumSameName && adapter == o.adapter &&
-               cameras == o.cameras && cameraFullSize == o.cameraFullSize && cameraFps == o.cameraFps;
+               cameras == o.cameras && cameraFullSize == o.cameraFullSize && cameraFps == o.cameraFps &&
+               compact == o.compact && hideSystem == o.hideSystem;
     }
     bool operator!=(const WidgetInstance& o) const { return !(*this == o); }
 };
+
+/** @return true if the type has a Compact card (R2: Frame, Power, Battery, Temp) */
+bool hasCompactView(WidgetType type);
 
 /** One column, top to bottom. */
 struct LayoutColumn {

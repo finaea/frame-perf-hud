@@ -54,7 +54,11 @@ struct ProcessListOptions {
     bool sumSameName = false;  ///< one row per name, CPU and RSS summed (Halo's option); both lists unless
                                ///< ramSumSameName says otherwise
     int ramSumSameName = -1;   ///< T04: RAM list's own setting (0 / 1), -1 = same as sumSameName
+    bool cpuHideSystem = false;  ///< R2: leave out what the HideRules hide (CPU list)
+    bool ramHideSystem = false;  ///< R2: same for the RAM list
 };
+
+class HideRules;
 
 /**
  * Ranks rows and keeps the top ones.
@@ -90,6 +94,9 @@ public:
     /** @return the lists from the last scan */
     const ProcessLists& lists() const { return lists_; }
 
+    /** R2: the rules "Hide system" uses (nullptr = nothing is hidden). Not owned. */
+    void setHideRules(HideRules* rules) { hideRules_ = rules; }
+
 private:
     struct Previous {
         uint64_t starttime = 0;
@@ -102,12 +109,29 @@ private:
     std::unordered_map<int, Previous> previous_;
     struct ExeName {
         uint64_t starttime = 0;
+        std::string comm;  ///< R2: an exec keeps pid + starttime but changes comm: then the exe is read again
         std::string name;
     };
     std::unordered_map<int, ExeName> exeNames_;  ///< T04: readlink cache for listed rows only (≤ 2 × max per scan)
 
     /** T04: fills ProcessRow::exe for the listed rows, from the cache or one readlink each. */
     void fillExeNames(std::vector<ProcessRow>& rows, const std::unordered_map<int, Previous>& current);
+
+    // R2: per process, whether the rules hide it. The cgroup and exe are read once per process (pid + starttime);
+    // the verdict is redone only when the rules change
+    struct Hidden {
+        uint64_t starttime = 0;
+        std::string comm;  ///< an exec (a launcher becoming the game) keeps pid + starttime: comm tells it apart
+        std::string exe;
+        std::string cgroup;
+        uint64_t generation = 0;  ///< HideRules::generation() the verdict was made with
+        bool hidden = false;
+    };
+    HideRules* hideRules_ = nullptr;
+    std::unordered_map<int, Hidden> hidden_;
+
+    /** R2: drops the rows the rules hide. */
+    void dropHidden(std::vector<ProcessRow>& rows, const std::unordered_map<int, Previous>& current);
     double previousTime_ = -1.0;
     ProcessLists lists_;
 };

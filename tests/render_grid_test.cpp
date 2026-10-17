@@ -796,6 +796,149 @@ void testCappedShowsHardwareMax() {
     CHECK(renderPx(layout, store(2035.2, 2265.6)) != capped);
 }
 
+namespace {
+
+// ---- R2: Compact cards and the Frame frame-time graphs ----
+
+WidgetInstance compactInst(W type, bool compact) {
+    WidgetInstance w = inst(type);
+    w.compact = compact;
+    return w;
+}
+
+MetricStore r2Store(double scale, double now) {
+    MetricStore s;
+    s.setF32(metric::kFrameAppFps, 60 + 10 * scale, now);
+    s.setF32(metric::kFrameDisplayHz, 90, now);
+    s.setF32(metric::kFrameCpuMs, 4 * scale, now);
+    s.setF32(metric::kFrameGpuMs, 5 * scale, now);
+    s.setF32(metric::kFrameCpuMaxMs, 9 * scale, now);
+    s.setF32(metric::kFrameGpuMaxMs, 12 * scale, now);
+    s.setF32(metric::kPowerVphW, 3 + 4 * scale, now);
+    s.setF32(metric::kTempCpuC, 40 + 10 * scale, now);
+    s.setF32(metric::kTempGpuC, 45 + 10 * scale, now);
+    s.setF32(metric::kBatteryPct, 40 + 20 * scale, now);
+    return s;
+}
+
+void testCompactHeights() {
+    CHECK(widgetHeight(compactInst(W::Frame, false)) == 194);
+    CHECK(widgetHeight(compactInst(W::Frame, true)) == 102);
+    CHECK(widgetHeight(compactInst(W::Power, false)) == 372);
+    CHECK(widgetHeight(compactInst(W::Power, true)) == 102);
+    CHECK(widgetHeight(compactInst(W::Temp, false)) == 198);
+    CHECK(widgetHeight(compactInst(W::Temp, true)) == 102);
+    CHECK(widgetHeight(compactInst(W::Battery, true)) == 88);
+    CHECK(widgetHeight(compactInst(W::Battery, true)) < widgetHeight(compactInst(W::Battery, false)));
+
+    // no jitter: values moving doesn't move a height or the grid
+    const MetricStore low = r2Store(1.0, kNow);
+    const MetricStore high = r2Store(2.5, kNow);
+    WidgetContext lowCtx, highCtx;
+    lowCtx.store = &low;
+    lowCtx.now = kNow;
+    highCtx.store = &high;
+    highCtx.now = kNow;
+    for (const W type : {W::Frame, W::Power, W::Temp, W::Battery}) {
+        for (const bool compact : {false, true}) {
+            const WidgetInstance w = compactInst(type, compact);
+            CHECK(widgetHeight(w, &lowCtx) == widgetHeight(w, &highCtx));
+        }
+    }
+    Layout layout;
+    layout.columns.resize(2);
+    layout.columns[0].widgets = {compactInst(W::Frame, false), compactInst(W::Power, true)};
+    layout.columns[1].widgets = {compactInst(W::Temp, false), compactInst(W::Battery, true)};
+    CHECK(sameGridGeometry(layoutGrid(layout, &lowCtx), layoutGrid(layout, &highCtx)));
+
+    // toggling compact changes the geometry
+    Layout toggled = layout;
+    toggled.columns[0].widgets[0].compact = true;
+    CHECK(!sameGridGeometry(layoutGrid(layout, &lowCtx), layoutGrid(toggled, &lowCtx)));
+    CHECK(layoutGrid(toggled, &lowCtx).slots[0].h == 102);
+    CHECK(layoutGrid(layout, &lowCtx).slots[0].h == 194);
+}
+
+/** The Frame card's frame-time band (under the fps row), from a rendered grid. */
+Pixels frameBand(GridRenderer& renderer) {
+    const WidgetSlot& slot = renderer.geometry().slots[0];
+    const int stride = renderer.geometry().textureWidth * 4;
+    const std::vector<uint8_t>& rgba = renderer.toRgba();
+    const int top = slot.y + 124;  // kFrameTimesBedY
+    Pixels band;
+    for (int row = top; row < top + 60; ++row) {
+        band.insert(band.end(), rgba.begin() + row * stride + slot.x * 4,
+                    rgba.begin() + row * stride + (slot.x + slot.w) * 4);
+    }
+    return band;
+}
+
+/** Renders a Frame widget over 12 seconds of data; hz 0 leaves the display rate unknown. */
+Pixels renderFrameHistory(double hz, double dataScale) {
+    GridRenderer renderer(fonts());
+    renderer.setLayout(oneWidget(compactInst(W::Frame, false)));
+    for (int i = 0; i < 12; ++i) {
+        MetricStore s = r2Store(dataScale * (1.0 + 0.1 * (i % 4)), kNow + i);
+        if (hz == 0) s.setF32(metric::kFrameDisplayHz, std::nan(""), kNow + i);
+        else s.setF32(metric::kFrameDisplayHz, hz, kNow + i);
+        WidgetContext ctx;
+        ctx.store = &s;
+        ctx.now = kNow + i;
+        renderer.render(ctx);
+    }
+    return frameBand(renderer);
+}
+
+void testFrameGraphsDraw() {
+    const Pixels withData = renderFrameHistory(90, 1.0);
+    const Pixels spike = renderFrameHistory(90, 3.0);  // taller series and a bigger msMax
+    const Pixels noHz = renderFrameHistory(0, 1.0);    // no dotted guide at 1000/Hz
+    CHECK(!withData.empty());
+    CHECK(withData != spike);
+    CHECK(withData != noHz);
+
+    // empty store: draws without crashing, and differs from the one with data
+    MetricStore empty;
+    GridRenderer renderer(fonts());
+    renderer.setLayout(oneWidget(compactInst(W::Frame, false)));
+    WidgetContext ctx;
+    ctx.store = &empty;
+    ctx.now = kNow;
+    CHECK(renderer.render(ctx));
+    CHECK(frameBand(renderer) != withData);
+}
+
+void testCompactToggleKeepsFrameHistory() {
+    const Layout full = oneWidget(compactInst(W::Frame, false));
+    const Layout compact = oneWidget(compactInst(W::Frame, true));
+    GridRenderer toggled(fonts());
+    GridRenderer steady(fonts());
+    toggled.setLayout(full);
+    steady.setLayout(full);
+    MetricStore last;
+    for (int i = 0; i < 12; ++i) {
+        last = r2Store(1.0 + 0.1 * (i % 4), kNow + i);
+        WidgetContext ctx;
+        ctx.store = &last;
+        ctx.now = kNow + i;
+        toggled.render(ctx);
+        steady.render(ctx);
+    }
+    toggled.setLayout(compact);
+    CHECK(toggled.geometry().slots[0].h == 102);
+    WidgetContext ctx;
+    ctx.store = &last;
+    ctx.now = kNow + 11;
+    toggled.render(ctx);
+    toggled.setLayout(full);
+    CHECK(toggled.geometry().slots[0].h == 194);
+    toggled.render(ctx);
+    steady.render(ctx);
+    CHECK(frameBand(toggled) == frameBand(steady));
+}
+
+}  // namespace
+
 int main() {
     testGeometry();
     testListRows();
@@ -819,6 +962,9 @@ int main() {
     testPartialRedraw();
     testClockOffHidesTime();
     testCappedShowsHardwareMax();
+    testCompactHeights();
+    testFrameGraphsDraw();
+    testCompactToggleKeepsFrameHistory();
     if (failures == 0) std::printf("render-grid-test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

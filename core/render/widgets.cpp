@@ -36,6 +36,15 @@ constexpr int kGraphCardH = 102;  // upstream row: 92 + 6 above + 4 below
 constexpr int kPowerRails = 12;
 constexpr int kBatteryRows = 10;
 
+// R2: Frame's CPU / GPU frame-time row under the fps row: a label line, then two half-width graphs
+constexpr double kFrameTimesGap = 12;                                // between the two graphs
+constexpr double kFrameTimesW = (kInR - kInX - kFrameTimesGap) / 2;  // 236
+constexpr double kFrameTimesLabelY = kGraphCardH + 14;               // label baseline
+constexpr double kFrameTimesBedY = kGraphCardH + 22;
+constexpr double kFrameTimesH = 60;
+constexpr int kFrameFullH = static_cast<int>(kFrameTimesBedY + kFrameTimesH) + 10;  // 194
+constexpr int kBatteryCompactH = static_cast<int>(kTop) + 82;                       // % + the W line
+
 /** Value state. */
 enum class Level { Normal, Warn, Crit };
 
@@ -403,6 +412,21 @@ void staticGraphBed(const Pen& pen, double x, double y) {
     cairo_fill(pen.cr);
 }
 
+/** R2: Frame's two frame-time graphs, CPU (k = 0) on the left, GPU (1) on the right. */
+GraphArea frameTimesArea(double x, double y, int k, double maxV, const WidgetContext& ctx) {
+    return GraphArea {x + kInX + k * (kFrameTimesW + kFrameTimesGap), y + kFrameTimesBedY, kFrameTimesW, kFrameTimesH,
+                      0.0, maxV, ctx.now, static_cast<double>(std::max(1, ctx.graphSeconds))};
+}
+
+void staticFrameTimesBeds(const Pen& pen, double x, double y) {
+    pen.color(kBg);
+    for (int k = 0; k < 2; ++k) {
+        pen.roundedRect(x + kInX + k * (kFrameTimesW + kFrameTimesGap), y + kFrameTimesBedY, kFrameTimesW,
+                        kFrameTimesH, 6);
+        cairo_fill(pen.cr);
+    }
+}
+
 void staticTitle(const Pen& pen, double x, double y, const std::string& title) {
     pen.text(x + kInX, y + kTop + 17, title, 16, kTextMuted);
 }
@@ -435,35 +459,42 @@ bool hasGraph(WidgetType type) {
 
 // ---- Widgets ----
 
-void drawFrame(const Pen& pen, double x, double y, const WidgetContext& ctx, const WidgetHistory& h) {
+void drawFrame(const Pen& pen, double x, double y, const WidgetInstance& w, const WidgetContext& ctx,
+               const WidgetHistory& h) {
     const Thresholds& th = ctx.thresholds;
     const WidgetText& t = widgetText();
     const double cx = x + kInX;
     const double top = y + kTop;
     const double hz = f(ctx, kFrameDisplayHz);
     const double fps = f(ctx, kFrameAppFps);
+    const double targetMs = hz > 0 ? 1000.0 / hz : std::nan("");
+    const auto msLevel = [&](double ms) {
+        return levelOf(ms, targetMs * th.frameWarnRatio, targetMs * th.frameCritRatio);
+    };
     if (!ok(ctx, kFrameAppFps)) {
         drawBigValue(pen, cx, top + 52, "--", "fps", kTextMuted);
         pen.text(cx, top + 72, naText(ctx, kFrameAppFps), 15, kTextMuted);
     } else {
-        const double targetMs = hz > 0 ? 1000.0 / hz : std::nan("");
         const Level fpsLevel = hz > 0 ? levelOf(fps, hz * th.fpsWarnRatio, hz * th.fpsCritRatio, true) : Level::Normal;
         pen.dot(cx + 4, top + 42, kAccent);
         const double bigWidth = drawBigValue(pen, cx + 14, top + 52, num(fps, 0), "fps", colorOf(fpsLevel));
         if (hz > 0) pen.text(cx + 14 + bigWidth + 6, top + 52, "/ " + num(hz, 0) + "Hz", 14, kTextMuted);
-        const double gpuMs = f(ctx, kFrameGpuMs);
-        const double cpuMs = f(ctx, kFrameCpuMs);
-        const Level gpuLevel = levelOf(gpuMs, targetMs * th.frameWarnRatio, targetMs * th.frameCritRatio);
-        const Level cpuLevel = levelOf(cpuMs, targetMs * th.frameWarnRatio, targetMs * th.frameCritRatio);
-        double lx = cx + 14;
-        lx += pen.text(lx, top + 72, "GPU " + num(gpuMs, 1), 15, colorOf(gpuLevel, kTextMuted));
-        lx += pen.text(lx, top + 72, "  CPU " + num(cpuMs, 1), 15, colorOf(cpuLevel, kTextMuted));
-        pen.text(lx, top + 72, " ms", 13, kTextMuted);
+        // R2: the full card writes the ms above its own graphs; Compact keeps them here
+        double reprojY = top + 72;
+        if (w.compact) {
+            const double gpuMs = f(ctx, kFrameGpuMs);
+            const double cpuMs = f(ctx, kFrameCpuMs);
+            double lx = cx + 14;
+            lx += pen.text(lx, top + 72, "GPU " + num(gpuMs, 1), 15, colorOf(msLevel(gpuMs), kTextMuted));
+            lx += pen.text(lx, top + 72, "  CPU " + num(cpuMs, 1), 15, colorOf(msLevel(cpuMs), kTextMuted));
+            pen.text(lx, top + 72, " ms", 13, kTextMuted);
+            reprojY = top + 90;
+        }
         const double reproj = f(ctx, kFrameReprojectedPct);
         const int64_t dropped = i(ctx, kFrameDropped);
         const Level reprojLevel = worse(levelOf(reproj, th.reprojWarnPct, th.reprojCritPct),
                                         dropped > 0 ? Level::Warn : Level::Normal);
-        pen.text(cx + 14, top + 90, std::string(t.reproj) + num(reproj, 0) + "%  " + t.dropped + std::to_string(dropped),
+        pen.text(cx + 14, reprojY, std::string(t.reproj) + num(reproj, 0) + "%  " + t.dropped + std::to_string(dropped),
                  15, colorOf(reprojLevel, kTextMuted));
     }
     // 0 fps to 25% above the refresh rate
@@ -478,6 +509,32 @@ void drawFrame(const Pen& pen, double x, double y, const WidgetContext& ctx, con
         drawBadge(pen, area.x + area.w - 4, area.y + 4,
                   std::string(t.throttledTo) + std::to_string(throttled + 1) + t.throttledOf + num(scaleHz, 0) + "Hz",
                   kWarn);
+    }
+    if (w.compact) return;
+
+    // R2: CPU and GPU frame times, worst frame per read, on one scale so the two compare. Dotted line: the budget
+    const double budget = std::isnan(targetMs) ? 1000.0 / scaleHz : targetMs;
+    const double dataMax = std::fmax(h.c.maxValue(), h.d.maxValue());
+    const double msMax = std::ceil(std::fmax(budget * 1.5, std::isnan(dataMax) ? 0.0 : dataMax * 1.15) / 5.0) * 5.0;
+    const struct {
+        const char* name;
+        uint16_t avgId, maxId;
+        const History* history;
+        Color color;
+    } kTimes[] = {{"CPU ", kFrameCpuMs, kFrameCpuMaxMs, &h.c, kAccent}, {"GPU ", kFrameGpuMs, kFrameGpuMaxMs, &h.d, kGpu}};
+    for (int k = 0; k < 2; ++k) {
+        const GraphArea times = frameTimesArea(x, y, k, msMax, ctx);
+        const double avg = f(ctx, kTimes[k].avgId);
+        const double worst = f(ctx, kTimes[k].maxId);
+        double lx = times.x + 2;
+        const double ly = y + kFrameTimesLabelY;
+        lx += pen.text(lx, ly, kTimes[k].name, 14, kTextMuted);
+        lx += pen.text(lx, ly, num(avg, 1), 14, colorOf(msLevel(avg)), true);
+        lx += pen.text(lx, ly, " ms  ·  max ", 13, kTextMuted);
+        pen.text(lx, ly, num(worst, 1), 14, colorOf(msLevel(worst)), true);
+        drawGraphLabel(pen, times, num(msMax, 0) + " ms");
+        drawGuide(pen, times, targetMs, kTextMuted);
+        drawSeries(pen, times, *kTimes[k].history, kTimes[k].color);
     }
 }
 
@@ -593,7 +650,8 @@ struct Rail {
     uint16_t id;        ///< watts id (volts at + kPowerRailVoltsOffset); 0 = the CPU sum row
 };
 
-void drawPower(const Pen& pen, double x, double y, const WidgetContext& ctx, const WidgetHistory& h) {
+void drawPower(const Pen& pen, double x, double y, const WidgetInstance& w, const WidgetContext& ctx,
+               const WidgetHistory& h) {
     const Thresholds& th = ctx.thresholds;
     const WidgetText& t = widgetText();
     const double cx = x + kInX;
@@ -619,6 +677,7 @@ void drawPower(const Pen& pen, double x, double y, const WidgetContext& ctx, con
     drawGuide(pen, area, th.powerWarnW, kWarn);
     drawGuide(pen, area, th.powerCritW, kDanger);
     drawSeries(pen, area, h.a, kAccent);
+    if (w.compact) return;  // R2: Compact is the vph row only
 
     // The tree: rails under vph, each with W + V and a share-of-vph bar
     static const Rail kRails[] = {
@@ -694,7 +753,7 @@ BatteryMeasure measureBattery(const WidgetContext& ctx) {
             plugged && ok(ctx, kBatteryPdOfferedV), plugged && ok(ctx, kBatterySagV)};
 }
 
-void drawBattery(const Pen& pen, double x, double y, const WidgetContext& ctx) {
+void drawBattery(const Pen& pen, double x, double y, const WidgetInstance& w, const WidgetContext& ctx) {
     const BatteryMeasure measured = measureBattery(ctx);
     const Thresholds& th = ctx.thresholds;
     const WidgetText& t = widgetText();
@@ -721,6 +780,7 @@ void drawBattery(const Pen& pen, double x, double y, const WidgetContext& ctx) {
     if (!flow.empty()) flow[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(flow[0])));
     pen.dot(cx + 4, top + 67, kGpu);
     pen.text(cx + 14, top + 72, std::isnan(watts) ? "--" : num(std::fabs(watts), 2) + " W " + flow, 15, kText);
+    if (w.compact) return;  // R2: % and the W into / from the battery
     pen.text(cx + 14, top + 88, t.batteryNote, 13, kTextMuted);
 
     double ry = top + 106;
@@ -763,7 +823,8 @@ void drawBattery(const Pen& pen, double x, double y, const WidgetContext& ctx) {
     }
 }
 
-void drawTemp(const Pen& pen, double x, double y, const WidgetContext& ctx, const WidgetHistory& h) {
+void drawTemp(const Pen& pen, double x, double y, const WidgetInstance& w, const WidgetContext& ctx,
+              const WidgetHistory& h) {
     const Thresholds& th = ctx.thresholds;
     const WidgetText& t = widgetText();
     const double cx = x + kInX;
@@ -775,8 +836,21 @@ void drawTemp(const Pen& pen, double x, double y, const WidgetContext& ctx, cons
     pen.dot(cx + 4, top + 67, kGpu);
     const double gw = pen.text(cx + 14, top + 72, "GPU " + num(gpu, 0) + "°C", 15,
                                colorOf(levelOf(gpu, th.tempWarnC, th.tempCritC)));
-    pen.text(cx + 14 + gw + 10, top + 72, std::string(t.tDdr) + " " + num(f(ctx, kTempDdrC), 0) + "°C", 15, kTextMuted);
+    if (!w.compact)  // R2: Compact is CPU / GPU / fan only
+        pen.text(cx + 14 + gw + 10, top + 72, std::string(t.tDdr) + " " + num(f(ctx, kTempDdrC), 0) + "°C", 15, kTextMuted);
     pen.text(cx + 14, top + 90, std::string(t.fan) + grouped(f(ctx, kFanRpm)) + " rpm", 15, kTextMuted);
+
+    const bool cpuThrottle = i(ctx, kThrottleCpu) != 0;
+    const bool gpuThrottle = i(ctx, kThrottleGpu) != 0;
+    const std::string throttleText =
+        std::string(t.thermalLimit) + (cpuThrottle && gpuThrottle ? "CPU+GPU" : (cpuThrottle ? "CPU" : "GPU"));
+    if (w.compact) {  // R2: CPU / GPU °C and the fan only; the badge sits where the graph would be
+        if (cpuThrottle || gpuThrottle) {
+            strokeRounded(pen, x, y, kCardW, widgetHeight(w), 12, kDanger, 3.0);
+            drawBadge(pen, x + kInR, top + 4, throttleText, kDanger);
+        }
+        return;
+    }
 
     const double dataMin = std::fmin(h.a.minValue(), h.b.minValue());
     const double dataMax = std::fmax(h.a.maxValue(), h.b.maxValue());
@@ -808,14 +882,10 @@ void drawTemp(const Pen& pen, double x, double y, const WidgetContext& ctx, cons
                    colorOf(levelOf(v, th.tempWarnC, th.tempCritC)), 14);
     }
 
-    const bool cpuThrottle = i(ctx, kThrottleCpu) != 0;
-    const bool gpuThrottle = i(ctx, kThrottleGpu) != 0;
     if (cpuThrottle || gpuThrottle) {
         // Upstream framed the whole panel in red; Temp owns the throttle flags, so its card gets the frame
-        strokeRounded(pen, x, y, kCardW, widgetHeight(WidgetInstance {WidgetType::Temp}), 12, kDanger, 3.0);
-        drawBadge(pen, area.x + area.w - 4, area.y + 4,
-                  std::string(t.thermalLimit) + (cpuThrottle && gpuThrottle ? "CPU+GPU" : (cpuThrottle ? "CPU" : "GPU")),
-                  kDanger);
+        strokeRounded(pen, x, y, kCardW, widgetHeight(w), 12, kDanger, 3.0);
+        drawBadge(pen, area.x + area.w - 4, area.y + 4, throttleText, kDanger);
     }
 }
 
@@ -1320,12 +1390,15 @@ int batteryRowCount(const WidgetContext& ctx) {
 
 int widgetHeight(const WidgetInstance& w, const WidgetContext* ctx) {
     switch (w.type) {
-        case WidgetType::Frame:
+        // R2: Compact cards keep only their top row (Battery: % and the W line)
+        case WidgetType::Frame: return w.compact ? kGraphCardH : kFrameFullH;
         case WidgetType::GpuRam: return kGraphCardH;
-        case WidgetType::Power: return kGraphCardH + static_cast<int>(kRowH) * (kPowerRails + 1) + 10;
-        case WidgetType::Temp: return kGraphCardH + 4 * static_cast<int>(kLineH) + 8;
+        case WidgetType::Power:
+            return w.compact ? kGraphCardH : kGraphCardH + static_cast<int>(kRowH) * (kPowerRails + 1) + 10;
+        case WidgetType::Temp: return w.compact ? kGraphCardH : kGraphCardH + 4 * static_cast<int>(kLineH) + 8;
         case WidgetType::Cpu: return ctx ? measureCpu(*ctx).height : 166;
         case WidgetType::Battery:
+            if (w.compact) return kBatteryCompactH;
             return static_cast<int>(kTop) + 106 + (ctx ? batteryRowCount(*ctx) : kBatteryRows) *
                    static_cast<int>(kRowH) + 10;
         case WidgetType::CpuItems:
@@ -1351,14 +1424,20 @@ const char* widgetTitle(const WidgetInstance& w) {
 
 void drawWidgetStatic(const Pen& pen, double x, double y, const WidgetInstance& w, int heightOverride) {
     staticCard(pen, x, y, heightOverride > 0 ? heightOverride : widgetHeight(w));
-    if (hasGraph(w.type)) staticGraphBed(pen, x, y);
+    if (hasGraph(w.type) && !(w.type == WidgetType::Temp && w.compact)) staticGraphBed(pen, x, y);
+    if (w.type == WidgetType::Frame && !w.compact) staticFrameTimesBeds(pen, x, y);  // R2
     staticTitle(pen, x, y, titleOf(w));
 }
 
 void pushWidgetHistory(const WidgetInstance& w, const WidgetContext& ctx, WidgetHistory& history) {
     const double keep = std::max(1, ctx.graphSeconds);
     switch (w.type) {
-        case WidgetType::Frame: history.a.push(ctx.now, f(ctx, kFrameAppFps), keep); break;
+        case WidgetType::Frame:
+            history.a.push(ctx.now, f(ctx, kFrameAppFps), keep);
+            // R2: kept in Compact too, so turning it off shows a full graph at once
+            history.c.push(ctx.now, f(ctx, kFrameCpuMaxMs), keep);
+            history.d.push(ctx.now, f(ctx, kFrameGpuMaxMs), keep);
+            break;
         case WidgetType::GpuRam: history.a.push(ctx.now, f(ctx, kGpuBusyPct), keep); break;
         case WidgetType::Power: history.a.push(ctx.now, f(ctx, kPowerVphW), keep); break;
         case WidgetType::Temp:
@@ -1372,12 +1451,12 @@ void pushWidgetHistory(const WidgetInstance& w, const WidgetContext& ctx, Widget
 void drawWidgetDynamic(const Pen& pen, double x, double y, const WidgetInstance& w, const WidgetContext& ctx,
                        const WidgetHistory& history) {
     switch (w.type) {
-        case WidgetType::Frame: drawFrame(pen, x, y, ctx, history); break;
+        case WidgetType::Frame: drawFrame(pen, x, y, w, ctx, history); break;
         case WidgetType::Cpu: drawCpu(pen, x, y, ctx); break;
         case WidgetType::GpuRam: drawGpuRam(pen, x, y, ctx, history); break;
-        case WidgetType::Power: drawPower(pen, x, y, ctx, history); break;
-        case WidgetType::Battery: drawBattery(pen, x, y, ctx); break;
-        case WidgetType::Temp: drawTemp(pen, x, y, ctx, history); break;
+        case WidgetType::Power: drawPower(pen, x, y, w, ctx, history); break;
+        case WidgetType::Battery: drawBattery(pen, x, y, w, ctx); break;
+        case WidgetType::Temp: drawTemp(pen, x, y, w, ctx, history); break;
         case WidgetType::CpuItems:
         case WidgetType::RamItems: drawProcessList(pen, x, y, w, ctx); break;
         case WidgetType::Network: drawNetwork(pen, x, y, w, ctx); break;

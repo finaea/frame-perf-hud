@@ -103,6 +103,7 @@ if(FPH_BUILD_HEADSET)
     headset/gpu_usage.cpp
     headset/wifi_link.cpp
     headset/process_scan.cpp  # T03
+    headset/hide_rules.cpp    # R2: Hide system rules (hide_rules.json)
     headset/stream_link.cpp   # T03
     headset/dump_metrics.cpp  # T03
     headset/i18n.cpp
@@ -123,6 +124,7 @@ if(FPH_BUILD_HEADSET)
     headset/crash_recorder.cpp    # T11: the 1 Hz crash ring
     headset/power_off.cpp         # T11: the last power-off reason (qcom-pon lines, kernel journal)
     headset/session_service.cpp   # T11: session logs, Save / Record in the main loop
+    headset/profile_store.cpp     # R2: layout profiles (profiles/*.json)
     vendor/frame-updater/cpp/update_check.cpp
   )
   target_include_directories(frame-perf-hud PRIVATE headset helper third_party/openvr vendor/frame-updater/cpp)
@@ -332,13 +334,25 @@ if(BUILD_TESTING)
     add_executable(t03-sources-test
       tests/t03_sources_test.cpp
       headset/process_scan.cpp
+      headset/hide_rules.cpp
       headset/stream_link.cpp
       headset/wifi_link.cpp
     )
     target_include_directories(t03-sources-test PRIVATE headset)
     target_compile_options(t03-sources-test PRIVATE -Wall -Wextra)
-    target_link_libraries(t03-sources-test PRIVATE PkgConfig::LIBNL PkgConfig::SYSTEMD)
+    target_link_libraries(t03-sources-test PRIVATE fph-core PkgConfig::LIBNL PkgConfig::SYSTEMD)
     add_test(NAME t03-sources COMMAND t03-sources-test)
+
+    # R2 Hide system: glob / rules file / defaults vs the captured Frame process list / scanner drops hidden pids
+    add_executable(hide-rules-test
+      tests/hide_rules_test.cpp
+      headset/process_scan.cpp
+      headset/hide_rules.cpp
+    )
+    target_include_directories(hide-rules-test PRIVATE headset)
+    target_compile_options(hide-rules-test PRIVATE -Wall -Wextra)
+    target_link_libraries(hide-rules-test PRIVATE fph-core)
+    add_test(NAME hide-rules COMMAND hide-rules-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
 
     # T06: LinkServer protocol logic (fake host env), vrlink host IPs, LayoutAuthority, the "link" config key
     add_executable(link-server-test
@@ -398,7 +412,7 @@ if(BUILD_TESTING)
     add_test(NAME camera-review-fixes COMMAND camera-review-fixes-test)
 
     add_executable(camera-tile-geometry-test tests/camera_tile_geometry_test.cpp)
-    target_include_directories(camera-tile-geometry-test PRIVATE headset)
+    target_include_directories(camera-tile-geometry-test PRIVATE headset third_party/openvr)
     target_compile_options(camera-tile-geometry-test PRIVATE -Wall -Wextra)
     target_link_libraries(camera-tile-geometry-test PRIVATE fph-render)
     add_test(NAME camera-tile-geometry COMMAND camera-tile-geometry-test)
@@ -431,6 +445,20 @@ if(BUILD_TESTING)
     target_compile_options(session-service-test PRIVATE -Wall -Wextra)
     target_link_libraries(session-service-test PRIVATE fph-session PkgConfig::SYSTEMD)
     add_test(NAME session-service COMMAND session-service-test)
+
+    # R2: layout profiles (the store, with LayoutAuthority as a PC's LAYOUT_SET / Reset reach it)
+    add_executable(profile-store-test
+      tests/profile_store_test.cpp
+      headset/profile_store.cpp
+      headset/layout_authority.cpp
+      headset/config.cpp
+      headset/i18n.cpp
+      headset/paths.cpp
+    )
+    target_include_directories(profile-store-test PRIVATE headset)
+    target_compile_options(profile-store-test PRIVATE -Wall -Wextra)
+    target_link_libraries(profile-store-test PRIVATE fph-core)
+    add_test(NAME profile-store COMMAND profile-store-test)
   endif()
 endif()
 

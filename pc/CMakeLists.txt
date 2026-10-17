@@ -65,6 +65,8 @@ if(BUILD_TESTING)
     target_link_libraries(${test_target} PRIVATE fph-pc-lib)
     add_test(NAME ${test_target} COMMAND ${test_target})
   endforeach()
+  # FPH_PNG_DIR: pc-editor-test also writes screenshots of the palette and the cards
+  target_compile_definitions(pc-editor-test PRIVATE FPH_FONT_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
 endif()
 
 # pc\build.cmd builds this: the exe and the PC tests (core's tests still pass -Wall -Wextra unguarded, which cl rejects)

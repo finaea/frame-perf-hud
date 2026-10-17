@@ -1,5 +1,7 @@
 #include "process_scan.h"
 
+#include "hide_rules.h"
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -155,19 +157,73 @@ const ProcessLists& ProcessScanner::scan(double now, const ProcessListOptions& o
     }
 
     lists.cpuValid = haveInterval && dir != nullptr;
-    if (lists.cpuValid) lists.byCpu = topRows(rows, options.sumSameName, options.cpuMax, true);
+    // R2: Hide system drops what the rules name before ranking, so the list still fills its rows
+    const bool hiding = hideRules_ != nullptr && (options.cpuHideSystem || options.ramHideSystem);
+    std::vector<ProcessRow> visible;
+    if (hiding) {
+        hideRules_->refresh(now);
+        visible = rows;
+        dropHidden(visible, current);
+    }
+    if (lists.cpuValid) {
+        lists.byCpu = topRows(hiding && options.cpuHideSystem ? visible : rows, options.sumSameName, options.cpuMax, true);
+    }
     const bool ramSum = options.ramSumSameName < 0 ? options.sumSameName : options.ramSumSameName != 0;
-    lists.byRam = topRows(std::move(rows), ramSum, options.ramMax, false);
+    lists.byRam = topRows(hiding && options.ramHideSystem ? std::move(visible) : std::move(rows), ramSum, options.ramMax,
+                          false);
     fillExeNames(lists.byCpu, current);
     fillExeNames(lists.byRam, current);
     for (auto it = exeNames_.begin(); it != exeNames_.end();) {
         it = current.count(it->first) != 0 ? std::next(it) : exeNames_.erase(it);
+    }
+    for (auto it = hidden_.begin(); it != hidden_.end();) {
+        it = current.count(it->first) != 0 ? std::next(it) : hidden_.erase(it);
     }
     previous_ = std::move(current);
     previousTime_ = dir != nullptr ? now : -1.0;
     lists.scanMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wallStart).count();
     lists_ = std::move(lists);
     return lists_;
+}
+
+void ProcessScanner::dropHidden(std::vector<ProcessRow>& rows, const std::unordered_map<int, Previous>& current) {
+    char path[512];
+    char buffer[4096];
+    const uint64_t generation = hideRules_->generation();
+    rows.erase(std::remove_if(rows.begin(), rows.end(), [&](const ProcessRow& row) {
+        const auto cur = current.find(row.pid);
+        const uint64_t start = cur != current.end() ? cur->second.starttime : 0;
+        auto it = hidden_.find(row.pid);
+        if (it == hidden_.end() || it->second.starttime != start || it->second.comm != row.name) {
+            // New process (or it exec'd): its cgroup and exe, once. Unreadable (it exited, another user's exe) = ""
+            Hidden h;
+            h.starttime = start;
+            h.comm = row.name;
+            std::snprintf(path, sizeof(path), "%s/%d/cgroup", root_.c_str(), row.pid);
+            const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+            if (fd >= 0) {
+                const ssize_t n = ::read(fd, buffer, sizeof(buffer));
+                ::close(fd);
+                if (n > 0) h.cgroup = cgroupV2Path(std::string(buffer, static_cast<size_t>(n)));
+            }
+            std::snprintf(path, sizeof(path), "%s/%d/exe", root_.c_str(), row.pid);
+            const ssize_t n = ::readlink(path, buffer, sizeof(buffer) - 1);
+            if (n > 0) {
+                std::string full(buffer, static_cast<size_t>(n));
+                const std::string deleted = " (deleted)";
+                if (full.size() > deleted.size() && full.compare(full.size() - deleted.size(), deleted.size(), deleted) == 0)
+                    full.resize(full.size() - deleted.size());
+                h.exe = full.substr(full.find_last_of('/') + 1);
+            }
+            it = hidden_.insert_or_assign(row.pid, std::move(h)).first;
+        }
+        Hidden& h = it->second;
+        if (h.generation != generation) {
+            h.hidden = hideRules_->hides(row.name, h.exe, h.cgroup);
+            h.generation = generation;
+        }
+        return h.hidden;
+    }), rows.end());
 }
 
 void ProcessScanner::fillExeNames(std::vector<ProcessRow>& rows, const std::unordered_map<int, Previous>& current) {
@@ -178,7 +234,7 @@ void ProcessScanner::fillExeNames(std::vector<ProcessRow>& rows, const std::unor
         const auto cur = current.find(row.pid);
         const uint64_t start = cur != current.end() ? cur->second.starttime : 0;
         auto it = exeNames_.find(row.pid);
-        if (it == exeNames_.end() || it->second.starttime != start) {
+        if (it == exeNames_.end() || it->second.starttime != start || it->second.comm != row.name) {
             // Only our own processes' exe links are readable (others: EACCES), and kernel threads have none
             std::snprintf(path, sizeof(path), "%s/%d/exe", root_.c_str(), row.pid);
             const ssize_t n = ::readlink(path, target, sizeof(target) - 1);
@@ -191,7 +247,7 @@ void ProcessScanner::fillExeNames(std::vector<ProcessRow>& rows, const std::unor
                 }
                 name = full.substr(full.find_last_of('/') + 1);
             }
-            it = exeNames_.insert_or_assign(row.pid, ExeName {start, name}).first;
+            it = exeNames_.insert_or_assign(row.pid, ExeName {start, row.name, name}).first;
         }
         row.exe = it->second.name;
     }

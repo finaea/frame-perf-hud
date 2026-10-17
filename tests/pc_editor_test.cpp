@@ -6,7 +6,17 @@
 #include "grid_renderer.h"
 #include "layout.h"
 
+#include "metric_registry.h"
+#include "metric_store.h"
+
+#include <cairo.h>
+
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
 
 using namespace fph;
 using namespace fph::pc;
@@ -154,9 +164,164 @@ void testSyncCancelsHeldDrag() {
     check(!e.takeCommit(baseVersion, edited), "no commit after a cancelled drag");
 }
 
+bool has(const PcEditor& e, PcEditor::Setting s) {
+    for (const auto& b : e.settingButtons()) {
+        if (b.first == s) return true;
+    }
+    return false;
+}
+
+/** Presses a setting button. @return true if a commit was queued (its layout in `edited`) */
+bool press(PcEditor& e, PcEditor::Setting s, Layout& edited) {
+    for (const auto& b : e.settingButtons()) {
+        if (b.first != s) continue;
+        const double x = b.second.x + b.second.w / 2, y = b.second.y + b.second.h / 2;
+        e.pointerDown(x, y);
+        e.pointerUp(x, y);
+        uint32_t baseVersion = 0;
+        return e.takeCommit(baseVersion, edited);
+    }
+    return false;
+}
+
+// R2: Compact buttons (Frame, Power, Battery, Temp) and Hide system buttons (lists)
+void testCompactAndHideSystemButtons() {
+    using S = PcEditor::Setting;
+    Layout l;
+    l.version = 1;
+    l.columns.resize(1);
+    l.columns[0].widgets = {make(WidgetType::Frame),     make(WidgetType::Power),   make(WidgetType::Battery),
+                            make(WidgetType::Temp),      make(WidgetType::Streaming), make(WidgetType::Cpu),
+                            make(WidgetType::Network),   make(WidgetType::CpuItems), make(WidgetType::RamItems)};
+    PcEditor e;
+    attach(e, l);
+    const Box card = {5000, 0, 400, 3000};
+    for (int i = 0; i < 9; ++i) {
+        e.select({0, i});
+        const WidgetType type = l.columns[0].widgets[static_cast<size_t>(i)].type;
+        const bool wantCompact = type == WidgetType::Frame || type == WidgetType::Power ||
+                                 type == WidgetType::Battery || type == WidgetType::Temp;
+        const bool wantHide = type == WidgetType::CpuItems || type == WidgetType::RamItems;
+        check(has(e, S::CompactOn) == wantCompact && has(e, S::CompactOff) == wantCompact,
+              "Compact buttons only for Frame/Power/Battery/Temp");
+        check(has(e, S::HideSystemOn) == wantHide && has(e, S::HideSystemOff) == wantHide,
+              "Hide system buttons only for lists");
+        double chipsBottom = 0;
+        for (const auto& c : e.chips()) chipsBottom = std::max(chipsBottom, c.second.y + c.second.h);
+        for (const auto& b : e.settingButtons()) {
+            check(b.second.x >= card.x && b.second.x + b.second.w <= card.x + card.w && b.second.y >= chipsBottom &&
+                      b.second.y + b.second.h <= card.y + card.h,
+                  "setting button inside the palette card, below the chips");
+        }
+    }
+
+    // Frame: Remove + CompactOn + CompactOff; pressing flips only `compact`
+    e.select({0, 0});
+    check(e.settingButtons().size() == 3, "Frame has Remove + CompactOn + CompactOff");
+    Layout edited;
+    check(press(e, S::CompactOn, edited), "Compact On queued a commit");
+    Layout want = l;
+    want.columns[0].widgets[0].compact = true;
+    check(edited.sameWidgets(want), "Compact On changed only compact");
+
+    // CPU items: Hide system On flips only hideSystem
+    PcEditor e2;
+    attach(e2, l);
+    e2.select({0, 7});
+    check(press(e2, S::HideSystemOn, edited), "Hide system On queued a commit");
+    want = l;
+    want.columns[0].widgets[7].hideSystem = true;
+    check(edited.sameWidgets(want), "Hide system On changed only hideSystem");
+}
+
+#ifdef FPH_FONT_DIR
+// Screenshots, only when FPH_PNG_DIR is set (the PC app can't be launched twice, so this is how they're seen).
+void writeScreens(const char* dir) {
+    FontSet fonts;
+    fonts.load(FPH_FONT_DIR "/NotoSans-Regular.ttf", FPH_FONT_DIR "/NotoSans-Bold.ttf");
+    const std::string out = dir;
+
+    for (const bool compact : {false, true}) {
+        Layout l;
+        l.columns.resize(2);
+        WidgetInstance frame = make(WidgetType::Frame), power = make(WidgetType::Power),
+                       battery = make(WidgetType::Battery), temp = make(WidgetType::Temp);
+        frame.compact = power.compact = battery.compact = temp.compact = compact;
+        l.columns[0].widgets = {frame, power};
+        l.columns[1].widgets = {temp, battery};
+        GridRenderer renderer(fonts);
+        renderer.setLayout(l);
+        for (int i = 0; i < 12; ++i) {
+            const double now = 100.0 + i;
+            const double wob = 1.0 + 0.15 * std::sin(i * 0.9);
+            MetricStore s;
+            s.setF32(metric::kFrameAppFps, 72 * wob, now);
+            s.setF32(metric::kFrameDisplayHz, 90, now);
+            s.setF32(metric::kFrameCpuMs, 5 * wob, now);
+            s.setF32(metric::kFrameGpuMs, 7 * wob, now);
+            s.setF32(metric::kFrameCpuMaxMs, 9 * wob + (i == 7 ? 8 : 0), now);
+            s.setF32(metric::kFrameGpuMaxMs, 11 * wob, now);
+            s.setF32(metric::kPowerVphW, 9 * wob, now);
+            s.setF32(metric::kTempCpuC, 52 * wob, now);
+            s.setF32(metric::kTempGpuC, 55 * wob, now);
+            s.setF32(metric::kBatteryPct, 64, now);
+            WidgetContext ctx;
+            ctx.store = &s;
+            ctx.now = now;
+            renderer.render(ctx);
+        }
+        renderer.writePng(out + (compact ? "/pc_compact.png" : "/pc_full.png"));
+    }
+
+    // the palette with a selection: Frame (Compact row), CPU usage items (Rows / One row per name / Hide system)
+    for (const bool frame : {true, false}) {
+        const Layout l = base(1);
+        PcEditor e;
+        e.sync(l, layoutGrid(l));
+        PcEditor::View v;
+        v.viewport = {8, 48, 540, 700};
+        v.layoutCard = {0, 0, 556, 760};
+        v.paletteCard = {570, 0, PcEditor::paletteWidth(1.0), 760};
+        v.originX = 20;
+        v.originY = 56;
+        v.ui = 1.0;
+        e.setView(v);
+        e.select(frame ? WidgetRef{0, 0} : WidgetRef{0, 1});
+        const int w = static_cast<int>(v.paletteCard.x + v.paletteCard.w) + 10;
+        cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, 770);
+        cairo_t* cr = cairo_create(surface);
+        cairo_set_source_rgb(cr, 0.07, 0.07, 0.08);
+        cairo_paint(cr);
+        const Pen pen {cr, &fonts};
+        e.drawUnderPanel(pen);
+        GridRenderer renderer(fonts);
+        renderer.setLayout(l);
+        MetricStore s;
+        WidgetContext ctx;
+        ctx.store = &s;
+        ctx.now = 100;
+        renderer.render(ctx);
+        cairo_surface_t* panel = cairo_image_surface_create_for_data(
+            const_cast<uint8_t*>(renderer.pixels()), CAIRO_FORMAT_ARGB32, renderer.geometry().textureWidth,
+            renderer.geometry().textureHeight, renderer.geometry().textureWidth * 4);
+        cairo_set_source_surface(cr, panel, v.originX, v.originY);
+        cairo_paint(cr);
+        cairo_surface_destroy(panel);
+        e.drawOverPanel(pen);
+        cairo_surface_write_to_png(surface, (out + (frame ? "/pc_editor_frame.png" : "/pc_editor_cpu_items.png")).c_str());
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+    }
+}
+#endif
+
 }  // namespace
 
 int main() {
+    testCompactAndHideSystemButtons();
+#ifdef FPH_FONT_DIR
+    if (const char* dir = std::getenv("FPH_PNG_DIR"); dir != nullptr && dir[0] != '\0') writeScreens(dir);
+#endif
     testSelectionFollowsInstance();
     testOwnEditKeepsSelection();
     testSyncCancelsHeldDrag();

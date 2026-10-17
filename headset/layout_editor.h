@@ -98,7 +98,9 @@ public:
     enum class Setting {
         Remove, RowsDown, RowsUp, SameNameOn, SameNameOff, AdapterDongle, AdapterHome,
         Camera0, Camera1, Camera2, Camera3, FullSizeToggle,  // T10 Headset camera
-        FpsDown, FpsUp                                       // T10 both camera widgets
+        FpsDown, FpsUp,                                      // T10 both camera widgets
+        CompactOn, CompactOff,                               // R2 Frame, Power, Battery, Temp
+        HideSystemOn, HideSystemOff                          // R2 process lists (third row)
     };
     const std::vector<std::pair<Setting, EditorRect>>& settingButtons() const { return settings_; }
 

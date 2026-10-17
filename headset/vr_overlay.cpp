@@ -1,6 +1,7 @@
 // OpenVR との接続とオーバーレイの実装。
 #include "vr_overlay.h"
 
+#include "camera_tile_geometry.h"  // R2: overlayCurvature
 #include "detached.h"  // T05
 #include "openvr.h"
 #include "placement.h"
@@ -168,6 +169,7 @@ VrOverlay::ConnectResult VrOverlay::connect(int panelWidth, int panelHeight, int
     wristDeviceCheckedAt_ = -1.0;
     panelInteractive_ = false;  // T05: a new overlay's input method is None
     appliedDetached_ = DetachedPose {};
+    appliedCurvature_ = 0.0f;  // R2: a new overlay is flat
     // 新しいオーバーレイはテクスチャの全部を使う（SetOverlayTextureBounds の既定）
     panelTextureHeight_ = panelHeight;
     panelVisibleHeight_ = panelHeight;
@@ -360,6 +362,9 @@ void VrOverlay::updatePlacement(const Config& config, double now) {
         return;
     }
     vr::IVROverlay* overlay = vr::VROverlay();
+    // R2: only the Detached HUD curves; head and wrist stay flat
+    curveRadiusM_ = config.attachment == Attachment::Detached ? detachedCurveRadiusM(config.detachedCurve) : 0.0;
+    applyCurvature();
     // T05: Detached = a fixed standing-space pose. Without one (never placed), it stays hidden until it's placed
     if (config.attachment == Attachment::Detached) {
         bool shown = config.visible && config.detachedPose.valid;
@@ -568,6 +573,14 @@ VrEvents VrOverlay::pollEvents(bool includeSystem) {
                     std::fprintf(stderr, "[VR] dashboard \"Close\" pressed\n");
                     result.closeRequested = true;
                     break;
+                case vr::VREvent_KeyboardDone: {  // R2: a profile name
+                    char text[256] = {};
+                    vr::VROverlay()->GetKeyboardText(text, sizeof(text));
+                    result.keyboardDone = true;
+                    result.keyboardText = text;
+                    break;
+                }
+                case vr::VREvent_KeyboardClosed: result.keyboardClosed = true; break;
                 default: break;
             }
         }
@@ -849,6 +862,7 @@ bool VrOverlay::submitPanel(const uint8_t* rgba, int width, int height, int colu
         panelColumns_ = std::max(1, columns);
         checkOverlay("SetOverlayWidthInMeters", vr::VROverlay()->SetOverlayWidthInMeters(
                                                     panelHandle_, static_cast<float>(configWidthM_ * panelColumns_)));
+        applyCurvature();  // R2: same radius, new width
     }
     notePlacement();  // T10: a new texture size / column count moves the camera tiles
     const bool ok = panelTexture_->update(panelHandle_, rgba, message);
@@ -890,6 +904,18 @@ void VrOverlay::setDetachedTransform(const DetachedPose& pose) {
     }
 }
 
+void VrOverlay::applyCurvature() {
+    if (!connected_ || panelHandle_ == 0) return;
+    const float curvature = camtiles::overlayCurvature(configWidthM_ * panelColumns_, curveRadiusM_);
+    if (curvature == appliedCurvature_) return;
+    const vr::EVROverlayError error = vr::VROverlay()->SetOverlayCurvature(panelHandle_, curvature);
+    std::fprintf(stderr, "[VR] SetOverlayCurvature(%.3f, radius %.2f m) -> %s\n", curvature, curveRadiusM_,
+                 overlayErrorName(error));
+    if (error != vr::VROverlayError_None) return;  // the next updatePlacement tries again
+    appliedCurvature_ = curvature;
+    notePlacement();  // the camera tiles bend with it
+}
+
 void VrOverlay::notePlacement() {
     if (!cameras_) return;
     PanelPlacement p;
@@ -902,19 +928,38 @@ void VrOverlay::notePlacement() {
     p.widthM = static_cast<float>(configWidthM_ * panelColumns_);
     p.textureWidth = panelTextureWidth_;
     p.visibleHeight = panelVisibleHeight_;
+    p.curvature = appliedCurvature_;  // R2
     const bool same = p.valid == placement_.valid && p.shown == placement_.shown &&
                       std::fabs(p.alpha - placement_.alpha) < 0.002f && p.absolute == placement_.absolute &&
                       p.device == placement_.device && std::memcmp(&p.transform, &placement_.transform, sizeof(p.transform)) == 0 &&
                       p.widthM == placement_.widthM && p.textureWidth == placement_.textureWidth &&
-                      p.visibleHeight == placement_.visibleHeight;
+                      p.visibleHeight == placement_.visibleHeight && p.curvature == placement_.curvature;
     if (same) return;
     const bool samePose = p.valid == placement_.valid && p.absolute == placement_.absolute && p.device == placement_.device &&
                           std::memcmp(&p.transform, &placement_.transform, sizeof(p.transform)) == 0 &&
-                          p.widthM == placement_.widthM && p.visibleHeight == placement_.visibleHeight;
+                          p.widthM == placement_.widthM && p.visibleHeight == placement_.visibleHeight &&
+                          p.curvature == placement_.curvature;
     p.revision = placement_.revision + 1;
     p.poseRevision = placement_.poseRevision + (samePose ? 0 : 1);  // a wrist fade only changes alpha
     placement_ = p;
     cameras_->follow(placement_);
+}
+
+bool VrOverlay::showKeyboard(const std::string& description, const std::string& existing, uint32_t maxChars,
+                             std::string& error) {
+    if (!connected_ || dashboardHandle_ == 0) {
+        error = "no dashboard tab";
+        return false;
+    }
+    const vr::EVROverlayError e = vr::VROverlay()->ShowKeyboardForOverlay(
+        dashboardHandle_, vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine,
+        vr::KeyboardFlag_Modal, description.c_str(), maxChars, existing.c_str(), 0);
+    std::fprintf(stderr, "[VR] ShowKeyboardForOverlay -> %s\n", overlayErrorName(e));
+    if (e != vr::VROverlayError_None) {
+        error = overlayErrorName(e);
+        return false;
+    }
+    return true;
 }
 
 bool VrOverlay::submitSettings(const uint8_t* rgba) {

@@ -20,7 +20,9 @@
 #include "camera_tile_geometry.h"  // T10
 #include "metric_store.h"
 #include "paths.h"
+#include "hide_rules.h"  // R2
 #include "scheduler.h"
+#include "profile_store.h"  // R2
 #include "sensor_bridge.h"
 #include "session_service.h"  // T11
 #include "settings_panel.h"
@@ -107,6 +109,8 @@ struct Options {
     std::string previewUpdate;           ///< --dump-settings-png: draw the update check in this state
     std::string previewPage;             ///< T05 --dump-settings-png: "layout" (default) or "placement"
     std::string previewPc;               ///< T05 --dump-settings-png: draw the pairing banner for this PC name
+    int previewSelectColumn = -1;        ///< R2 --dump-settings-png --preview-page layout: tap this card first
+    int previewSelectIndex = -1;
     bool fakeFrames = false;
     bool fakeWarnings = false;
     double fakeFps = 0.0;
@@ -236,8 +240,9 @@ void printUsage() {
         "      --preview-autostart S  draw autostart in this state (enabled / disabled / notinstalled / busy / failed)\n"
         "      --preview-update S     draw the update check in this state (uptodate / checking / available / manual /\n"
         "                             confirm / installing / installed / checkfailed / installfailed; default uptodate)\n"
-        "      --preview-page P       layout (default), placement or logs\n"
+        "      --preview-page P       placement (default), layout, profiles or logs\n"
         "      --preview-pc NAME      draw the \"PC wants to connect\" banner for NAME\n"
+        "      --preview-select C,I   with --preview-page layout: select the card at column C, index I (from 0)\n"
         "  --config PATH        config file (default ~/.config/frame-perf-hud/config.json)\n"
         "  --verbose            while running as an overlay, log the values every few seconds\n"
         "  --force-settings-visible  diagnostics: run as if the dashboard tab were visible (to measure the cost)\n"
@@ -333,6 +338,11 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.previewPage = argv[++i];
         } else if (arg == "--preview-pc" && hasNext) {  // T05
             options.previewPc = argv[++i];
+        } else if (arg == "--preview-select" && hasNext) {  // R2
+            if (std::sscanf(argv[++i], "%d,%d", &options.previewSelectColumn, &options.previewSelectIndex) != 2) {
+                std::fprintf(stderr, "--preview-select wants COLUMN,INDEX (from 0)\n");
+                return false;
+            }
         } else if (arg == "--contrast-report") {
             options.mode = Options::Mode::ContrastReport;
         } else if (arg == "--force-settings-visible") {
@@ -652,6 +662,12 @@ std::string cameraDebugText(const CameraService& cameras, VrOverlay& vr) {
     return text;
 }
 
+/** R2: hide_rules.json, next to config.json */
+std::string hideRulesPath(const std::string& configPath) {
+    const size_t slash = configPath.find_last_of('/');
+    return (slash == std::string::npos ? std::string(".") : configPath.substr(0, slash)) + "/hide_rules.json";
+}
+
 /** T04: applies a layout to the scheduler (which widgets are on) and the process scan (list sizes). */
 void applyLayout(const fph::Layout& layout, fph::Scheduler& scheduler, SensorBridge& bridge) {
     scheduler.setEnabledWidgets(fph::enabledWidgets(layout));
@@ -695,6 +711,8 @@ int runDumpPng(const Options& options) {
     fph::MetricStore store;
     fph::Scheduler scheduler;
     SensorBridge bridge(sensors, nullptr, store);
+    HideRules hideRules(hideRulesPath(options.configPath));  // R2: read only here (no first-run write)
+    bridge.setHideRules(&hideRules);
     bridge.registerSources(scheduler);
     applyLayout(layout, scheduler, bridge);
     scheduler.setDemand(offlineDemand());
@@ -781,6 +799,16 @@ int runDumpSettingsPng(const Options& options) {
     if (options.previewUpdate == "confirm") panel.armUpdateConfirmForPreview();
     // T05: which page, and a pending PC's banner
     if (options.previewPage == "placement") panel.showPage(SettingsPage::Placement);
+    if (options.previewPage == "layout") panel.showPage(SettingsPage::Layout);  // R2: the tab opens on Placement now
+    ProfilesUiState profilesView;  // R2: --preview-page profiles shows made-up profiles
+    if (options.previewPage == "profiles") {
+        panel.showPage(SettingsPage::Profiles);
+        profilesView.items = {{"profile-1", "Standalone"}, {"profile-2", "PC streaming"}, {"profile-3", "Minimal"}};
+        profilesView.activeId = "profile-2";
+        profilesView.unsaved = true;
+        profilesView.status = "Saved to PC streaming";
+        panel.selectProfile("profile-2");
+    }
     LogsUiState logs;  // T11: --preview-page logs shows made-up states
     if (options.previewPage == "logs") {
         panel.showPage(SettingsPage::Logs);
@@ -799,7 +827,17 @@ int runDumpSettingsPng(const Options& options) {
         link.pending.push_back({"00112233445566778899aabbccddeeff", options.previewPc});
         link.knownPcs = 2;
     }
-    panel.render(config, autostartView, updateView, link, logs);
+    panel.render(config, autostartView, updateView, link, logs, profilesView);
+    if (options.previewPage == "layout" && options.previewSelectColumn >= 0) {
+        // R2: tap a card so the palette shows its settings (the first render synced the editor's cards)
+        for (const LayoutEditor::CardBox& card : panel.editor().cards()) {
+            if (card.ref.column != options.previewSelectColumn || card.ref.index != options.previewSelectIndex) continue;
+            const double x = card.rect.x + card.rect.w / 2, y = card.rect.y + card.rect.h / 2;
+            panel.pointerDown(x, y, 0.0);
+            panel.pointerUp(x, y);
+            panel.render(config, autostartView, updateView, link, logs, profilesView);
+        }
+    }
     if (!panel.writePng(options.pngPath)) {
         std::fprintf(stderr, "Couldn't write the PNG: %s\n", options.pngPath.c_str());
         return 1;
@@ -1102,6 +1140,14 @@ int runOverlay(const Options& options) {
     fph::MetricStore store;
     fph::Scheduler scheduler;
     SensorBridge bridge(sensors, &vr, store);
+    // R2: Hide system's rules: the built-in list is written once if the file is missing; edits are picked up live
+    HideRules hideRules(hideRulesPath(options.configPath));
+    {
+        std::string error;
+        if (!hideRules.seedIfMissing(error))
+            std::fprintf(stderr, "[hide] Couldn't write %s: %s\n", hideRules.path().c_str(), error.c_str());
+    }
+    bridge.setHideRules(&hideRules);
     bridge.registerSources(scheduler);
     applyLayout(config.layout, scheduler, bridge);  // T04: a widget off in the layout reads nothing
     // T06: every live layout edit (LAYOUT_SET from a PC, the dashboard editor's drop) is a compare-and-set here
@@ -1118,6 +1164,111 @@ int runOverlay(const Options& options) {
     sessions.start(config.crashRecorder, store, nowSeconds());
     scheduler.setPinnedSources(sessions.pinnedSources());
     bool crashRecorderApplied = config.crashRecorder;
+    // R2: layout profiles, in profiles/ next to the config file. Read once here; written only on a button press
+    const size_t configSlash = watcher.path().find_last_of('/');  // "--config config.json" has no folder: "."
+    const std::string configDir = configSlash == std::string::npos ? "." : watcher.path().substr(0, configSlash);
+    ProfileStore profiles(configDir + "/profiles");
+    {
+        std::vector<std::string> warnings;
+        profiles.load(warnings);
+        for (const std::string& w : warnings) std::fprintf(stderr, "[profiles] %s\n", w.c_str());
+        std::fprintf(stderr, "[profiles] %zu profile(s) in %s, active \"%s\"\n", profiles.profiles().size(),
+                     profiles.dir().c_str(), config.activeProfile.c_str());
+    }
+    ProfilesUiState profilesUi;
+    std::string profileStatus;  // the last action's result, shown on the page
+    std::string pendingRename;  // the profile SteamVR's keyboard is open for
+    /** Rebuilds the Profiles page's state. @return true if it changed (redraw) */
+    const auto refreshProfilesUi = [&]() {
+        ProfilesUiState next;
+        for (const Profile& p : profiles.profiles()) next.items.push_back({p.id, p.name});
+        const Profile* active = profiles.find(config.activeProfile);
+        next.activeId = active != nullptr ? active->id : std::string();
+        next.unsaved = profiles.unsaved(config.layout, config.activeProfile);  // also after a PC's edit
+        next.maxProfiles = ProfileStore::kMaxProfiles;
+        next.status = profileStatus;
+        const bool same = next.activeId == profilesUi.activeId && next.unsaved == profilesUi.unsaved &&
+                          next.status == profilesUi.status && next.items.size() == profilesUi.items.size() &&
+                          std::equal(next.items.begin(), next.items.end(), profilesUi.items.begin(),
+                                     [](const ProfilesUiState::Item& a, const ProfilesUiState::Item& b) {
+                                         return a.id == b.id && a.name == b.name;
+                                     });
+        if (same) return false;
+        next.revision = profilesUi.revision + 1;
+        profilesUi = next;
+        return true;
+    };
+    refreshProfilesUi();
+    /** The Profiles page's buttons (Use, Save, ... on the selected / active profile). Writes only here. */
+    const auto handleProfileAction = [&](SettingsAction action, const std::string& selectedId) {
+        std::string error;
+        const Profile* selected = profiles.find(selectedId);
+        const std::string selectedName = selected != nullptr ? selected->name : std::string();
+        /** The live layout -> target, through the same compare-and-set as an edit (the PC follows) */
+        const auto setLive = [&](const fph::Layout& target, const std::string& activeAfter) {
+            const std::string before = config.activeProfile;
+            config.activeProfile = activeAfter;  // saved with the layout in one write
+            const LayoutAuthority::Result r = layoutAuthority.trySetLayout(config.layout.version, target);
+            if (!r.applied()) config.activeProfile = before;
+            error = r.error;
+            return r.applied();
+        };
+        switch (action) {
+            case SettingsAction::ProfileNew: {
+                std::string id;
+                if (profiles.create(config.layout, id, error)) {
+                    config.activeProfile = id;
+                    if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
+                    settings.selectProfile(id);
+                    profileStatus = "Saved as " + profiles.find(id)->name;
+                } else {
+                    profileStatus = "Couldn't save a new profile: " + error;
+                }
+                break;
+            }
+            case SettingsAction::ProfileUse:
+                if (selected == nullptr) break;
+                profileStatus = setLive(selected->layout, selected->id) ? "Using " + selectedName
+                                                                        : "Couldn't use " + selectedName + ": " + error;
+                break;
+            case SettingsAction::ProfileSave: {
+                const Profile* active = profiles.find(config.activeProfile);
+                if (active == nullptr) break;
+                const std::string name = active->name;
+                profileStatus = profiles.save(active->id, config.layout, error) ? "Saved to " + name
+                                                                                : "Couldn't save " + name + ": " + error;
+                break;
+            }
+            case SettingsAction::ProfileRename:
+                if (selected == nullptr) break;
+                if (vr.showKeyboard(uiText(config.language).profileKeyboard, selectedName,
+                                    static_cast<uint32_t>(ProfileStore::kMaxNameBytes), error)) {
+                    pendingRename = selected->id;
+                    profileStatus.clear();
+                } else {
+                    profileStatus = "The keyboard didn't open: " + error;
+                }
+                break;
+            case SettingsAction::ProfileDelete:
+                if (selected == nullptr) break;
+                if (profiles.remove(selectedId, error)) {
+                    profileStatus = "Deleted " + selectedName;
+                    if (config.activeProfile == selectedId) {
+                        config.activeProfile.clear();
+                        if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
+                    }
+                } else {
+                    profileStatus = "Couldn't delete " + selectedName + ": " + error;
+                }
+                break;
+            case SettingsAction::ProfileReset:  // saved profiles stay as they are until Save
+                profileStatus = setLive(fph::defaultLayout(), config.activeProfile) ? "Layout reset to the default"
+                                                                                    : "Couldn't reset: " + error;
+                break;
+            default: break;
+        }
+        std::fprintf(stderr, "[profiles] %s\n", profileStatus.c_str());
+    };
     std::fprintf(stderr, "[layout] version %u, %zu widget(s) in %zu column(s), panel %dx%d\n", config.layout.version,
                  fph::enabledWidgets(config.layout).size(), config.layout.columns.size(),
                  renderer.geometry().textureWidth, renderer.geometry().textureHeight);
@@ -1245,6 +1396,17 @@ int runOverlay(const Options& options) {
         // is the user quitting, like Quit on the tab: exit code 3, so systemd doesn't restart us
         if (events.quit) break;
         if (events.sceneAppChanged) bridge.refreshSceneApp(loopStart);  // T03
+        // R2: the keyboard opened by Rename on the Profiles page
+        if (events.keyboardDone && !pendingRename.empty()) {
+            std::string error;
+            const std::string id = pendingRename;
+            pendingRename.clear();
+            profileStatus = profiles.rename(id, events.keyboardText, error) ? "Renamed to " + profiles.find(id)->name
+                                                                            : "Couldn't rename: " + error;
+            std::fprintf(stderr, "[profiles] %s\n", profileStatus.c_str());
+            settingsDirty |= refreshProfilesUi();
+        }
+        if (events.keyboardClosed) pendingRename.clear();
         if (events.closeRequested) {
             std::fprintf(stderr, "[VR] Closed from the dashboard; exiting\n");
             userQuit = true;
@@ -1276,6 +1438,9 @@ int runOverlay(const Options& options) {
                     break;
                 }
                 case PointerInput::Type::Down: {
+                    // R2: the two-tap rule needs "unsaved" as of now, not as of the last draw (a PC's edit may have
+                    // arrived since)
+                    settings.setProfilesUnsaved(profiles.unsaved(config.layout, config.activeProfile));
                     const SettingsAction action = settings.pointerDown(input.x, input.y, nowSeconds());
                     if (action == SettingsAction::Quit) {
                         std::fprintf(stderr, "[VR] Quit on the dashboard tab; exiting\n");
@@ -1304,6 +1469,10 @@ int runOverlay(const Options& options) {
                         sessions.setRecord(action == SettingsAction::RecordOn, bridge.session(), nowSeconds());
                     } else if (action == SettingsAction::SaveNow) {  // T11
                         sessions.save(bridge.session(), nowSeconds());
+                    } else if (action >= SettingsAction::ProfileNew && action <= SettingsAction::ProfileReset) {  // R2
+                        handleProfileAction(action, settings.selectedProfileId());
+                        refreshProfilesUi();
+                        nextPanel = std::min(nextPanel, nowSeconds());  // a new layout shows on the HUD now
                     } else {
                         handleSettingsAction(action, config, watcher, vr, settings.angleStepDeg());
                     }
@@ -1394,6 +1563,8 @@ int runOverlay(const Options& options) {
                 linkUiRevision = linkRevision;
                 settingsDirty = true;
             }
+            // R2: the Profiles page ("unsaved changes" after any edit, the headset's or a PC's)
+            settingsDirty |= refreshProfilesUi();
             // T11: the Logs page (Record's clock, a saved session's card, ...)
             if (sessions.ui().revision != logsUiRevision) {
                 logsUiRevision = sessions.ui().revision;
@@ -1447,7 +1618,7 @@ int runOverlay(const Options& options) {
         if (settingsVisible) settingsDirty |= settings.syncLayout(config.layout);
         if (settingsVisible && (settingsDirty || !settingsWasVisible)) {
             settings.render(config, autostart.status(), updater.status(), linkService.server().uiState(),
-                            sessions.ui());  // T05, T11
+                            sessions.ui(), profilesUi);  // T05, T11, R2
             vr.submitSettings(settings.toRgba().data());
             settingsDirty = false;
         }

@@ -160,6 +160,12 @@ void PcEditor::relayout() {
         settings_.push_back({Setting::RowsUp, {controlX + controlW - step, rowA, step, kRowH * u}});
         settings_.push_back({Setting::SameNameOn, {controlX, rowB, controlW / 2, kRowH * u}});
         settings_.push_back({Setting::SameNameOff, {controlX + controlW / 2, rowB, controlW / 2, kRowH * u}});
+        const double rowC = rowB + (kRowH + kRowGap) * u;  // R2
+        settings_.push_back({Setting::HideSystemOn, {controlX, rowC, controlW / 2, kRowH * u}});
+        settings_.push_back({Setting::HideSystemOff, {controlX + controlW / 2, rowC, controlW / 2, kRowH * u}});
+    } else if (hasCompactView(w->type)) {  // R2
+        settings_.push_back({Setting::CompactOn, {controlX, rowA, controlW / 2, kRowH * u}});
+        settings_.push_back({Setting::CompactOff, {controlX + controlW / 2, rowA, controlW / 2, kRowH * u}});
     } else if (w->type == WidgetType::Network) {
         settings_.push_back({Setting::AdapterDongle, {controlX, rowA, controlW / 2, kRowH * u}});
         settings_.push_back({Setting::AdapterHome, {controlX + controlW / 2, rowA, controlW / 2, kRowH * u}});
@@ -288,6 +294,10 @@ void PcEditor::applySetting(Setting setting) {
         case Setting::FullSizeToggle: e.cameraFullSize = !e.cameraFullSize; break;
         case Setting::FpsDown: e.cameraFps = cameraFpsStep(e.cameraFps, -1, e.type); break;
         case Setting::FpsUp: e.cameraFps = cameraFpsStep(e.cameraFps, +1, e.type); break;
+        case Setting::CompactOn: e.compact = true; break;  // R2
+        case Setting::CompactOff: e.compact = false; break;
+        case Setting::HideSystemOn: e.hideSystem = true; break;
+        case Setting::HideSystemOff: e.hideSystem = false; break;
         case Setting::Remove: break;
     }
     if (e != *w) queueCommit(edited, selected_);
@@ -586,6 +596,14 @@ void PcEditor::drawOverPanel(const Pen& pen) const {
             pen.text(sx, centerBaseline(rowB, kRowH * u, sameSize), text().rowSameName, sameSize, kTextMuted);
             button(Setting::SameNameOn, text().on, w->sumSameName);
             button(Setting::SameNameOff, text().off, !w->sumSameName);
+            const double rowC = rowB + (kRowH + kRowGap) * u;  // R2
+            pen.text(sx, centerBaseline(rowC, kRowH * u, labelSize), text().rowHideSystem, labelSize, kTextMuted);
+            button(Setting::HideSystemOn, text().on, w->hideSystem);
+            button(Setting::HideSystemOff, text().off, !w->hideSystem);
+        } else if (hasCompactView(w->type)) {  // R2
+            pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowCompact, labelSize, kTextMuted);
+            button(Setting::CompactOn, text().on, w->compact);
+            button(Setting::CompactOff, text().off, !w->compact);
         } else if (w->type == WidgetType::Network) {
             pen.text(sx, centerBaseline(rowA, kRowH * u, labelSize), text().rowAdapter, labelSize, kTextMuted);
             button(Setting::AdapterDongle, text().adapterDongle, w->adapter == NetAdapter::Dongle);
