@@ -28,6 +28,16 @@ if(NOT MSVC)
   target_compile_options(fph-core PRIVATE -Wall -Wextra)
 endif()
 
+# T11: session logs (summaries + .csv.gz timelines). Apart from fph-core so only what writes logs needs zlib
+find_package(ZLIB)
+if(ZLIB_FOUND)
+  add_library(fph-session STATIC core/session_log.cpp)
+  target_link_libraries(fph-session PUBLIC fph-core ZLIB::ZLIB)
+  if(NOT MSVC)
+    target_compile_options(fph-session PRIVATE -Wall -Wextra)
+  endif()
+endif()
+
 # T06: a tiny link client (hello / watch / layout-get / layout-set / bye) for testing before the PC app.
 # Builds on Windows and Linux: cmake -S . -B build-cli -DFPH_BUILD_HEADSET=OFF; cmake --build build-cli --target fph-link-cli
 add_executable(fph-link-cli tools/fph_link_cli.cpp)
@@ -110,14 +120,21 @@ if(FPH_BUILD_HEADSET)
     headset/camera_overlay.cpp    # T10: one overlay per camera tile
     headset/camera_link.cpp       # T10: camera BLOBs to the PCs
     headset/camera_dump.cpp       # T10: --camera-dump
+    headset/crash_recorder.cpp    # T11: the 1 Hz crash ring
+    headset/power_off.cpp         # T11: the last power-off reason (qcom-pon lines, kernel journal)
+    headset/session_service.cpp   # T11: session logs, Save / Record in the main loop
     vendor/frame-updater/cpp/update_check.cpp
   )
   target_include_directories(frame-perf-hud PRIVATE headset helper third_party/openvr vendor/frame-updater/cpp)
   target_compile_options(frame-perf-hud PRIVATE -Wall -Wextra)
   # The version printed by --version (from project(VERSION) above)
   target_compile_definitions(frame-perf-hud PRIVATE FRAME_PERF_HUD_VERSION="${PROJECT_VERSION}")
+  if(NOT TARGET fph-session)
+    message(FATAL_ERROR "the headset agent needs zlib (fph-session, the session logs)")
+  endif()
   target_link_libraries(frame-perf-hud PRIVATE
     fph-core
+    fph-session
     fph-render
     PkgConfig::CAIRO
     PkgConfig::FREETYPE
@@ -162,6 +179,14 @@ if(BUILD_TESTING)
   target_link_libraries(core-session-test PRIVATE fph-core)
   target_compile_options(core-session-test PRIVATE -Wall -Wextra)
   add_test(NAME core-session COMMAND core-session-test)
+
+  # T11: session logs (summary, timeline, gzip, files, Record, end card)
+  if(TARGET fph-session)
+    add_executable(core-session-log-test tests/core_session_log_test.cpp)
+    target_link_libraries(core-session-log-test PRIVATE fph-session)
+    target_compile_options(core-session-log-test PRIVATE -Wall -Wextra)
+    add_test(NAME core-session-log COMMAND core-session-log-test)
+  endif()
 
   add_executable(core-processes-demand-test tests/core_processes_demand_test.cpp)
   target_link_libraries(core-processes-demand-test PRIVATE fph-core)
@@ -383,6 +408,29 @@ if(BUILD_TESTING)
     target_compile_options(camera-feed-test PRIVATE -Wall -Wextra)
     target_link_libraries(camera-feed-test PRIVATE fph-render PkgConfig::TURBOJPEG)
     add_test(NAME camera-feed COMMAND camera-feed-test)
+
+    # T11: the crash recorder (ring file, marker, recovery) and the power-off reason decoder
+    if(TARGET fph-session)
+      add_executable(crash-recorder-test tests/crash_recorder_test.cpp headset/crash_recorder.cpp)
+      target_include_directories(crash-recorder-test PRIVATE headset)
+      target_compile_options(crash-recorder-test PRIVATE -Wall -Wextra)
+      target_link_libraries(crash-recorder-test PRIVATE fph-session)
+      add_test(NAME crash-recorder COMMAND crash-recorder-test)
+    endif()
+
+    add_executable(power-off-test tests/power_off_test.cpp headset/power_off.cpp)
+    target_include_directories(power-off-test PRIVATE headset)
+    target_compile_options(power-off-test PRIVATE -Wall -Wextra)
+    target_link_libraries(power-off-test PRIVATE fph-core PkgConfig::SYSTEMD)
+    add_test(NAME power-off COMMAND power-off-test)
+
+    # T11 review: the session service's Record switch follows the writer
+    add_executable(session-service-test tests/session_service_test.cpp headset/session_service.cpp
+                   headset/crash_recorder.cpp headset/power_off.cpp)
+    target_include_directories(session-service-test PRIVATE headset)
+    target_compile_options(session-service-test PRIVATE -Wall -Wextra)
+    target_link_libraries(session-service-test PRIVATE fph-session PkgConfig::SYSTEMD)
+    add_test(NAME session-service COMMAND session-service-test)
   endif()
 endif()
 

@@ -56,6 +56,15 @@ const UiText kEnglish = {
     "PC \"%s\" wants to connect", "Allow", "Deny", "Forget PCs (%zu)",
     // T10: camera widget settings
     "Cameras", "Full size", "FPS",
+    // T11: the Logs page
+    "Logs", "Save and Record", "Record", "Save last 10 min",
+    "Save keeps the last 10 minutes and this session's summary. Record writes every second until you turn it off, "
+    "even with the HUD hidden",
+    "Crash recorder", "Recorder",
+    "Keeps the last 10 minutes of battery, power and temperatures on disk (1 write a second), so a crash or power "
+    "cut leaves a log",
+    "Last power-off", "Last session", "No session has ended since the HUD started",
+    "Files: ~/.local/state/frame-perf-hud/ (sessions, saves, crashes)",
 };
 
 /** @return the value with no decimals */

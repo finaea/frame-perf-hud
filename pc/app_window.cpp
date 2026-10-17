@@ -13,6 +13,7 @@
 #include "pc_editor.h"
 #include "platform.h"
 #include "resource.h"
+#include "session_logs.h"  // T11
 #include "settings.h"
 #include "settings_dialog.h"
 #include "single_instance.h"
@@ -29,6 +30,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -57,6 +59,8 @@ enum MenuId : UINT {
     kMenuAdapterDongle,
     kMenuAdapterHome,
     kMenuRows5,  // + 0..4: 5, 10, 15, 25, 50 rows
+    kMenuSave = kMenuRows5 + 5,  // T11: the last 10 minutes + the session's summary
+    kMenuOpenLogs,               // T11: the data folder (sessions, saves) in Explorer
 };
 constexpr uint32_t kRowChoices[] = {5, 10, 15, 25, 50};
 
@@ -105,6 +109,8 @@ private:
     std::unique_ptr<LinkClient> client_;
     streaming::Service streaming_;
     double nextPcMetrics_ = 0;
+    std::unique_ptr<PcSessionLogs> logs_;  ///< T11
+    Rect saveButton_;                      ///< T11: the status bar's Save, window px
 
     FontSet fonts_;
     std::unique_ptr<PanelView> panel_;
@@ -156,6 +162,7 @@ private:
     void command(UINT id);
     void showCardMenu(POINT screen, int slot);
     void setNotice(const std::string& text, double seconds = 8.0);
+    void flushSessionLog();  ///< T11: the session logs' lines into pc.log
 
     void onTick();
     void afterLinkEvents();
@@ -201,6 +208,7 @@ void App::loadState() {
     logLine("[app] settings %s, PC id %s%s", r == LoadResult::Loaded ? "loaded" : r == LoadResult::Missing ? "missing (first run)" : "broken",
             settings_.pcId.c_str(), idCreated ? " (new)" : "");
     if (idCreated || r != LoadResult::Loaded) saveSettings();
+    logs_.reset(new PcSessionLogs(dataDir_));  // T11
 }
 
 void App::saveSettings() {
@@ -420,6 +428,8 @@ void App::hideToTray() {
 void App::exitApp() {
     if (exiting_) return;
     exiting_ = true;
+    logs_->shutdown();  // T11: the open sessions' copies first (Exit, and Windows shutting down via WM_ENDSESSION)
+    flushSessionLog();
     streaming_.stop(); // the worker calls VR_Shutdown before returning
     logLine("[app] exit: %s", client_->debugText(nowSec()).c_str());
     cancelDrag();
@@ -444,6 +454,17 @@ void App::toggleEditing() {
     cancelDrag();
     if (editing_) showWindow();
     InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::flushSessionLog() {
+    const std::string lines = logs_->takeLog();
+    size_t start = 0;
+    while (start < lines.size()) {
+        const size_t end = lines.find('\n', start);
+        logLine("%s", lines.substr(start, end == std::string::npos ? std::string::npos : end - start).c_str());
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
 }
 
 void App::setNotice(const std::string& text, double seconds) {
@@ -505,6 +526,10 @@ void App::showMenu(POINT screen, bool fromTray) {
     AppendMenuW(menu, MF_STRING | (editing_ ? MF_CHECKED : 0), kMenuEdit, L"Edit layout");
     AppendMenuW(menu, MF_STRING | (settings_.onTop ? MF_CHECKED : 0), kMenuOnTop, L"On top");
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"Settings...");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kMenuSave, L"Save last 10 min");  // T11
+    AppendMenuW(menu, MF_STRING, kMenuOpenLogs, L"Open logs folder");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     if (!fromTray) AppendMenuW(menu, MF_STRING, kMenuHide, L"Hide to tray");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuExit, L"Exit");
@@ -525,6 +550,13 @@ void App::command(UINT id) {
         case kMenuSettings: showWindow(); openSettings(); break;
         case kMenuHide: hideToTray(); break;
         case kMenuExit: exitApp(); break;
+        case kMenuSave:  // T11
+            setNotice(logs_->save(static_cast<int64_t>(std::time(nullptr))));
+            flushSessionLog();
+            break;
+        case kMenuOpenLogs:
+            ShellExecuteW(hwnd_, L"open", widen(dataDir_).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            break;
         default: break;
     }
 }
@@ -595,6 +627,18 @@ void App::onTick() {
         client_->sendPcMetrics(pcStreamValues(client_->store()));
     }
     afterLinkEvents();
+    // T11: the session logs follow the headset's session (LINK_STATE) and the PC's own scene app, once a second
+    {
+        const link::LinkState& st = client_->headsetState();
+        SessionInfo headset;
+        headset.id = st.sessionId;
+        headset.appKey = st.appKey;
+        headset.appName = st.appName;
+        headset.startUnix = st.sessionStartUnix;
+        logs_->tick(now, static_cast<int64_t>(std::time(nullptr)), headset, client_->lastMetricsAt(),
+                    client_->store());
+        flushSessionLog();
+    }
     if (!notice_.empty() && now > noticeUntil_) {
         notice_.clear();
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -697,7 +741,16 @@ void App::drawStatus(const Pen& pen, double width, double barH) {
     // A dot says the same thing as the colour, so colour isn't the only signal
     const Color dot = client_->subscribed() ? kSuccess : client_->phase() == LinkPhase::Discovery ? kTextMuted : c;
     drawDisc(pen.cr, 14 * s, barH / 2, 4.5 * s, dot);
-    const double size = fitSize(pen, text, 13.5 * s, 9 * s, width - 34 * s, !live);
+    // T11: Save on the right (the last 10 minutes + the session's summary)
+    const double bw = 64 * s;
+    const double bh = barH - 8 * s;
+    saveButton_ = {width - bw - 6 * s, 4 * s, bw, bh};
+    pen.color(kControl);
+    pen.roundedRect(saveButton_.x, saveButton_.y, bw, bh, bh / 2);
+    cairo_fill(pen.cr);
+    strokeRounded(pen, saveButton_.x, saveButton_.y, bw, bh, bh / 2, kBorder, 1.5 * s);
+    textCentered(pen, saveButton_.x + bw / 2, centerBaseline(saveButton_.y, bh, 12.5 * s), "Save", 12.5 * s, kText, true);
+    const double size = fitSize(pen, text, 13.5 * s, 9 * s, width - 34 * s - bw - 12 * s, !live);
     pen.text(26 * s, centerBaseline(0, barH, size), text, size, live ? kTextMuted : c, !live);
 }
 
@@ -954,6 +1007,10 @@ LRESULT App::handle(UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_LBUTTONDOWN:
+            if (saveButton_.contains(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) {  // T11
+                command(kMenuSave);
+                return 0;
+            }
             if (editing_) pointerDown(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             return 0;
         case WM_MOUSEMOVE:

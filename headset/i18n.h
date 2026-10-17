@@ -165,6 +165,19 @@ struct UiText {
     const char* rowCameras;          ///< T10 Headset camera: which outward cams
     const char* rowFullSize;         ///< T10 Headset camera: full-size frames in the headset
     const char* rowFps;              ///< T10 camera widgets: headset frame rate
+    // ---- T11: the Logs page ----
+    const char* pageLogs;            ///< page switch: session logs, Save / Record, crash recorder
+    const char* cardRecord;          ///< card title: Save and Record
+    const char* rowRecord;           ///< Record On / Off
+    const char* saveNow;             ///< Save button
+    const char* recordHint;          ///< under the buttons: what Save and Record write
+    const char* cardCrash;           ///< card title: crash recorder
+    const char* rowCrashRecorder;    ///< crash recorder On / Off
+    const char* crashHint;           ///< what the crash recorder does
+    const char* rowPowerOff;         ///< "Last power-off"
+    const char* cardLastSession;     ///< card title: the last session's card
+    const char* noSessionYet;        ///< no session ended since start
+    const char* logsFolder;          ///< where the files are
 };
 
 /**

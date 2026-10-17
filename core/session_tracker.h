@@ -17,9 +17,14 @@ struct SessionInfo {
     int64_t startUnix = 0;     ///< wall-clock seconds when the session started
 };
 
+/** T11: a detour to another app shorter than this (SteamVR Home between two runs of a game) doesn't split it. */
+constexpr int64_t kSessionDetourSec = 60;
+
 /**
  * Applies the session rules:
  * - a new session starts only when a non-empty app key differs from the current session's key,
+ * - T11: going back to the previous app within kSessionDetourSec of leaving it resumes the previous session (same
+ *   id and start), so game → Home → same game stays one game,
  * - an empty key (pid 0: the compositor is showing, e.g. between loading screens) never ends or splits the
  *   current session, so a flicker A → none → A stays one session,
  * - the app name may be filled in later for the same key without starting a new session.
@@ -49,6 +54,7 @@ public:
 private:
     IdSource ids_;
     SessionInfo current_;
+    SessionInfo previous_;  ///< T11: the session before current_, resumable while current_ is a short detour
 };
 
 }  // namespace fph

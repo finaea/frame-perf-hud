@@ -92,6 +92,7 @@ private:
     VrlinkJournal journal_;
     std::string journalError_;  ///< last journal error logged (logged once per change)
     fph::SessionTracker session_;
+    int32_t previousSessionId_ = 0;  ///< T11: the session before the current one (a resume logs "Resumed")
     std::string streamHint_;  ///< vrlink's -A as "steam.app.<id>" while PC-streaming
 
     void readNetwork(double now, bool resumed);

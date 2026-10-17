@@ -368,6 +368,8 @@ void LinkClient::onMetrics(const Metrics& m, double now) {
                 static_cast<unsigned long long>(unknownMetricValues_));
     }
     if (pending_ == nullptr) noteHeadsetVersion(m.state.layoutVersion);
+    headsetState_ = m.state;  // T11: the PC copy of the session logs follows the headset's session
+    lastMetricsAt_ = now;
 }
 
 void LinkClient::sendPcMetrics(const std::vector<link::WireValue>& values) {

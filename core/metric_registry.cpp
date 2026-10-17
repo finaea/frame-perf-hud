@@ -217,12 +217,91 @@ const std::vector<MetricDef> kRegistry = {
     {metric::kSelfCpuPct, "general.self_cpu_pct", "%", W::General, S::SelfCost, kSelfMs, T::F32},
     {metric::kSelfRssMib, "general.self_rss_mib", "MiB", W::General, S::SelfCost, kSelfMs, T::F32},
     {metric::kSelfPowerW, "general.self_power_est_w", "W", W::General, S::SelfCost, kSelfMs, T::F32},
+    // T11: set once at start by the session logger (no reader: the interval is only for the dump)
+    {metric::kLastPowerOff, "general.last_power_off", "", W::General, S::SessionLog, 60000, T::ShortString},
+    {metric::kCrashLogNote, "general.crash_log_note", "", W::General, S::SessionLog, 60000, T::ShortString},
+};
+
+using K = LogKind;
+
+// T11: what a session log keeps. Gauges get a histogram (bins span the plausible range; the ends catch the rest).
+// Per-read counts are summed, cumulative counters become last − first, flags count their rises
+const std::vector<LogColumn> kLogColumns = {
+    {metric::kFrameAppFps, K::Gauge, 0, 150, 150, true},
+    {metric::kFrameDisplayHz, K::Gauge, 0, 150, 150, false},
+    {metric::kFrameGpuMs, K::Gauge, 0, 50, 200, true},
+    {metric::kFrameCpuMs, K::Gauge, 0, 50, 200, true},
+    {metric::kFrameGpuMaxMs, K::Gauge, 0, 100, 200, false},
+    {metric::kFrameCpuMaxMs, K::Gauge, 0, 100, 200, false},
+    {metric::kFrameReprojectedPct, K::Gauge, 0, 100, 100, false},
+    {metric::kFrameDropped, K::Count, 0, 0, 0, false},
+    {metric::kFrameThrottled, K::Flag, 0, 0, 0, false},
+    {metric::kCpuUsagePct, K::Gauge, 0, 100, 100, false},
+    {metric::kCpuMaxCorePct, K::Gauge, 0, 100, 100, false},
+    {metric::kCpuFastestClockMhz, K::Gauge, 0, 4000, 200, false},
+    {metric::kGpuBusyPct, K::Gauge, 0, 100, 100, false},
+    {metric::kGpuClockMhz, K::Gauge, 0, 1500, 150, false},
+    {metric::kRamUsedGib, K::Gauge, 0, 16, 160, false},
+    {metric::kPowerVphW, K::Gauge, 0, 30, 300, false},
+    {metric::kPowerRailsW, K::Gauge, 0, 30, 300, false},
+    {metric::kBatteryPct, K::Gauge, 0, 100, 100, false},
+    {metric::kBatteryVoltageV, K::Gauge, 3, 4.5f, 150, false},
+    {metric::kBatteryCurrentMa, K::Gauge, -6000, 6000, 240, false},
+    {metric::kBatteryPowerW, K::Gauge, -30, 30, 240, false},
+    {metric::kTempCpuC, K::Gauge, 0, 120, 240, false},
+    {metric::kTempGpuC, K::Gauge, 0, 120, 240, false},
+    {metric::kTempDdrC, K::Gauge, 0, 120, 240, false},
+    {metric::kTempBatteryC, K::Gauge, 0, 80, 160, false},
+    {metric::kTempDisplayC, K::Gauge, 0, 120, 240, false},
+    {metric::kTempExhaustC, K::Gauge, 0, 120, 240, false},
+    {metric::kTempHeatsinkC, K::Gauge, 0, 120, 240, false},
+    {metric::kThrottleCpu, K::Flag, 0, 0, 0, false},
+    {metric::kThrottleGpu, K::Flag, 0, 0, 0, false},
+    {metric::kFanRpm, K::Gauge, 0, 10000, 100, false},
+    {metric::kNetRxMbps, K::Gauge, 0, 1000, 200, false},
+    {metric::kNetTxMbps, K::Gauge, 0, 1000, 200, false},
+    {metric::kNetSignalDbm, K::Gauge, -100, 0, 100, false},
+    {metric::kStreamDongleSharePct, K::Gauge, 0, 100, 100, false},
+    {metric::kStreamFecRetries, K::Cumulative, 0, 0, 0, false},
+    {metric::kStreamFecRetryPackets, K::Cumulative, 0, 0, 0, false},
+    {metric::kStreamFramesDropped, K::Cumulative, 0, 0, 0, false},
+    {metric::kStreamLateMetadata, K::Cumulative, 0, 0, 0, false},
+    {metric::kStreamAborts, K::Cumulative, 0, 0, 0, false},
+    {metric::kStreamUnrecoverable, K::Cumulative, 0, 0, 0, false},
+    {metric::kCtrlLeftPct, K::Gauge, 0, 100, 100, false},
+    {metric::kCtrlRightPct, K::Gauge, 0, 100, 100, false},
+    {metric::kSelfCpuPct, K::Gauge, 0, 100, 200, false},
+    {metric::kSelfRssMib, K::Gauge, 0, 1024, 256, false},
+    // PC streaming (ticket 08): the latency stages, rates and the PC's counters since its reader started
+    {metric::kPcStreamPing, K::Gauge, 0, 100, 200, false},
+    {metric::kPcStreamEstimatedBandwidth, K::Gauge, 0, 2000, 200, false},
+    {metric::kPcStreamRetransmitRequests, K::Gauge, 0, 1000, 100, false},
+    {metric::kPcStreamSkipped, K::Gauge, 0, 100, 100, false},
+    {metric::kPcStreamLate, K::Gauge, 0, 100, 100, false},
+    {metric::kPcStreamFps, K::Gauge, 0, 150, 150, false},
+    {metric::kPcStreamWireMbps, K::Gauge, 0, 1000, 200, false},
+    {metric::kPcStreamGameAvg, K::Gauge, 0, 50, 200, true},
+    {metric::kPcStreamEncodeAvg, K::Gauge, 0, 50, 200, true},
+    {metric::kPcStreamSendAvg, K::Gauge, 0, 50, 200, true},
+    {metric::kPcStreamNetworkAvg, K::Gauge, 0, 50, 200, true},
+    {metric::kPcStreamDecodeAvg, K::Gauge, 0, 50, 200, true},
+    {metric::kPcStreamSlackAvg, K::Gauge, -50, 50, 200, true},
+    {metric::kPcStreamTotalAvg, K::Gauge, 0, 150, 300, true},
+    {metric::kPcStreamStreamResets, K::Cumulative, 0, 0, 0, false},
+    {metric::kPcStreamBadLinks, K::Cumulative, 0, 0, 0, false},
+    {metric::kPcStreamEncoderReinits, K::Cumulative, 0, 0, 0, false},
+    {metric::kPcStreamThrottleEvents, K::Cumulative, 0, 0, 0, false},
+    {metric::kPcStreamDisplayHz, K::Gauge, 0, 150, 150, false},
 };
 
 }  // namespace
 
 const std::vector<MetricDef>& registry() {
     return kRegistry;
+}
+
+const std::vector<LogColumn>& sessionLogColumns() {
+    return kLogColumns;
 }
 
 const MetricDef* findMetric(uint16_t id) {
@@ -312,6 +391,7 @@ const char* sourceName(SourceId source) {
         case SourceId::Uptime: return "uptime";
         case SourceId::SelfCost: return "self_cost";
         case SourceId::PcStreaming: return "pc_streaming";
+        case SourceId::SessionLog: return "session_log";
         case SourceId::Count: break;
     }
     return "unknown";

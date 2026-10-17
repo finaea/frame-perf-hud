@@ -24,6 +24,15 @@ bool SessionTracker::update(const std::string& appKey, const std::string& appNam
         if (!appName.empty()) current_.appName = appName;
         return false;
     }
+    if (previous_.id != 0 && appKey == previous_.appKey && nowUnix - current_.startUnix < kSessionDetourSec) {
+        // T11: back to the previous app after a short detour: the detour is dropped, the old session goes on. Any
+        // app counts as the detour on purpose, not just Home: Home's app key on the Frame isn't verified
+        current_ = previous_;
+        previous_ = SessionInfo();
+        if (!appName.empty()) current_.appName = appName;
+        return true;
+    }
+    previous_ = current_;
     int32_t id = ids_();
     // Never hand out 0 (= no session) or the id just used
     while (id == 0 || id == current_.id) id = ids_();

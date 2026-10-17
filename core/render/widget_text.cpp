@@ -90,6 +90,8 @@ const WidgetText& widgetText() {
         "App",
         "none (SteamVR home)",
         "HUD",
+        "Power-off",
+        "Crash",
         // Throttle badge
         "Throttled to 1/",
         " of ",

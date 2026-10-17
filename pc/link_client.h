@@ -131,6 +131,11 @@ public:
     /** T10: @return the headset's dongle-path address camera frames are asked for at (0 = none) */
     uint32_t cameraPathIp() const { return cameraPathIp_; }
 
+    /** T11: the headset's session from the last METRICS' LINK_STATE (kept across reconnects; id 0 = none yet) */
+    const link::LinkState& headsetState() const { return headsetState_; }
+    /** T11: monotonic time of the last METRICS (< 0 = never) */
+    double lastMetricsAt() const { return lastMetricsAt_; }
+
     MetricStore& store() { return store_; }
     const MetricStore& store() const { return store_; }
     const ProcessListsView& processes() const { return processes_; }
@@ -207,6 +212,8 @@ private:
 
     MetricStore store_;
     ProcessListsView processes_;
+    link::LinkState headsetState_;  ///< T11
+    double lastMetricsAt_ = -1.0;   ///< T11
     CameraFeed cameras_;          ///< T10
     int cameraFps_ = 10;          ///< T10
     uint32_t cameraPathIp_ = 0;   ///< T10: the headset's wlanap address, when it isn't the lease path

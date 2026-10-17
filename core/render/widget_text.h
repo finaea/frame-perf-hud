@@ -91,6 +91,8 @@ struct WidgetText {
     const char* app;
     const char* noApp;  ///< the compositor is showing
     const char* hudCost;  ///< frame-perf-hud's own cost
+    const char* powerOff;  ///< T11: the last power-off reason
+    const char* crashLog;  ///< T11: a crash log was kept at start
     // Throttle badge: "Throttled to 1/N of H Hz"
     const char* throttledTo;
     const char* throttledOf;

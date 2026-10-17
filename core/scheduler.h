@@ -18,7 +18,7 @@ struct DemandInputs {
     bool hmdInUse = false;    ///< HMD activity level isn't standby (off-head reads standby)
     bool editorOpen = false;  ///< the dashboard tab (editor) is visible
     bool pcLease = false;     ///< a PC holds a valid lease (stub until ticket 06)
-    bool record = false;      ///< Record is on (stub until ticket 11)
+    bool record = false;      ///< T11: Record is on
 
     bool operator==(const DemandInputs& o) const {
         return hudShown == o.hudShown && hmdInUse == o.hmdInUse && editorOpen == o.editorOpen &&
@@ -72,6 +72,13 @@ public:
     void setDemand(const DemandInputs& demand);
 
     /**
+     * T11: sources read whatever the demand and the layout (the crash recorder's kit), at their own interval. Doesn't
+     * make anyone "looking": the other sources stay paused.
+     * @param sources the pinned sources (empty = none)
+     */
+    void setPinnedSources(const std::vector<SourceId>& sources);
+
+    /**
      * Runs every active source that is due.
      * @param now monotonic seconds
      * @return number of sources read
@@ -117,6 +124,7 @@ private:
     std::array<SourceState, kSourceCount> sources_ {};
     std::vector<WidgetType> widgets_;
     DemandInputs demand_;
+    uint32_t pinnedMask_ = 0;  ///< T11: bit per SourceId
     uint64_t recomputes_ = 0;
     double now_ = 0.0;  ///< last time passed to runDue (activation schedules the read for then)
 

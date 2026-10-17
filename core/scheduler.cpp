@@ -10,6 +10,8 @@ namespace {
 /** A source counts as due this much early, so sources that share the 2 Hz tick run together. */
 constexpr double kDueSlackSec = 0.05;
 
+static_assert(kSourceCount <= 32, "pinnedMask_ has a bit per source");
+
 size_t indexOf(SourceId source) {
     return static_cast<size_t>(source);
 }
@@ -50,6 +52,16 @@ void Scheduler::setDemand(const DemandInputs& demand) {
     recompute();
 }
 
+void Scheduler::setPinnedSources(const std::vector<SourceId>& sources) {
+    uint32_t mask = 0;
+    for (SourceId source : sources) {
+        if (validSource(source)) mask |= 1u << indexOf(source);
+    }
+    if (mask == pinnedMask_) return;
+    pinnedMask_ = mask;
+    recompute();
+}
+
 void Scheduler::recompute() {
     ++recomputes_;
     const bool looking = someoneLooking(demand_);
@@ -62,6 +74,9 @@ void Scheduler::recompute() {
                 }
             }
         }
+        // T11: a pinned source counts one reference of its own
+        const size_t index = static_cast<size_t>(&s - sources_.data());
+        if (s.interval > 0.0 && (pinnedMask_ & (1u << index))) ++refs;
         if (s.refs == 0 && refs > 0) {
             // Just became active: read on the next runDue, and tell the reader its baseline is stale
             s.nextDue = now_;

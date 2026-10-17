@@ -195,9 +195,36 @@ bool GridRenderer::render(const WidgetContext& ctx) {
         drawWidgetDynamic(pen, slot.x, slot.y, slot.widget, ctx, histories_[k]);
         cairo_restore(cr_);
     }
+    // T11: the end card stays on top of whatever was redrawn under it
+    if (!overlay_.empty() && (full || lastRedrawn_ > 0)) drawOverlay();
     cairo_surface_flush(surface_);
     // A full repaint changed pixels even when no widget was drawn (e.g. the last widget was removed)
     return full || lastRedrawn_ > 0;
+}
+
+void GridRenderer::setOverlay(const std::vector<std::string>& lines) {
+    if (lines == overlay_) return;
+    overlay_ = lines;
+    allDirty_ = true;  // repaint: the card's pixels must go when it goes
+}
+
+void GridRenderer::drawOverlay() {
+    const Pen pen {cr_, &fonts_};
+    cairo_save(cr_);
+    cairo_scale(cr_, geometry_.scale, geometry_.scale);
+    const double pad = 18;
+    const double w = std::max(120.0, std::min(static_cast<double>(geometry_.width) - 24, 488.0));
+    const double lineH = 28;
+    const double h = pad * 2 + 6 + lineH * static_cast<double>(overlay_.size());
+    drawCard(pen, 12, 12, w, h, 16, kCard, kAccent, 2);
+    double y = 12 + pad + 20;
+    for (size_t i = 0; i < overlay_.size(); ++i) {
+        const double size = i == 0 ? 20 : 17;
+        pen.text(12 + pad, y, overlay_[i], fitSize(pen, overlay_[i], size, size * 0.7, w - pad * 2, i == 0),
+                 i == 0 ? kText : kTextMuted, i == 0);
+        y += lineH + (i == 0 ? 6 : 0);
+    }
+    cairo_restore(cr_);
 }
 
 const uint8_t* GridRenderer::pixels() const {

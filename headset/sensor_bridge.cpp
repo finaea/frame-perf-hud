@@ -329,10 +329,14 @@ void SensorBridge::refreshSceneApp(double now) {
     } else {
         store_.setText(metric::kStreamAppHint, streamHint_, now);
     }
+    const int32_t before = session_.current().id;
     if (session_.update(app.key, app.name, static_cast<int64_t>(std::time(nullptr)))) {
         const fph::SessionInfo& s = session_.current();
-        std::fprintf(stderr, "[session] New session %d: %s (%s), scene pid %u\n", s.id, s.appKey.c_str(),
+        // T11: back to the game after a short detour (Home) is the same session
+        std::fprintf(stderr, "[session] %s session %d: %s (%s), scene pid %u\n",
+                     s.id == previousSessionId_ ? "Resumed" : "New", s.id, s.appKey.c_str(),
                      s.appName.empty() ? "no name" : s.appName.c_str(), app.pid);
+        previousSessionId_ = before;
     }
     store_.setI32(metric::kScenePid, static_cast<int32_t>(app.pid), now);
     const fph::SessionInfo& s = session_.current();

@@ -71,6 +71,12 @@ public:
     void markAllDirty() { allDirty_ = true; }
 
     /**
+     * T11: a card over the top of the panel (the end-of-session card), first line bold. Empty = none. The panel is
+     * repainted whenever it appears, changes or goes away.
+     */
+    void setOverlay(const std::vector<std::string>& lines);
+
+    /**
      * Draws the widgets whose inputs changed since they were last drawn (widgetSignature); the others keep
      * their pixels. A graph only moves when its metric gets a new sample.
      * @param ctx values
@@ -113,6 +119,9 @@ private:
     bool staticDirty_ = true;
     uint64_t staticBuilds_ = 0;
     std::vector<uint8_t> rgba_;
+    std::vector<std::string> overlay_;  ///< T11
+
+    void drawOverlay();
 
     void ensureSurfaces();
     void buildStatic();

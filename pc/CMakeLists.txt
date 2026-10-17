@@ -17,6 +17,7 @@ add_library(fph-pc-lib STATIC
   panel_view.cpp
   pc_editor.cpp
   camera_feed.cpp  # T10: camera BLOBs -> pictures in the camera widgets
+  session_logs.cpp  # T11: the PC copy of the session logs, Save
   # The headset's UI strings, so the PC editor says exactly what the dashboard editor says (platform-free)
   ${CMAKE_SOURCE_DIR}/headset/i18n.cpp
   log.cpp
@@ -28,7 +29,7 @@ add_library(fph-pc-lib STATIC
 target_include_directories(fph-pc-lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(fph-pc-lib PRIVATE ${CMAKE_SOURCE_DIR}/headset)  # i18n.h only
 target_include_directories(fph-pc-lib PRIVATE ${CMAKE_SOURCE_DIR}/third_party/openvr)
-target_link_libraries(fph-pc-lib PUBLIC fph-core fph-render ws2_32 iphlpapi shell32 advapi32 ole32)
+target_link_libraries(fph-pc-lib PUBLIC fph-core fph-session fph-render ws2_32 iphlpapi shell32 advapi32 ole32)
 # T10: TurboJPEG decodes the headset's camera frames (static, from the vcpkg manifest)
 find_package(libjpeg-turbo CONFIG REQUIRED)
 target_link_libraries(fph-pc-lib PUBLIC

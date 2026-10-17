@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,45 @@ void testFindMetric() {
     CHECK(findMetric(65535) == nullptr);
 }
 
+// T11: the session-log table only names real, numeric metrics, and the two once-per-start strings exist
+void testSessionLogColumns() {
+    std::set<uint16_t> seen;
+    const std::vector<LogColumn>& cols = sessionLogColumns();
+    CHECK(!cols.empty());
+    for (const LogColumn& c : cols) {
+        const MetricDef* d = findMetric(c.id);
+        if (d == nullptr) {
+            std::printf("session log column %u isn't in the registry\n", static_cast<unsigned>(c.id));
+            CHECK(d != nullptr);
+            continue;
+        }
+        CHECK(d->type != WireType::ShortString);
+        CHECK(seen.insert(c.id).second);  // no column twice
+        if (c.kind == LogKind::Gauge) {
+            CHECK(c.bins > 0);
+            CHECK(c.histMax > c.histMin);
+        }
+        if (c.summaryHist) CHECK(c.bins > 0);
+    }
+}
+
+void testT11Metrics() {
+    CHECK(metric::kLastPowerOff == 1115);
+    CHECK(metric::kCrashLogNote == 1116);
+    const MetricDef* power = findMetric(metric::kLastPowerOff);
+    const MetricDef* crash = findMetric(metric::kCrashLogNote);
+    CHECK(power != nullptr && power->type == WireType::ShortString);
+    CHECK(crash != nullptr && crash->type == WireType::ShortString);
+    // the registry as a whole (which now holds both) still validates
+    CHECK(validateRegistry(registry()).empty());
+    // a store accepts text for them
+    MetricStore store;
+    CHECK(store.setText(metric::kLastPowerOff, "Normal restart", 1.0));
+    CHECK(store.setText(metric::kCrashLogNote, "Crash log saved (12:54)", 1.0));
+    const MetricValue* v = store.get(metric::kCrashLogNote);
+    CHECK(v != nullptr && v->ok && v->text == "Crash log saved (12:54)");
+}
+
 void testStore() {
     MetricStore store;
     const MetricValue* v = store.get(metric::kCpuUsagePct);
@@ -105,6 +145,8 @@ int main() {
     testBadTable();
     testFindMetric();
     testStore();
+    testSessionLogColumns();
+    testT11Metrics();
     if (failures) std::printf("%d check(s) failed\n", failures);
     return failures ? 1 : 0;
 }

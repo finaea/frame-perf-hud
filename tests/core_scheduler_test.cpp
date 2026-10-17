@@ -305,6 +305,71 @@ void testTwoNetworkWidgetsPlusStreamingShareOneCallbackPerTick() {
     CHECK(r.networkReads == before + 2);  // unaffected: still exactly one callback per due tick
 }
 
+// ---- T11: pinned sources read with nobody looking (the crash recorder's kit) ----
+
+void testPinnedSourceReadsWithNobodyLooking() {
+    Rig r;  // no widgets, no demand at all
+    r.sched.setPinnedSources({S::CpuLoad});
+    CHECK(r.sched.refCount(S::CpuLoad) == 1);
+    CHECK(r.sched.refCount(S::GpuBusy) == 0);
+    CHECK(r.sched.refCount(S::Ram) == 0);
+    r.run(4);
+    CHECK(r.c.cpu == 4);  // its own 500 ms interval
+    CHECK(r.c.gpu == 0 && r.c.ram == 0);
+    CHECK(r.c.cpuResumed.size() == 4 && r.c.cpuResumed[0] && !r.c.cpuResumed[1]);
+    CHECK(!std::isinf(r.sched.nextDue(r.now)));
+}
+
+void testUnpinStopsReading() {
+    Rig r;
+    r.sched.setPinnedSources({S::CpuLoad, S::Ram});
+    r.run(4);
+    CHECK(r.c.cpu == 4 && r.c.ram == 2);
+    r.sched.setPinnedSources({S::Ram});
+    CHECK(r.sched.refCount(S::CpuLoad) == 0);
+    const int frozen = r.c.cpu;
+    r.run(6);
+    CHECK(r.c.cpu == frozen);
+    CHECK(r.c.ram > 2);
+    r.sched.setPinnedSources({});
+    CHECK(r.sched.refCount(S::Ram) == 0);
+    const int ramFrozen = r.c.ram;
+    r.run(6);
+    CHECK(r.c.ram == ramFrozen);
+    CHECK(std::isinf(r.sched.nextDue(r.now)));
+}
+
+void testPinDoesNotMakeAnyoneLooking() {
+    Rig r;
+    r.sched.setEnabledWidgets({W::Cpu, W::GpuRam});
+    r.sched.setPinnedSources({S::CpuLoad});
+    CHECK(r.sched.refCount(S::CpuLoad) == 1);  // the pin only; the widget isn't counted while nobody looks
+    CHECK(r.sched.refCount(S::GpuBusy) == 0);
+    CHECK(r.sched.refCount(S::Ram) == 0);
+    r.run(4);
+    CHECK(r.c.cpu == 4 && r.c.gpu == 0 && r.c.ram == 0);
+
+    r.look();  // now the widgets count, and the pin stacks on top
+    CHECK(r.sched.refCount(S::CpuLoad) == 2);
+    CHECK(r.sched.refCount(S::GpuBusy) == 1);
+    r.sched.setPinnedSources({});
+    CHECK(r.sched.refCount(S::CpuLoad) == 1);
+    r.sched.setDemand(DemandInputs {});
+    CHECK(r.sched.refCount(S::CpuLoad) == 0);
+}
+
+void testPinRecomputeAndUnusedSource() {
+    Rig r;
+    const uint64_t start = r.sched.recomputeCount();
+    r.sched.setPinnedSources({S::CpuLoad});
+    CHECK(r.sched.recomputeCount() == start + 1);
+    r.sched.setPinnedSources({S::CpuLoad});  // same set
+    CHECK(r.sched.recomputeCount() == start + 1);
+    r.sched.setPinnedSources({S::Fan});  // no metric uses it in this table: nothing to read
+    CHECK(r.sched.refCount(S::Fan) == 0);
+    CHECK(r.sched.refCount(S::CpuLoad) == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -321,6 +386,10 @@ int main() {
     testStreamingNetworkResumeSemanticsUnchanged();
     testStreamingRemovalStopsNetworkReads();
     testTwoNetworkWidgetsPlusStreamingShareOneCallbackPerTick();
+    testPinnedSourceReadsWithNobodyLooking();
+    testUnpinStopsReading();
+    testPinDoesNotMakeAnyoneLooking();
+    testPinRecomputeAndUnusedSource();
     if (failures) std::printf("%d check(s) failed\n", failures);
     return failures ? 1 : 0;
 }

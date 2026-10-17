@@ -64,6 +64,7 @@ enum class SourceId : uint8_t {
     Uptime,    ///< /proc/uptime + local time
     SelfCost,  ///< own CPU time, /proc/self/statm, /proc/stat total, CPU rails
     PcStreaming, ///< received PC_METRICS; the headset never schedules a local reader
+    SessionLog,  ///< T11: set by the session logger at start (power-off reason, crash note); never scheduled
     Count,
 };
 
@@ -259,6 +260,9 @@ constexpr uint16_t kClock = 1111;         ///< short string, local "YYYY-MM-DD H
 constexpr uint16_t kSelfCpuPct = 1112;    ///< frame-perf-hud's own CPU, % of one core (all threads)
 constexpr uint16_t kSelfRssMib = 1113;
 constexpr uint16_t kSelfPowerW = 1114;    ///< estimate, show with "≈": own share of busy CPU × CPU rails (apc0-2)
+// T11: set once at agent start, whatever the demand
+constexpr uint16_t kLastPowerOff = 1115;  ///< short string: decoded qcom-pon reason ("Normal restart") or raw hex
+constexpr uint16_t kCrashLogNote = 1116;  ///< short string, "Crash log saved (hh:mm)"; N/A NotConnected when none
 }  // namespace metric
 
 /** Values of the per-adapter kNetAdapterBand metric. */
@@ -275,6 +279,30 @@ enum class StreamLinkMode : uint32_t {
 
 /** Values of metric::kBatteryStatus. */
 enum class BatteryStatus : uint32_t { Unknown = 0, Charging = 1, Discharging = 2, Full = 3, NotCharging = 4 };
+
+/** T11: how a session-log column is summarised and downsampled. */
+enum class LogKind : uint8_t {
+    Gauge,       ///< a level: avg / min / max / p95; downsampled by averaging
+    Count,       ///< events per read (frame.dropped): summed
+    Cumulative,  ///< a counter since the source started: the session's count is last − first
+    Flag,        ///< 0 / 1 (throttle): events = rises to non-zero
+};
+
+/** T11: one session-log column. The bin range is fixed, so histograms (and p95) need no per-sample storage. */
+struct LogColumn {
+    uint16_t id;
+    LogKind kind;
+    float histMin;        ///< first bin's lower edge; values below land in the first bin
+    float histMax;        ///< last bin's upper edge; values above land in the last bin
+    uint16_t bins;        ///< 0 = no histogram (Cumulative, Flag)
+    bool summaryHist;     ///< write the bins into the summary (frame time, latency stages)
+};
+
+/**
+ * T11: the columns a session log records, in CSV order. Every id is in the registry and numeric.
+ * @return the table (static storage)
+ */
+const std::vector<LogColumn>& sessionLogColumns();
 
 /**
  * The registry compiled into this build.

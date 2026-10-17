@@ -96,6 +96,87 @@ void defaultCtorGivesNonZeroIds() {
     CHECK(t.current().id != 0);
 }
 
+void detourWithin60sResumesSession() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(t.update("steam.app.home", "Home", 130));  // Home for 30 s
+    CHECK(t.current().id == 2);
+    CHECK(t.update("steam.app.1", "A", 160));  // back after a 30 s detour: the old session goes on
+    CHECK(t.current().id == 1);
+    CHECK(t.current().appKey == "steam.app.1");
+    CHECK(t.current().startUnix == 100);
+    // a second short detour from the resumed session resumes it again
+    CHECK(t.update("steam.app.home", "Home", 200));
+    CHECK(t.update("steam.app.1", "A", 210));
+    CHECK(t.current().id == 1);
+    CHECK(t.current().startUnix == 100);
+}
+
+void detourOver60sIsNewSession() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(t.update("steam.app.home", "Home", 130));
+    CHECK(t.update("steam.app.1", "A", 191));  // 61 s later
+    CHECK(t.current().id == 3);
+    CHECK(t.current().startUnix == 191);
+}
+
+void detourBoundaryIs60s() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(t.update("steam.app.home", "Home", 130));
+    CHECK(t.update("steam.app.1", "A", 189));  // 59 s: resumes
+    CHECK(t.current().id == 1);
+    SessionTracker u(counter());
+    CHECK(u.update("steam.app.1", "A", 100));
+    CHECK(u.update("steam.app.home", "Home", 130));
+    CHECK(u.update("steam.app.1", "A", 190));  // exactly 60 s: not a detour any more (< kSessionDetourSec)
+    CHECK(u.current().id == 3);
+}
+
+void threeDifferentAppsAreThreeSessions() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(t.update("steam.app.2", "B", 200));
+    CHECK(t.update("steam.app.3", "C", 230));  // B ran 30 s, but C isn't A: no resume
+    CHECK(t.current().id == 3);
+    CHECK(t.current().appName == "C");
+    CHECK(t.update("steam.app.1", "A", 240));  // A was two sessions ago: new session
+    CHECK(t.current().id == 4);
+}
+
+void flickerInsideDetourKeepsDetour() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "A", 100));
+    CHECK(t.update("steam.app.home", "Home", 130));
+    CHECK(!t.update("", "", 140));  // empty key changes nothing
+    CHECK(t.current().id == 2);
+    CHECK(t.update("steam.app.1", "A", 150));
+    CHECK(t.current().id == 1);
+}
+
+void midGameFirstKeyIsASession() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.9", "Mid", 5000));
+    CHECK(t.current().id == 1);
+    CHECK(t.current().appKey == "steam.app.9");
+    CHECK(t.current().appName == "Mid");
+    CHECK(t.current().startUnix == 5000);
+    // nothing to resume to from the very first session: Home then the same game within 60 s resumes it
+    CHECK(t.update("steam.app.home", "Home", 5100));
+    CHECK(t.update("steam.app.9", "Mid", 5110));
+    CHECK(t.current().id == 1);
+}
+
+void resumeUpdatesName() {
+    SessionTracker t(counter());
+    CHECK(t.update("steam.app.1", "", 100));
+    CHECK(t.update("steam.app.home", "Home", 130));
+    CHECK(t.update("steam.app.1", "A", 140));
+    CHECK(t.current().id == 1);
+    CHECK(t.current().appName == "A");
+}
+
 }  // namespace
 
 int main() {
@@ -106,6 +187,13 @@ int main() {
     nameFilledInLater();
     idSourceZeroAndRepeatSkipped();
     defaultCtorGivesNonZeroIds();
+    detourWithin60sResumesSession();
+    detourOver60sIsNewSession();
+    detourBoundaryIs60s();
+    threeDifferentAppsAreThreeSessions();
+    flickerInsideDetourKeepsDetour();
+    midGameFirstKeyIsASession();
+    resumeUpdatesName();
     if (failures == 0) std::printf("core_session_test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

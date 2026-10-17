@@ -222,10 +222,11 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
                     {"visible", "update_check", "language", "attachment", "position", "rotation", "left_wrist",
                      "right_wrist", "wrist_fade", "wrist_fade_end_deg", "clock_format", "width_m", "alpha",
                      "update_interval_ms", "graph_seconds", "font", "font_bold", "thresholds", "layout",
-                     "detached_pose", "link"},  // T05, T06
+                     "detached_pose", "link", "crash_recorder"},  // T05, T06, T11
                     "", warnings);
     readBool(root, "visible", config.visible, warnings);
     readBool(root, "update_check", config.updateCheck, warnings);
+    readBool(root, "crash_recorder", config.crashRecorder, warnings);  // T11
     std::string language = languageCode(config.language);
     readString(root, "language", language, warnings);
     if (!parseLanguage(language, config.language)) warnings.push_back("language must be \"en\"");
@@ -419,7 +420,8 @@ bool saveConfig(const std::string& path, const Config& config, std::string& erro
     out << "{\n"
         << "  \"visible\": " << (config.visible ? "true" : "false") << ",\n"
         << "  \"update_check\": " << (config.updateCheck ? "true" : "false") << ",\n"
-        << "  \"language\": \"" << languageCode(config.language) << "\",\n"
+        << "  \"crash_recorder\": " << (config.crashRecorder ? "true" : "false") << ",\n"  // T11
+        << "  \"language\":\"" << languageCode(config.language) << "\",\n"
         << "  \"attachment\": " << jsonString(attachmentName(config.attachment)) << ",\n"
         << "  \"position\": { \"x\": " << jsonNumber(config.posX) << ", \"y\": " << jsonNumber(config.posY)
         << ", \"z\": " << jsonNumber(config.posZ) << " },\n"

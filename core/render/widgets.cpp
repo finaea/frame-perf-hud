@@ -967,6 +967,17 @@ void drawGeneral(const Pen& pen, double x, double y, const WidgetContext& ctx) {
                    kText);
     hx += drawApprox(pen, hx, ry, 15, kText);
     pen.text(hx, ry, num(f(ctx, kSelfPowerW), 2) + " W", 15, kText);
+    // T11: why the headset last powered off (read once per boot), and a crash log kept at start
+    if (ok(ctx, kLastPowerOff)) {
+        ry += kLineH;
+        pen.text(cx, ry, t.powerOff, 15, kTextMuted);
+        pen.text(valueX, ry, ellipsize(pen, text(ctx, kLastPowerOff), 15, right - valueX), 15, kText);
+    }
+    if (ok(ctx, kCrashLogNote)) {
+        ry += kLineH;
+        pen.text(cx, ry, t.crashLog, 15, kTextMuted);
+        pen.text(valueX, ry, ellipsize(pen, text(ctx, kCrashLogNote), 15, right - valueX), 15, kWarn, true);
+    }
 }
 
 // One state-only measure pass drives both Streaming's geometry and its section positions.
@@ -1320,9 +1331,12 @@ int widgetHeight(const WidgetInstance& w, const WidgetContext* ctx) {
         case WidgetType::CpuItems:
         case WidgetType::RamItems: return static_cast<int>(kTop) + 26 + static_cast<int>(kRowH) * static_cast<int>(w.maxItems) + 10;
         case WidgetType::Network: return ctx && !networkExpanded(w, *ctx) ? 64 : 108;
-        case WidgetType::General:
-            return static_cast<int>(kTop) + 20 + (ctx && ctx->clockFormat == 0 ? 4 : 5) *
-                   static_cast<int>(kLineH) + 12;
+        case WidgetType::General: {
+            int rows = ctx && ctx->clockFormat == 0 ? 4 : 5;
+            if (ctx && ok(*ctx, kLastPowerOff)) ++rows;  // T11
+            if (ctx && ok(*ctx, kCrashLogNote)) ++rows;
+            return static_cast<int>(kTop) + 20 + rows * static_cast<int>(kLineH) + 12;
+        }
         case WidgetType::Streaming: return ctx ? measureStreaming(*ctx).height : 504;
         case WidgetType::HeadsetCamera:
         case WidgetType::EyeCamera: return cam::cameraWidgetHeight(w);  // T10

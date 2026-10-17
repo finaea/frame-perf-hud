@@ -22,6 +22,7 @@
 #include "paths.h"
 #include "scheduler.h"
 #include "sensor_bridge.h"
+#include "session_service.h"  // T11
 #include "settings_panel.h"
 #include "theme.h"
 #include "sensors.h"
@@ -99,6 +100,7 @@ struct Options {
     bool timingSecondsGiven = false;
     bool secondsGiven = false;
     bool fakeThrottle = false;
+    bool fakeEndCard = false;  ///< T11 --dump-png: draw an end-of-session card over the panel
     bool previewQuit = false;            ///< --dump-settings-png: draw the "press again to quit" state
     bool forceSettingsVisible = false;   ///< diagnostics: run as if the dashboard tab were visible
     std::string previewAutostart;        ///< --dump-settings-png: draw autostart in this state
@@ -226,6 +228,7 @@ void printUsage() {
         "      --fake-fps N     fake the app's fps around N, to see what a drop looks like\n"
         "      --fake-wifi D    fake the dongle link (D = signal in dBm, none = not connected, home:D = home Wi-Fi)\n"
         "      --fake-throttle  fake SteamVR throttling the app to half rate (36 fps at 72 Hz, 50%% reprojection)\n"
+        "      --fake-end-card  draw an end-of-session card over the panel\n"
         "  --dump-settings-png PATH  without OpenVR, render the dashboard tab to a PNG and exit\n"
         "      --thumbnail-png PATH  also write the dashboard thumbnail (same image as the launcher icon)\n"
         "      --thumbnail-size N    side of that thumbnail (default 256)\n"
@@ -233,7 +236,7 @@ void printUsage() {
         "      --preview-autostart S  draw autostart in this state (enabled / disabled / notinstalled / busy / failed)\n"
         "      --preview-update S     draw the update check in this state (uptodate / checking / available / manual /\n"
         "                             confirm / installing / installed / checkfailed / installfailed; default uptodate)\n"
-        "      --preview-page P       layout (default) or placement\n"
+        "      --preview-page P       layout (default), placement or logs\n"
         "      --preview-pc NAME      draw the \"PC wants to connect\" banner for NAME\n"
         "  --config PATH        config file (default ~/.config/frame-perf-hud/config.json)\n"
         "  --verbose            while running as an overlay, log the values every few seconds\n"
@@ -338,6 +341,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.previewQuit = true;
         } else if (arg == "--fake-throttle") {
             options.fakeThrottle = true;
+        } else if (arg == "--fake-end-card") {  // T11
+            options.fakeEndCard = true;
         } else if (arg == "--fake-wifi" && hasNext) {
             options.fakeWifi = argv[++i];
         } else if (arg == "--layout" && hasNext) {  // T04
@@ -516,6 +521,8 @@ void storeFakeWarnings(fph::MetricStore& st, double now) {
     st.setNa(kBatteryTimeToFullS, fph::Reason::NotConnected, now);
     st.setF32(kCpuCluster0MaxMhz + 3, 2400.0, now);  // a Playtime cap on the prime cluster
     st.setF32(kCpuCluster0HwMaxMhz + 3, 3052.8, now);
+    st.setText(kLastPowerOff, "Normal restart", now);  // T11: General's extra rows
+    st.setText(kCrashLogNote, "Crash log saved (12:55)", now);
     for (uint16_t base : {kNetDongleBase, kNetHomeBase}) {
         st.setEnum(base + kNetAdapterPresent, 1, now);
         st.setEnum(base + kNetAdapterConnected, 1, now);
@@ -710,6 +717,10 @@ int runDumpPng(const Options& options) {
         if (options.fakeWarnings) storeFakeWarnings(store, t);
         if (!options.fakeWifi.empty()) storeFakeWifi(store, options.fakeWifi, t);
         const fph::ProcessListsView lists = bridge.processListsView();
+        if (options.fakeEndCard) {  // T11
+            renderer.setOverlay({"VRChat · 1 h 05 min", "fps avg 71.8 · 12 dropped", "Power avg 9.4 W · peak 12.1 W",
+                                 "Battery 82% to 61% (-21 points)", "Peak CPU 71 °C · GPU 68 °C · battery 39 °C"});
+        }
         const double r0 = nowSeconds();
         renderer.render(widgetContext(config, store, lists, t));
         renderMs = (nowSeconds() - r0) * 1e3;
@@ -770,12 +781,25 @@ int runDumpSettingsPng(const Options& options) {
     if (options.previewUpdate == "confirm") panel.armUpdateConfirmForPreview();
     // T05: which page, and a pending PC's banner
     if (options.previewPage == "placement") panel.showPage(SettingsPage::Placement);
+    LogsUiState logs;  // T11: --preview-page logs shows made-up states
+    if (options.previewPage == "logs") {
+        panel.showPage(SettingsPage::Logs);
+        logs.recording = true;
+        logs.recordStatus = "Recording 3:12 to saves/2026-10-17_130509_VRChat_record.csv";
+        logs.saveStatus = "Saved 13:05:09: saves/2026-10-17_130509_VRChat_save (600 s)";
+        logs.crashRecorderOn = true;
+        logs.crashStatus = "Crash log saved (12:55)";
+        logs.powerOff = "Normal restart";
+        logs.lastCard = {"VRChat · 1 h 05 min", "fps avg 71.8 · 12 dropped", "Power avg 9.4 W · peak 12.1 W",
+                         "Battery 82% to 61% (-21 points)", "Peak CPU 71 °C · GPU 68 °C · battery 39 °C",
+                         "Stream latency avg 45.2 ms · min slack 3.2 ms · 2 link resets"};
+    }
     LinkUiState link;
     if (!options.previewPc.empty()) {
         link.pending.push_back({"00112233445566778899aabbccddeeff", options.previewPc});
         link.knownPcs = 2;
     }
-    panel.render(config, autostartView, updateView, link);
+    panel.render(config, autostartView, updateView, link, logs);
     if (!panel.writePng(options.pngPath)) {
         std::fprintf(stderr, "Couldn't write the PNG: %s\n", options.pngPath.c_str());
         return 1;
@@ -1089,6 +1113,11 @@ int runOverlay(const Options& options) {
         });
     // T06: the PC link (UDP). Its socket opens once SteamVR is connected; it sits in the main poll()
     LinkService linkService(config, watcher, layoutAuthority, store, bridge);
+    // T11: session logs, Save / Record, the crash recorder (its kit sources are pinned), the last power-off reason
+    SessionService sessions(paths::stateDir());
+    sessions.start(config.crashRecorder, store, nowSeconds());
+    scheduler.setPinnedSources(sessions.pinnedSources());
+    bool crashRecorderApplied = config.crashRecorder;
     std::fprintf(stderr, "[layout] version %u, %zu widget(s) in %zu column(s), panel %dx%d\n", config.layout.version,
                  fph::enabledWidgets(config.layout).size(), config.layout.columns.size(),
                  renderer.geometry().textureWidth, renderer.geometry().textureHeight);
@@ -1127,7 +1156,10 @@ int runOverlay(const Options& options) {
             }
         }
     }
-    if (gStopRequested) return 0;
+    if (gStopRequested) {
+        sessions.shutdown();  // T11: a clean exit: the crash marker goes
+        return 0;
+    }
     std::fprintf(stderr, "[VR] Connected to SteamVR\n");
     bridge.refreshSceneApp(nowSeconds());  // T03: starting mid-game opens that game's session at once
     linkService.start(nowSeconds());       // T06
@@ -1155,6 +1187,7 @@ int runOverlay(const Options& options) {
     DetachedGrab grab;
     bool dashboardOpen = false;      // T05: IsDashboardVisible, as of the last metrics tick
     uint64_t linkUiRevision = ~0ull;  // T05: LinkUiState::revision last drawn
+    uint64_t logsUiRevision = ~0ull;  // T11: LogsUiState::revision last drawn
     int scrollEventsLogged = 0;       // T05: scroll events logged since the dashboard opened
     /** T05: ends a grab (laser released, dashboard closed, attach point changed) and saves where the HUD is. */
     const auto releaseGrab = [&](const char* why) {
@@ -1267,6 +1300,10 @@ int runOverlay(const Options& options) {
                     } else if (action == SettingsAction::PcForgetAll) {  // T05
                         linkService.server().forgetAll();
                         std::fprintf(stderr, "[link] forgot every allowed PC from the dashboard\n");
+                    } else if (action == SettingsAction::RecordOn || action == SettingsAction::RecordOff) {  // T11
+                        sessions.setRecord(action == SettingsAction::RecordOn, bridge.session(), nowSeconds());
+                    } else if (action == SettingsAction::SaveNow) {  // T11
+                        sessions.save(bridge.session(), nowSeconds());
                     } else {
                         handleSettingsAction(action, config, watcher, vr, settings.angleStepDeg());
                     }
@@ -1357,6 +1394,17 @@ int runOverlay(const Options& options) {
                 linkUiRevision = linkRevision;
                 settingsDirty = true;
             }
+            // T11: the Logs page (Record's clock, a saved session's card, ...)
+            if (sessions.ui().revision != logsUiRevision) {
+                logsUiRevision = sessions.ui().revision;
+                settingsDirty = true;
+            }
+            // T11: the crash recorder follows the config (the dashboard switch, or a hand edit)
+            if (config.crashRecorder != crashRecorderApplied) {
+                crashRecorderApplied = config.crashRecorder;
+                sessions.setCrashRecorder(config.crashRecorder);
+                scheduler.setPinnedSources(sessions.pinnedSources());
+            }
 
             // "Someone looking": recomputes the reference counts whenever a signal changes
             const int level = vr.hmdActivityLevel();
@@ -1369,7 +1417,7 @@ int runOverlay(const Options& options) {
             demand.hmdInUse = hmdInUse(level);
             demand.editorOpen = settingsVisible;
             demand.pcLease = linkService.hasLease();  // T06
-            demand.record = false;   // stub until ticket 11
+            demand.record = sessions.recording();  // T11: Record reads with the HUD hidden too
             if (someoneLooking(demand) != someoneLooking(scheduler.demand())) {
                 std::fprintf(stderr, "[demand] %s\n", someoneLooking(demand)
                                                           ? "Someone is looking: reading sources"
@@ -1398,7 +1446,8 @@ int runOverlay(const Options& options) {
         // an editor drag made on the old version
         if (settingsVisible) settingsDirty |= settings.syncLayout(config.layout);
         if (settingsVisible && (settingsDirty || !settingsWasVisible)) {
-            settings.render(config, autostart.status(), updater.status(), linkService.server().uiState());  // T05
+            settings.render(config, autostart.status(), updater.status(), linkService.server().uiState(),
+                            sessions.ui());  // T05, T11
             vr.submitSettings(settings.toRgba().data());
             settingsDirty = false;
         }
@@ -1410,6 +1459,8 @@ int runOverlay(const Options& options) {
         const double c1 = cpuSeconds();
         // T06: leases expire, METRICS (+ new process lists) go to lease holders, after the reads above
         if (metricsTick) linkService.tick(nowSeconds());
+        // T11: once a second: the session's row (only while someone looks), Record, the crash ring, ended sessions
+        sessions.tick(nowSeconds(), someoneLooking(scheduler.demand()), bridge.session(), store);
 
         // ---- HUD redraw (2 Hz at most). Only while it's shown and the headset is in use: nobody sees it
         // otherwise. The texture is converted and uploaded only when a pixel changed ----
@@ -1420,6 +1471,7 @@ int runOverlay(const Options& options) {
                 const double c2 = cpuSeconds();
                 const double w2 = nowSeconds();
                 const fph::ProcessListsView lists = bridge.processListsView();
+                renderer.setOverlay(sessions.hudCard(now));  // T11: the end card, 10 s
                 const bool changed = renderer.render(widgetContext(config, store, lists, now, &cameras));
                 const double c3 = cpuSeconds();
                 const double w3 = nowSeconds();
@@ -1453,7 +1505,8 @@ int runOverlay(const Options& options) {
             gDumpRequested = 0;
             writeDebugDump(scheduler, store, activityLevel, settingsVisible, nowSeconds(),
                            bridge.debugText() + renderStats.text(renderer.geometry()) +
-                               linkService.debugText(nowSeconds()) + cameraDebugText(cameras, vr));  // T06, T10
+                               linkService.debugText(nowSeconds()) + cameraDebugText(cameras, vr) +
+                               sessions.debugText());  // T06, T10, T11
         }
 
         // ---- T10: cameras. Wants from the layout, the HUD and the PCs; new frames to the tiles and the PCs ----
@@ -1512,6 +1565,7 @@ int runOverlay(const Options& options) {
     }
 
     // Same cleanup for SIGTERM / SIGINT, SteamVR quitting, vrserver vanishing, and Quit
+    sessions.shutdown();     // T11: the open session's files, Record closed, the crash marker removed
     linkService.shutdown();  // T06: BYE to lease holders, so PCs go back to discovery at once
     cameras.stop();          // T10: the camera thread and the helper (it exits on socket EOF)
     vr.shutdown();           // destroys the camera tiles with the panel

@@ -102,6 +102,7 @@ struct Config {
     fph::Layout layout = fph::defaultLayout();  ///< T04: the widget grid ("layout" key)
     bool layoutInFile = false;  ///< T04: the file had a usable "layout" (false = first run, or it was unreadable)
     LinkConfig link;            ///< T06: the PC link ("link" key)
+    bool crashRecorder = false;  ///< T11: the 1 Hz crash ring ("crash_recorder"); off by default
 };
 
 /**

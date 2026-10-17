@@ -5,6 +5,7 @@
 #include "config.h"
 #include "layout_editor.h"  // T05
 #include "link_ui.h"        // T05: PC pairing banner (ticket 06's state)
+#include "logs_ui.h"        // T11: the Logs page
 #include "update_check.h"  // vendor/frame-updater/cpp（CMake の include dir で見つかる）
 
 #include <cstdint>
@@ -78,10 +79,17 @@ enum class SettingsAction {
     PcAllow,         ///< pairing banner: allow SettingsPanel::bannerPcId() (the caller tells the link server)
     PcDeny,          ///< pairing banner: deny it
     PcForgetAll,     ///< footer: forget every allowed PC
+    // T11: the Logs page
+    PageLogs,          ///< show the Logs page (handled inside the panel)
+    RecordOn,          ///< start Record (the caller does it; not saved in the config)
+    RecordOff,         ///< stop Record
+    SaveNow,           ///< save the last 10 minutes + this session's summary (the caller does it)
+    CrashRecorderOn,   ///< config.crashRecorder (saved)
+    CrashRecorderOff,
 };
 
 /** T05: which page the dashboard tab shows. */
-enum class SettingsPage { Layout, Placement };
+enum class SettingsPage { Layout, Placement, Logs };  // T11: Logs
 
 /**
  * 操作を設定に反映する（Quit と None は何もしない）。位置と向きのボタンは、今の固定先（頭・左手・右手）の値を動かす。
@@ -115,7 +123,7 @@ public:
      * @param update 新しい版の確認・インストールの今の状態
      */
     void render(const Config& config, const AutostartStatus& autostart, const frame_updater::UpdateStatus& update,
-                const LinkUiState& link = LinkUiState());
+                const LinkUiState& link = LinkUiState(), const LogsUiState& logs = LogsUiState());
 
     /**
      * T05: hands the editor the current layout. Call before each batch of pointer events, so a press works on the
@@ -236,7 +244,7 @@ private:
     std::vector<uint8_t> rgba_;
     std::vector<Button> buttons_;
     /** T05: which set of card buttons is laid out (was upstream's wristLayout_ bool). */
-    enum class ButtonMode { Layout, Head, Wrist, Detached };
+    enum class ButtonMode { Layout, Head, Wrist, Detached, Logs };  // T11: Logs
     ButtonMode mode_ = ButtonMode::Head;  ///< 今のボタンの配置（固定先・ページが変わったら render() で置き直す）
     SettingsPage page_ = SettingsPage::Layout;  ///< T05: the editor is the tab's first page
     LayoutEditor editor_;                       ///< T05
@@ -335,6 +343,9 @@ private:
      * T05: "PC '<name>' wants to connect: Deny / Allow", in the update bar's place while a PC is pending.
      */
     void drawPairingBanner(const Pen& pen, const UiText& text, const LinkUiState::Pending& pc, double left, double right);
+
+    /** T11: the Logs page's three cards (Save and Record, Crash recorder, Last session). */
+    void drawLogsPage(const Pen& pen, const UiText& text, const Config& config, const LogsUiState& logs) const;
 
     /**
      * 左のカード「パネル」（表示・大きさ・透明度・時計・既定に戻す）を描く。

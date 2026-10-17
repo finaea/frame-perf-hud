@@ -63,8 +63,15 @@ constexpr double kQuitW = 230;
 // T05: the Layout page: the lanes on the left, the palette on the right (same height as the placement cards)
 constexpr double kEditorCardW = 1000;
 constexpr double kPaletteCardX = kPad + kEditorCardW + kCardGap;
-constexpr double kPageSwitchW = 300;
+constexpr double kPageSwitchW = 420;  // T11: three pages
 constexpr double kForgetW = 260;
+// T11: the Logs page: Save and Record | Crash recorder | Last session
+constexpr double kLogCard1W = 500;
+constexpr double kLogCard2X = kPad + kLogCard1W + kCardGap;
+constexpr double kLogCard2W = 470;
+constexpr double kLogCard3X = kLogCard2X + kLogCard2W + kCardGap;
+constexpr double kLogCard3W = kWidth - kPad - kLogCard3X;
+constexpr double kLogLabelW = 150;  // row label left of the On / Off switch
 
 constexpr double kNudgeM = 0.02;       // 頭: 上下左右の微調整（m）
 constexpr double kDepthStepM = 0.05;   // 頭: 前後の微調整（m）
@@ -282,7 +289,8 @@ bool sameDisplaySettings(const Config& a, const Config& b) {
            a.posY == b.posY && a.posZ == b.posZ && a.yawDeg == b.yawDeg && a.pitchDeg == b.pitchDeg &&
            a.rollDeg == b.rollDeg && !(a.leftWrist != b.leftWrist) && !(a.rightWrist != b.rightWrist) &&
            a.wristFade == b.wristFade && a.wristFadeEndDeg == b.wristFadeEndDeg && a.clockFormat == b.clockFormat &&
-           a.widthM == b.widthM && a.alpha == b.alpha && a.detachedPose == b.detachedPose;
+           a.widthM == b.widthM && a.alpha == b.alpha && a.detachedPose == b.detachedPose &&
+           a.crashRecorder == b.crashRecorder;  // T11
 }
 
 }  // namespace
@@ -453,7 +461,13 @@ bool applySettingsAction(SettingsAction action, Config& config, double angleStep
         case SettingsAction::PcAllow:
         case SettingsAction::PcDeny:
         case SettingsAction::PcForgetAll:
+        case SettingsAction::PageLogs:  // T11: Record and Save are the caller's; the page is the panel's
+        case SettingsAction::RecordOn:
+        case SettingsAction::RecordOff:
+        case SettingsAction::SaveNow:
         case SettingsAction::None: break;
+        case SettingsAction::CrashRecorderOn: config.crashRecorder = true; break;
+        case SettingsAction::CrashRecorderOff: config.crashRecorder = false; break;
     }
     return !sameDisplaySettings(config, before);
 }
@@ -498,6 +512,14 @@ void SettingsPanel::layoutButtons() {
 
     // T05: the Layout page's cards are the editor's; only the header and the footer have buttons here
     if (mode_ == ButtonMode::Layout) return;
+    if (mode_ == ButtonMode::Logs) {  // T11
+        const double inner1 = kPad + kCardPad;
+        segmented(inner1 + kLogLabelW, rowY(0), kSegmentW, {SettingsAction::RecordOn, SettingsAction::RecordOff});
+        add(SettingsAction::SaveNow, inner1, rowY(1), kLogCard1W - 2 * kCardPad, kButtonH);
+        segmented(kLogCard2X + kCardPad + kLogLabelW, rowY(0), kSegmentW,
+                  {SettingsAction::CrashRecorderOn, SettingsAction::CrashRecorderOff});
+        return;
+    }
     const bool wristLayout = mode_ == ButtonMode::Wrist;
     const bool detached = mode_ == ButtonMode::Detached;
 
@@ -626,6 +648,12 @@ std::string SettingsPanel::labelOf(SettingsAction action, const UiText& text) co
         case SettingsAction::PcAllow: return text.pcAllow;
         case SettingsAction::PcDeny: return text.pcDeny;
         case SettingsAction::PcForgetAll: return "";  // drawn with its count in drawFooter
+        case SettingsAction::PageLogs: return text.pageLogs;  // T11
+        case SettingsAction::RecordOn:
+        case SettingsAction::CrashRecorderOn: return text.on;
+        case SettingsAction::RecordOff:
+        case SettingsAction::CrashRecorderOff: return text.off;
+        case SettingsAction::SaveNow: return text.saveNow;
         case SettingsAction::None: break;
     }
     return "";
@@ -664,8 +692,11 @@ SettingsAction SettingsPanel::pointerDown(double x, double y, double now) {
         return SettingsAction::None;
     }
     pressed_ = hover_;
-    if (pressed_ == SettingsAction::PageLayout || pressed_ == SettingsAction::PagePlacement) {
-        page_ = pressed_ == SettingsAction::PageLayout ? SettingsPage::Layout : SettingsPage::Placement;
+    if (pressed_ == SettingsAction::PageLayout || pressed_ == SettingsAction::PagePlacement ||
+        pressed_ == SettingsAction::PageLogs) {
+        page_ = pressed_ == SettingsAction::PageLayout      ? SettingsPage::Layout
+                : pressed_ == SettingsAction::PagePlacement ? SettingsPage::Placement
+                                                            : SettingsPage::Logs;  // T11
         editor_.pointerLeave();
         quitArmed_ = false;
         updateConfirmArmed_ = false;
@@ -1235,12 +1266,104 @@ void SettingsPanel::drawUpdateBar(const Pen& pen, const UiText& text, const Conf
 }
 
 double SettingsPanel::drawPageSwitch(const Pen& pen, const UiText& text, double left) {
-    placeFooterButton(SettingsAction::PageLayout, left, kHeaderY + (kHeaderH - kButtonH) / 2, kPageSwitchW / 2, kButtonH);
-    placeFooterButton(SettingsAction::PagePlacement, left + kPageSwitchW / 2, kHeaderY + (kHeaderH - kButtonH) / 2,
-                      kPageSwitchW / 2, kButtonH);
-    drawSegmented(pen, text, {SettingsAction::PageLayout, SettingsAction::PagePlacement},
-                  page_ == SettingsPage::Layout ? 0 : 1, true);
+    const double y = kHeaderY + (kHeaderH - kButtonH) / 2;
+    const double part = kPageSwitchW / 3;
+    placeFooterButton(SettingsAction::PageLayout, left, y, part, kButtonH);
+    placeFooterButton(SettingsAction::PagePlacement, left + part, y, part, kButtonH);
+    placeFooterButton(SettingsAction::PageLogs, left + 2 * part, y, part, kButtonH);  // T11
+    drawSegmented(pen, text, {SettingsAction::PageLayout, SettingsAction::PagePlacement, SettingsAction::PageLogs},
+                  page_ == SettingsPage::Layout ? 0 : page_ == SettingsPage::Placement ? 1 : 2, true);
     return left + kPageSwitchW;
+}
+
+namespace {
+
+/** T11: splits text into lines no wider than maxW (greedy, at spaces). */
+std::vector<std::string> wrapText(const Pen& pen, const std::string& text, double size, double maxW, bool bold) {
+    std::vector<std::string> lines;
+    std::string line;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t space = text.find(' ', pos);
+        if (space == std::string::npos) space = text.size();
+        const std::string word = text.substr(pos, space - pos);
+        const std::string candidate = line.empty() ? word : line + " " + word;
+        if (!line.empty() && pen.measure(candidate, size, bold) > maxW) {
+            lines.push_back(line);
+            line = word;
+        } else {
+            line = candidate;
+        }
+        pos = space + 1;
+    }
+    if (!line.empty()) lines.push_back(line);
+    return lines;
+}
+
+}  // namespace
+
+void SettingsPanel::drawLogsPage(const Pen& pen, const UiText& text, const Config& /*config*/,
+                                 const LogsUiState& logs) const {
+    const double bottom = kCardY + kCardH - kCardPad - 24;  // the last line is the folder hint
+    /** Wrapped lines from baseline y down, never past the card's bottom. @return the next line's baseline */
+    const auto paragraph = [&](double x, double y, double w, const std::string& body, double size, Color c, bool bold) {
+        for (const std::string& line : wrapText(pen, body, size, w, bold)) {
+            if (y > bottom) break;
+            pen.text(x, y, line, fitSize(pen, line, size, size * 0.7, w, bold), c, bold);
+            y += size * 1.35;
+        }
+        return y;
+    };
+    const double labelSize = 22;
+    // Save and Record (red edge while recording)
+    {
+        const double x = kPad + kCardPad;
+        const double w = kLogCard1W - 2 * kCardPad;
+        drawCard(pen, kPad, kCardY, kLogCard1W, kCardH, 20, kCard, logs.recording ? kDanger : kCard, logs.recording ? 2 : 0);
+        pen.text(x, kCardY + 42, text.cardRecord, 24, kText, true);
+        pen.text(x, centerBaseline(rowY(0), kButtonH, labelSize), text.rowRecord, labelSize, kTextMuted);
+        drawSegmented(pen, text, {SettingsAction::RecordOn, SettingsAction::RecordOff}, logs.recording ? 0 : 1, true);
+        drawButton(pen, text, SettingsAction::SaveNow, false, 24);
+        double y = rowY(2) + 30;
+        if (!logs.recordStatus.empty()) {
+            y = paragraph(x, y, w, logs.recordStatus, 18, logs.recording ? kDanger : kText, logs.recording);
+        }
+        if (!logs.saveStatus.empty()) y = paragraph(x, y, w, logs.saveStatus, 18, kText, false);
+        paragraph(x, y + 6, w, text.recordHint, 16, kTextMuted, false);
+    }
+    // Crash recorder and the last power-off
+    {
+        const double x = kLogCard2X + kCardPad;
+        const double w = kLogCard2W - 2 * kCardPad;
+        drawCard(pen, kLogCard2X, kCardY, kLogCard2W, kCardH, 20, kCard, kCard, 0);
+        pen.text(x, kCardY + 42, text.cardCrash, 24, kText, true);
+        pen.text(x, centerBaseline(rowY(0), kButtonH, labelSize), text.rowCrashRecorder, labelSize, kTextMuted);
+        drawSegmented(pen, text, {SettingsAction::CrashRecorderOn, SettingsAction::CrashRecorderOff},
+                      logs.crashRecorderOn ? 0 : 1, true);
+        double y = rowY(1) + 26;
+        y = paragraph(x, y, w, text.crashHint, 17, kTextMuted, false);
+        if (!logs.crashStatus.empty()) y = paragraph(x, y + 8, w, logs.crashStatus, 19, kWarn, true);
+        y += 14;
+        pen.text(x, y, text.rowPowerOff, 18, kTextMuted);
+        paragraph(x, y + 28, w, logs.powerOff.empty() ? "unknown" : logs.powerOff, 20, kText, true);
+    }
+    // The last session's end card
+    {
+        const double x = kLogCard3X + kCardPad;
+        const double w = kLogCard3W - 2 * kCardPad;
+        drawCard(pen, kLogCard3X, kCardY, kLogCard3W, kCardH, 20, kCard, kCard, 0);
+        pen.text(x, kCardY + 42, text.cardLastSession, 24, kText, true);
+        double y = kCardY + 90;
+        if (logs.lastCard.empty()) {
+            paragraph(x, y, w, text.noSessionYet, 18, kTextMuted, false);
+        } else {
+            for (size_t i = 0; i < logs.lastCard.size(); ++i) {
+                y = paragraph(x, y, w, logs.lastCard[i], i == 0 ? 22 : 19, kText, i == 0) + 4;
+            }
+        }
+        pen.text(x, kCardY + kCardH - kCardPad, text.logsFolder, fitSize(pen, text.logsFolder, 15, 11, w, false),
+                 kTextMuted);
+    }
 }
 
 void SettingsPanel::drawPairingBanner(const Pen& pen, const UiText& text, const LinkUiState::Pending& pc, double left,
@@ -1267,11 +1390,12 @@ void SettingsPanel::drawPairingBanner(const Pen& pen, const UiText& text, const 
 }
 
 void SettingsPanel::render(const Config& config, const AutostartStatus& autostart,
-                            const frame_updater::UpdateStatus& update, const LinkUiState& link) {
+                            const frame_updater::UpdateStatus& update, const LinkUiState& link, const LogsUiState& logs) {
     const Pen pen {cr_, &fonts_};
     const UiText& t = uiText(config.language);
     // 固定先・ページが変わったら、カードのボタンを置き直す（下の段と更新の帯はこのあと置き直す）
     const ButtonMode mode = page_ == SettingsPage::Layout                ? ButtonMode::Layout
+                            : page_ == SettingsPage::Logs               ? ButtonMode::Logs  // T11
                             : config.attachment == Attachment::Head     ? ButtonMode::Head
                             : config.attachment == Attachment::Detached ? ButtonMode::Detached
                                                                         : ButtonMode::Wrist;
@@ -1313,6 +1437,7 @@ void SettingsPanel::render(const Config& config, const AutostartStatus& autostar
         drawPositionCard(pen, t, config);
         drawFacingCard(pen, t, config);
     }
+    if (page_ == SettingsPage::Logs) drawLogsPage(pen, t, config, logs);  // T11
     drawFooter(pen, t, config, autostart, link);
     if (page_ == SettingsPage::Layout) editor_.render(pen, t);  // last: a dragged card is drawn over everything
 
