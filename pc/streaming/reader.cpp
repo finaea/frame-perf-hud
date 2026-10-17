@@ -656,9 +656,11 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
             sane = false;
             break;
         }
+        // At idle bitrate one record's audio (dword 4) can exceed its wire bytes (seen live: 8960 vs 8272), so audio
+        // only gets the absolute bound.
         for (size_t k = 0; k < 7; ++k) {
             const auto v = at<int32_t>(b, k * 4);
-            if (v < 0 || v > wire)
+            if (v < 0 || v > (k == 4 ? 2 * 1024 * 1024 : wire))
                 sane = false;
             bytes[k] += static_cast<uint32_t>(std::max(0, v));
         }

@@ -772,6 +772,43 @@ void testReaderRewalksWhenStatsMapGrows() {
     CHECK(isOkF32(store, metric::kPcStreamEncodeAvg, 2.6, 1e-6));
 }
 
+/** 2026-10-17, headset idling at ~4 Mbit/s: 63 of 8000 bandwidth records carried more audio than wire bytes.
+ *  This one is copied from that capture (wire, video, fec, logic, audio, retry, dword 6). Audio only gets the
+ *  absolute bound, so one such record in the last second must not fail L3. */
+void testReaderIdleAudioAboveWireKeepsL3() {
+    FakeMemory mem;
+    constexpr uint32_t kBuild = kKnownBuild;
+    setupModule(mem, kBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    setActiveServer(mem, w.srv);
+    const int32_t idle[7] = {8272, 216, 1024, 24, 8960, 0, 1904};
+    mem.write(w.bw + 100 * 0xa8, idle, sizeof(idle)); // inside the last 1 s; its timestamp at +0x40 stays
+
+    Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, 72.0, store);
+    CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
+    CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+}
+
+/** Every other dword still has to fit inside its record's wire bytes: video above wire fails L3 closed. */
+void testReaderNonAudioAboveWireFailsL3() {
+    FakeMemory mem;
+    constexpr uint32_t kBuild = kKnownBuild;
+    setupModule(mem, kBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    setActiveServer(mem, w.srv);
+    const int32_t bad[7] = {8272, 9000, 1024, 24, 2000, 0, 1904};
+    mem.write(w.bw + 100 * 0xa8, bad, sizeof(bad));
+
+    Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, 72.0, store);
+    CHECK(noteOf(store, metric::kPcStreamL3Note) == "frame/bandwidth cross-check");
+    CHECK(notOk(store, metric::kPcStreamFps));
+    CHECK(notOk(store, metric::kPcStreamWireMbps));
+}
+
 // ==================== readLinkEndpoint ====================
 
 void testReadLinkEndpointValid() {
@@ -902,6 +939,8 @@ int main() {
     testReaderOwnerChangeWaitsForNewBaseline();
     testReaderL2RecoversIndependentlyOfDisabledL3();
     testReaderRewalksWhenStatsMapGrows();
+    testReaderIdleAudioAboveWireKeepsL3();
+    testReaderNonAudioAboveWireFailsL3();
     testReadLinkEndpointValid();
     testReadLinkEndpointGetterShapeChanged();
     testReadLinkEndpointBadFamily();
