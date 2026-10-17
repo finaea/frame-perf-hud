@@ -1,11 +1,24 @@
 # frame-perf-hud
 
-A performance HUD for the Valve Steam Frame. It stays in view inside SteamVR and shows the app's frame rate and
-frame times, CPU and GPU load, temperatures, power draw, battery, the wireless links and, while streaming from a PC,
-the stream's latency and bitrate. It runs on the headset itself (aarch64 SteamOS) as an OpenVR overlay, needs no
-sudo, and comes with a Windows app that mirrors the HUD, edits its layout and adds the PC's side of the stream.
+An extended version of [frame-perf-overlay](https://github.com/sasaken1102r/frame-perf-overlay) by sasaken1102r,
+the performance HUD for the Valve Steam Frame. It keeps the original's in-VR readout of the app's frame rate, CPU
+and GPU load, temperatures, power draw and battery, and adds a lot on top:
 
-<!-- demo video: paste the GitHub user-attachments URL here, on its own line, with a one-line caption under it -->
+- **Network:** a widget per wireless link, the Steam Link dongle and home Wi-Fi, with traffic, signal, link rates,
+  band, channel and IP.
+- **Streaming:** while streaming from a PC, the game-to-photon latency and each of its stages, the bitrate, every
+  link's share and ping, and the stream's error counters, measured from both the headset and the PC.
+- **Usage items:** the processes using the most CPU and the most memory.
+- **Camera feeds:** the headset's outward cameras and eye cameras, live, through an optional helper that needs sudo
+  once.
+
+The HUD runs on the headset itself (aarch64 SteamOS) as an OpenVR overlay and needs no sudo. A Windows app mirrors
+it, edits its layout and adds the PC's side of the stream.
+
+https://github.com/user-attachments/assets/47c83a1f-5199-4b92-8055-59b419db86d4
+
+*Inside the headset: the dashboard tab's pages, the HUD pinned in the room and curved, and live widgets including
+the eye cameras (45 s, no sound).*
 
 ![The HUD with its performance widgets (sample values)](docs/images/panel-en.png)
 
@@ -16,20 +29,34 @@ room, where it can also be curved around the viewer.
 Everything is set from a **Frame Perf HUD** tab in the SteamVR dashboard, with four pages: Placement, Layout,
 Profiles and Logs.
 
+---
+
+**Placement:** show or hide the HUD, its size, opacity and clock, and where it sits: head, wrist or a spot in the room.
+
 ![The Placement page of the dashboard tab](docs/images/dashboard-placement-en.png)
+
+---
+
+**Layout:** drag widgets between columns, add them from the palette, and tap one to change its settings.
 
 ![The Layout page of the dashboard tab](docs/images/dashboard-layout-en.png)
 
+---
+
+**Profiles:** keep up to 8 layouts and switch between them.
+
 ![The Profiles page of the dashboard tab (sample profiles)](docs/images/dashboard-profiles-en.png)
+
+---
+
+**Logs:** Save Logs, Record, the crash recorder, the last power-off reason and the last session's card.
 
 ![The Logs page of the dashboard tab (sample values)](docs/images/dashboard-logs-en.png)
 
-![The Windows app](docs/images/pc-window-layout.png)
+---
 
-The Windows app shows the same widgets in a window on the PC, and has its own Layout, Profiles and Logs tabs.
-
-These images were written out by the app itself (`--dump-png`, `--dump-settings-png` and the preview tools), not
-captured inside the headset. The numbers are sample values.
+The screenshots in this README were written out by the app itself (`--dump-png`, `--dump-settings-png` and the
+preview tools), not captured inside the headset. Their numbers are sample values; the video above is real.
 
 ## What it does
 
@@ -131,6 +158,10 @@ sudo ~/.local/share/frame-perf-hud/install-camera-helper.sh
 - To remove it: `sudo ~/.local/share/frame-perf-hud/install-camera-helper.sh --uninstall`.
 
 ## The Windows app
+
+![The Windows app](docs/images/pc-window-layout.png)
+
+The Windows app shows the same widgets in a window on the PC, and has its own Layout, Profiles and Logs tabs.
 
 1. Download `FramePerfHud-<version>.exe` from the same release and run it. There's no installer: it's one file and
    can live in any folder.
