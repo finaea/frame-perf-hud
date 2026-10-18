@@ -301,6 +301,38 @@ bool sameDisplaySettings(const Config& a, const Config& b) {
            a.crashRecorder == b.crashRecorder;  // T11
 }
 
+/** T11: splits text into lines no wider than maxW (greedy, at spaces). */
+std::vector<std::string> wrapText(const Pen& pen, const std::string& text, double size, double maxW, bool bold) {
+    std::vector<std::string> lines;
+    std::string line;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t space = text.find(' ', pos);
+        if (space == std::string::npos) space = text.size();
+        const std::string word = text.substr(pos, space - pos);
+        const std::string candidate = line.empty() ? word : line + " " + word;
+        if (!line.empty() && pen.measure(candidate, size, bold) > maxW) {
+            lines.push_back(line);
+            line = word;
+        } else {
+            line = candidate;
+        }
+        pos = space + 1;
+    }
+    if (!line.empty()) lines.push_back(line);
+    return lines;
+}
+
+/** Shortens a line until it and a trailing "…" fit in maxW (whole UTF-8 characters, trailing spaces dropped). */
+std::string withEllipsis(const Pen& pen, std::string line, double size, double maxW, bool bold) {
+    while (!line.empty() && pen.measure(line + "…", size, bold) > maxW) {
+        while (!line.empty() && (static_cast<unsigned char>(line.back()) & 0xC0) == 0x80) line.pop_back();
+        if (!line.empty()) line.pop_back();
+        while (!line.empty() && line.back() == ' ') line.pop_back();
+    }
+    return line + "…";
+}
+
 }  // namespace
 
 bool applySettingsAction(SettingsAction action, Config& config, double angleStepDeg) {
@@ -1308,17 +1340,39 @@ void SettingsPanel::drawUpdateBar(const Pen& pen, const UiText& text, const Conf
             textRight = hintRight - std::max(pen.measure(first, size, false), pen.measure(second, size, false)) - 24;
         }
     }
-    // 1 行で 20px 以上で入ればそのまま。入らなければ、見出しと補足を 2 行に分ける（文言は変えない）
+    // 1 行で入ればそのまま（補足があれば 20px 以上、見出しだけなら前と同じ 14px 以上で、本当に収まるとき）。
+    // 入らなければ、ボタンの左に収まるよう折り返す（補足は新しい行から、最大 3 行、20px から 13px まで）。
+    // それでも入らなければ 3 行目を「…」で切る。ボタンの下には描かない
     const double maxTextW = textRight - textLeft;
     const std::string oneLine = detail.empty() ? headline : headline + detailSep + detail;
     const double oneSize = fitSize(pen, oneLine, 22, 14, maxTextW, bold);
-    if (detail.empty() || oneSize >= 20) {
+    if (oneSize >= (detail.empty() ? 14 : 20) && pen.measure(oneLine, oneSize, bold) <= maxTextW) {
         pen.text(textLeft, centerBaseline(kHeaderY, kHeaderH, oneSize), oneLine, oneSize, color, bold);
     } else {
-        const double size1 = fitSize(pen, headline, 20, 14, maxTextW, bold);
-        const double size2 = fitSize(pen, detail, 18, 13, maxTextW, bold);
-        pen.text(textLeft, kHeaderY + 36, headline, size1, color, bold);
-        pen.text(textLeft, kHeaderY + 66, detail, size2, color, bold);
+        constexpr int kMaxLines = 3;
+        double size = 20;
+        std::vector<std::string> lines;
+        for (;; size -= 1) {
+            lines = wrapText(pen, headline, size, maxTextW, bold);
+            if (!detail.empty()) {
+                for (std::string& l : wrapText(pen, detail, size, maxTextW, bold)) lines.push_back(std::move(l));
+            }
+            bool fits = static_cast<int>(lines.size()) <= kMaxLines && lines.size() * size * 1.3 <= kHeaderH - 8;
+            for (const std::string& l : lines) fits = fits && pen.measure(l, size, bold) <= maxTextW;
+            if (fits || size <= 13) break;
+        }
+        if (static_cast<int>(lines.size()) > kMaxLines) {
+            lines.resize(kMaxLines);
+            lines.back() = withEllipsis(pen, lines.back(), size, maxTextW, bold);
+        }
+        for (std::string& l : lines) {
+            if (pen.measure(l, size, bold) > maxTextW) l = withEllipsis(pen, l, size, maxTextW, bold);
+        }
+        const double lineH = size * 1.3;
+        const double top = kHeaderY + (kHeaderH - lines.size() * lineH) / 2;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            pen.text(textLeft, centerBaseline(top + i * lineH, lineH, size), lines[i], size, color, bold);
+        }
     }
     // ［更新する］（確認へ・確認の実行）は強調ボタン（アクセントの塗り ＋ 濃い文字。✓ は付けない）
     for (const SettingsAction a : buttons) {
@@ -1470,32 +1524,6 @@ void SettingsPanel::drawProfilesPage(const Pen& pen, const UiText& text, const P
     if (!profiles.status.empty()) pen.text(x, y, profiles.status, fitSize(pen, profiles.status, 18, 12, w, false), kText);
     pen.text(x, kCardY + kCardH - kCardPad, text.profileHint, fitSize(pen, text.profileHint, 16, 11, w, false), kTextMuted);
 }
-
-namespace {
-
-/** T11: splits text into lines no wider than maxW (greedy, at spaces). */
-std::vector<std::string> wrapText(const Pen& pen, const std::string& text, double size, double maxW, bool bold) {
-    std::vector<std::string> lines;
-    std::string line;
-    size_t pos = 0;
-    while (pos < text.size()) {
-        size_t space = text.find(' ', pos);
-        if (space == std::string::npos) space = text.size();
-        const std::string word = text.substr(pos, space - pos);
-        const std::string candidate = line.empty() ? word : line + " " + word;
-        if (!line.empty() && pen.measure(candidate, size, bold) > maxW) {
-            lines.push_back(line);
-            line = word;
-        } else {
-            line = candidate;
-        }
-        pos = space + 1;
-    }
-    if (!line.empty()) lines.push_back(line);
-    return lines;
-}
-
-}  // namespace
 
 void SettingsPanel::drawLogsPage(const Pen& pen, const UiText& text, const Config& /*config*/,
                                  const LogsUiState& logs) const {

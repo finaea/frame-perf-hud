@@ -36,7 +36,7 @@ const UiText kEnglish = {
     "Update to %s?", "It downloads and installs the new version. This panel may close and reopen meanwhile",
     "Update", "Cancel",
     "Updating: %s", "%s is installed. Reopen to use it",
-    "The update failed (nothing was changed):", "Couldn't check for updates:",
+    "Update failed:", "Couldn't check for updates:",
     "Check now", "Try again", "Close",
     "Details: ~/.cache/frame-perf-hud/update.log",
     // Attachment, wrist and clock
