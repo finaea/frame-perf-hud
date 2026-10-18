@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 — 2026-10-18
 
 - **GPU load replaces GPU usage.** On SteamOS 0.5.6 (kernel 6.18) the kernel's GPU counter that GPU usage came from
   (`drm-engine-gpu` in DRM fdinfo) is broken and grows by months per second, so GPU usage sat at 100 %. Its
@@ -11,6 +11,10 @@
   Ported from frame-perf-overlay (sasaken1102r, `187252c`).
 - The fdinfo reader is gone, and with it a `/proc` scan of up to 20 ms every 30 s. `--print` no longer shows a GPU
   figure, since it doesn't read SteamVR.
+- **Session logs keep every second.** A session could miss every other second while the HUD's main loop ran a little
+  slow (17 of 351 s in one real session), because a stopwatch decided when to sample but samples were filed by
+  clock second. Sampling now happens once per clock second, so only a real stall of a second or more leaves a gap.
+- The README opens with a demo video and says what this adds to frame-perf-overlay.
 
 ## 0.4.0 — 2026-10-17
 

@@ -19,7 +19,7 @@ body:
     attributes:
       label: Version
       description: Shown in the bar at the top of the Frame Perf HUD tab in the SteamVR dashboard, or run `~/.local/bin/frame-perf-hud --version` on the Frame.
-      placeholder: "0.4.0"
+      placeholder: "0.4.1"
     validations:
       required: true
   - type: dropdown
