@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -983,6 +984,62 @@ void testSegmentedPillColours() {
     cairo_surface_destroy(surface);
 }
 
+// ---- Streaming: Slack split into Hold + Display ----
+
+/** fullStreamingStore() plus the four split metrics (ids 1054-1057). */
+MetricStore splitStreamingStore(double holdAvg = 4.0, double holdP95 = 6.0) {
+    MetricStore s = fullStreamingStore();
+    s.setF32(1054, holdAvg, kNow);
+    s.setF32(1055, holdP95, kNow);
+    s.setF32(1056, 32.0, kNow);
+    s.setF32(1057, 33.0, kNow);
+    return s;
+}
+
+void testStreamingHoldDisplaySplit() {
+    WidgetInstance full = inst(W::Streaming);
+    WidgetInstance compact = inst(W::Streaming);
+    compact.compact = true;
+
+    const MetricStore fallback = fullStreamingStore(); // 1054-1057 absent: single Slack segment
+    const MetricStore split = splitStreamingStore();
+    const MetricStore negative = splitStreamingStore(-3.0, -1.0); // frame missed its slot: bar width clamps to 0
+    MetricStore hdNa = splitStreamingStore();                     // reader had no Decode Query this window
+    for (uint16_t id = 1054; id <= 1057; ++id) hdNa.setNa(id, Reason::NoFrames, kNow);
+    MetricStore partial = splitStreamingStore();                  // one of the four missing -> fallback
+    partial.setNa(1056, Reason::NoFrames, kNow);
+    MetricStore nonFinite = splitStreamingStore();
+    nonFinite.setF32(1055, std::numeric_limits<double>::infinity(), kNow);
+
+    // layout is unchanged by the split in either mode (measureStreaming doesn't look at 1054-1057)
+    for (const WidgetInstance& w : {full, compact}) {
+        int heights[6];
+        const MetricStore* stores[6] = {&fallback, &split, &negative, &hdNa, &partial, &nonFinite};
+        for (int i = 0; i < 6; ++i) {
+            WidgetContext ctx;
+            ctx.store = stores[i];
+            ctx.now = kNow;
+            heights[i] = widgetHeight(w, &ctx);
+            CHECK(heights[i] == heights[0]);
+        }
+    }
+
+    // every variant renders; the split draws differently from the fallback, and a degraded split IS the fallback
+    for (const WidgetInstance& w : {full, compact}) {
+        const Pixels fb = renderPx(oneWidget(w), fallback);
+        CHECK(!fb.empty());
+        CHECK(renderPx(oneWidget(w), split) != fb);
+        CHECK(renderPx(oneWidget(w), negative, nullptr, w.compact ? "streaming_compact_negative_hold.png"
+                                                                   : "streaming_negative_hold.png") != fb);
+        CHECK(!renderPx(oneWidget(w), negative).empty());
+        CHECK(renderPx(oneWidget(w), hdNa) == fb);
+        CHECK(renderPx(oneWidget(w), partial) == fb);
+        CHECK(renderPx(oneWidget(w), nonFinite) == fb);
+    }
+    // negative hold and zero hold draw the same bar (clamped), though the legend text differs
+    CHECK(!renderPx(oneWidget(full), splitStreamingStore(0.0, 0.0)).empty());
+}
+
 // ---- R3: Streaming Compact ----
 
 void testStreamingCompact() {
@@ -1101,6 +1158,7 @@ int main() {
     testCompactToggleKeepsFrameHistory();
     testSegmentedPillColours();
     testStreamingCompact();
+    testStreamingHoldDisplaySplit();
     testStreamingHeaderDoesNotOverlap();
     if (failures == 0) std::printf("render-grid-test: all passed\n");
     return failures == 0 ? 0 : 1;

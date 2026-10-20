@@ -1186,23 +1186,37 @@ void drawStreaming(const Pen& pen, double x, double y, const WidgetInstance& w, 
     const double bigWidth = pen.text(left + 14, top + 57, number(kPcStreamTotalAvg), 36, kText, true);
     pen.text(left + bigWidth + 22, top + 56, "ms  game to photon", 13, kTextMuted);
     pen.text(right, top + 55, "p95 " + number(kPcStreamTotalP95) + " ms", 14, kText, false, true);
-    const char* stages[] = {"Game", "Encode", "Send", "Network", "Decode", "Slack"};
-    const Color colors[] = {kStreamGame, kAccent, kStreamSend, kGpu, kStreamDecode, kStreamSlack};
+    // Stage index j maps to ids 1040 + 2j. A PC app that sends Hold (7) and Display (8) splits Slack (5) in two;
+    // an older one leaves the single Slack segment.
+    const char* names[] = {"Game", "Encode", "Send", "Network", "Decode", "Slack", "", "Hold", "Display"};
+    const Color colors[] = {kStreamGame, kAccent,      kStreamSend, kGpu,          kStreamDecode,
+                            kStreamSlack, kStreamSlack, kStreamSlack, kStreamDisplay};
+    bool split = true;
+    for (uint16_t id : {kPcStreamHoldAvg, kPcStreamHoldP95, kPcStreamDisplayAvg, kPcStreamDisplayP95})
+        split = split && ok(ctx, id) && std::isfinite(f(ctx, id));
+    std::vector<unsigned> order = {0, 1, 2, 3, 4};
+    if (split) order.insert(order.end(), {7, 8});
+    else order.push_back(5);
+    // A late frame can make Hold negative. The legend keeps the measured value; the bar clamps it to zero.
+    const auto barValue = [&](unsigned j) {
+        const double v = f(ctx, static_cast<uint16_t>(1040 + 2 * j));
+        return j == 7 ? std::max(0.0, v) : v;
+    };
     double sum = 0;
     bool stagesOk = measured.stages;
-    for (unsigned j = 0; j < 6; ++j) {
+    for (unsigned j : order) {
         const auto id = static_cast<uint16_t>(1040 + 2 * j);
-        stagesOk = stagesOk && ok(ctx, id) && std::isfinite(f(ctx, id)) && f(ctx, id) >= 0;
-        if (ok(ctx, id)) sum += f(ctx, id);
+        stagesOk = stagesOk && ok(ctx, id) && std::isfinite(barValue(j)) && barValue(j) >= 0;
+        if (ok(ctx, id)) sum += barValue(j);
     }
     stagesOk = stagesOk && sum > 0;
     streamSegment(pen, left, top + 69, width, 16, kBg);
     if (stagesOk) {
         // Stage widths express the visible stage sum. Preserve the measured total and both statistics.
         double bx = left;
-        for (unsigned j = 0; j < 6; ++j) {
-            const double bw = width * f(ctx, static_cast<uint16_t>(1040 + 2 * j)) / sum;
-            streamSegment(pen, bx, top + 69, bw, 16, colors[j], j == 5);
+        for (unsigned j : order) {
+            const double bw = width * barValue(j) / sum;
+            streamSegment(pen, bx, top + 69, bw, 16, colors[j], j == 5 || j == 7);  // waiting is hatched
             bx += bw;
         }
     } else {
@@ -1216,12 +1230,18 @@ void drawStreaming(const Pen& pen, double x, double y, const WidgetInstance& w, 
     }
     if (measured.stages) {
         pen.text(right, top + 99, "avg / p95 (ms)", 10, kTextMuted, false, true);
-        for (unsigned j = 0; j < 6; ++j) {
-            const double lx = left + (j % 3) * (width / 3);
-            const double ly = top + 115 + (j / 3) * 19;
+        // Two rows either way: 3 + 3 for Slack, 4 + 3 for the split, so the widget height never changes.
+        const unsigned columns = split ? 4 : 3;
+        for (unsigned k = 0; k < order.size(); ++k) {
+            const unsigned j = order[k];
+            const double lx = left + (k % columns) * (width / columns);
+            const double ly = top + 115 + (k / columns) * 19;
             const auto id = static_cast<uint16_t>(1040 + 2 * j);
             pen.dot(lx + 3, ly - 4, stagesOk ? colors[j] : kTextMuted);
-            pen.text(lx + 11, ly, std::string(stages[j]) + " " + number(id) + " / " + number(id + 1), 11, kTextMuted);
+            pen.text(lx + 11, ly,
+                     ellipsize(pen, std::string(names[j]) + " " + number(id) + " / " + number(id + 1), 11,
+                               width / columns - 14),
+                     11, kTextMuted);
         }
     }
 

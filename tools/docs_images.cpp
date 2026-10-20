@@ -159,8 +159,9 @@ void fillStore(MetricStore& st, double t, bool warnings) {
     st.setF32(kPcStreamAudioMbps, 3.4, t);
     st.setF32(kPcStreamRetryMbps, 3.2, t);
     st.setF32(kPcStreamLogicMbps, 1.4, t);
-    const double stages[7] = {1.1, 2.6, 0.2, 7.8, 8.3, 37.2, 57.2};  // game, encode, send, network, decode, slack, total
-    for (unsigned j = 0; j < 7; ++j) {
+    // game, encode, send, network, decode, slack, total, hold, display
+    const double stages[9] = {1.1, 2.6, 0.2, 7.8, 8.3, 37.2, 57.2, 14.5, 22.7};
+    for (unsigned j = 0; j < 9; ++j) {
         st.setF32(static_cast<uint16_t>(1040 + 2 * j), stages[j] + 0.3 * wob, t);
         st.setF32(static_cast<uint16_t>(1041 + 2 * j), stages[j] + 1.1, t);
     }

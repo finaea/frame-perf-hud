@@ -53,7 +53,8 @@ constexpr Color kGpuFill = blendColor(kGpu, kBg, kGpuFillAlpha);
 constexpr Color kStreamGame = hexColor(0x9d7cf5);
 constexpr Color kStreamSend = hexColor(0xf08a4b);
 constexpr Color kStreamDecode = hexColor(0x3cc7b4);
-constexpr Color kStreamSlack = hexColor(0x5b6270);
+constexpr Color kStreamSlack = hexColor(0x5b6270);    // also Hold, the waiting part of Slack (drawn hatched)
+constexpr Color kStreamDisplay = hexColor(0x7389a8);  // headset compositor + scanout lead, a fixed cost
 // ---- 状態の色（色だけで伝えない。● や文字も付ける） ----
 constexpr Color kSuccess = hexColor(0x3fb950);        ///< パネル表示中
 constexpr Color kSuccessTint = blendColor(kSuccess, kBg, 0.15);

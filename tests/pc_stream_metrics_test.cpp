@@ -133,6 +133,30 @@ void testRoundTrip() {
     CHECK(decodePcMetrics(eb.data(), eb.size(), eo) && eo.values.empty());
 }
 
+void testFullSnapshotFitsPayload() {
+    // worst case: every registered PC-stream metric present, strings at their maximum length (the hold/display
+    // ids 1054-1057 grew the snapshot, so this guards the 1200 B payload cap)
+    PcMetrics m;
+    m.pcId = idOf(3);
+    m.snapshotId = 1;
+    const std::string longText(kShortStringMax, 'x');
+#define FPH_FULL_VALUE(n, id, name, unit, type)                                                                            m.values.push_back(WireType::type == WireType::F32   ? f32(id, 123456.75f)                                                               : WireType::type == WireType::I32 ? i32(id, 2000000000)                                                                                                 : str(id, longText));
+    FPH_PC_STREAM_METRICS(FPH_FULL_VALUE)
+#undef FPH_FULL_VALUE
+    const Bytes b = encodePcMetrics(m);
+    CHECK(!b.empty());
+    CHECK(b.size() <= kMaxPayload);
+    bool hasHold = false, hasDisplay = false;
+    for (const WireValue& v : m.values) {
+        hasHold |= v.id == metric::kPcStreamHoldAvg || v.id == metric::kPcStreamHoldP95;
+        hasDisplay |= v.id == metric::kPcStreamDisplayAvg || v.id == metric::kPcStreamDisplayP95;
+    }
+    CHECK(hasHold && hasDisplay);
+    PcMetrics o;
+    CHECK(decodePcMetrics(b.data(), b.size(), o));
+    CHECK(o.values.size() == m.values.size());
+}
+
 void testRejectsNonStreamIds() {
     // a value whose id isn't in the PC-stream block is refused at encode time (whole packet, not silently dropped)
     PcMetrics m;
@@ -487,6 +511,7 @@ int main() {
     testEndpointAddressRoundTrip();
     testStreamLinkName();
     testStoreRoundTrip();
+    testFullSnapshotFitsPayload();
     testReceiverLifecycle();
     if (failures == 0) {
         std::printf("pc stream metrics: all checks passed\n");

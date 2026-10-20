@@ -45,8 +45,8 @@ int main(int argc, char** argv) {
             store.setF32(kPcStreamAudioMbps, 3.4, 1);
             store.setF32(kPcStreamRetryMbps, 3.2, 1);
             store.setF32(kPcStreamLogicMbps, 1.4, 1);
-            const double latency[] = {1.1, 2.6, 0.2, 7.8, 8.3, 37.2, 57.2};
-            for (unsigned j = 0; j < 7; ++j) {
+            const double latency[] = {1.1, 2.6, 0.2, 7.8, 8.3, 37.2, 57.2, 14.5, 22.7};
+            for (unsigned j = 0; j < 9; ++j) {
                 store.setF32(static_cast<uint16_t>(1040 + 2 * j), latency[j], 1);
                 store.setF32(static_cast<uint16_t>(1041 + 2 * j), latency[j] + 0.8, 1);
             }
@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
             store.setText(kPcStreamBuild, "1791581198", 1);
             if (scenario == 2) {
                 for (const auto& d : registry())
-                    if (d.id >= 1030 && d.id <= 1053)
+                    if (d.id >= 1030 && d.id <= 1059)
                         store.setNa(d.id, Reason::SteamVrChanged, 1);
                 store.setText(kPcStreamL3Note, "CSV header/stride mismatch", 1);
             }

@@ -86,7 +86,7 @@ preview tools), not captured inside the headset. Their numbers are sample values
 | CPU usage items | | The processes using the most CPU (% of one core) | |
 | RAM usage items | | The processes using the most memory | |
 | Network | Data flowing in and out (Mbps) | One adapter per widget, the Steam Link dongle or home Wi-Fi: signal, link rates, band, channel, width, IP | |
-| Streaming | Game-to-photon latency while streaming from a PC | Its stages (game, encode, send, network, decode, slack), the bitrate by kind, each link's share and ping, and counters for retransmits, skipped and late frames, resets, bad links and throttling. Needs the Windows app | |
+| Streaming | Game-to-photon latency while streaming from a PC | Its stages (game, encode, send, network, decode, then hold: the wait for the headset's compositor, and display: the compositor and display), the bitrate by kind, each link's share and ping, and counters for retransmits, skipped and late frames, resets, bad links and throttling. Needs the Windows app | |
 | General | | Controller batteries (a bolt while charging), the time, uptime, the running app, the HUD's own CPU, memory and power cost, the last power-off reason, and a note when a crash log was kept | |
 | Headset camera | | The outward cameras, live. Needs the camera helper | |
 | Eye camera | | The eye cameras, live. Needs the camera helper | |

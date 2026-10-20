@@ -134,6 +134,97 @@ void testParseFrameU32Wrap() {
     CHECK(std::fabs(f.ms[6] - 53.32) < 1e-6); // total: WGP Release -> Submit Illumination, also wrapped
 }
 
+void testParseFrameHoldDisplay() {
+    // Decode Query 4 ms after Decode End: slack (36 ms) splits into hold 4 ms + display 32 ms
+    uint32_t t[13] = {};
+    baseFields(t);
+    t[12] = t[9] + 4000;
+    Frame f;
+    CHECK(parseFrame(frameBytes(t, 2000).data(), f));
+    CHECK(f.split);
+    CHECK(std::fabs(f.ms[7] - 4.0) < 1e-9);
+    CHECK(std::fabs(f.ms[8] - 32.0) < 1e-9);
+    CHECK(std::fabs(f.ms[7] + f.ms[8] - f.ms[5]) < 1e-9); // hold + display == slack
+    CHECK(std::fabs(f.ms[6] - 53.32) < 1e-6);             // the other stages are untouched
+
+    // Decode Query == Decode End: hold is exactly 0, still a valid split
+    t[12] = t[9];
+    CHECK(parseFrame(frameBytes(t, 2000).data(), f));
+    CHECK(f.split && f.ms[7] == 0.0 && std::fabs(f.ms[8] - 36.0) < 1e-9);
+}
+
+void testParseFrameNoDecodeQuery() {
+    // Decode Query 0 (startup records): the frame is kept, only the split is dropped
+    uint32_t t[13] = {};
+    baseFields(t);
+    t[12] = 0;
+    Frame f;
+    f.ms[7] = f.ms[8] = 99; // stale values must not survive
+    CHECK(parseFrame(frameBytes(t, 2000).data(), f));
+    CHECK(!f.split);
+    CHECK(f.ms[7] == 0.0 && f.ms[8] == 0.0);
+    CHECK(std::fabs(f.ms[5] - 36.0) < 1e-9);
+    CHECK(std::fabs(f.ms[6] - 53.32) < 1e-6);
+    CHECK(std::fabs(f.ping - 2.0) < 1e-9);
+
+    // a Decode Query nowhere near this frame (500 ms+ either side) is also "no split", not a rejected frame
+    for (uint32_t off : {600000u, static_cast<uint32_t>(-600000)}) {
+        baseFields(t);
+        t[12] = t[9] + off;
+        Frame g;
+        CHECK(parseFrame(frameBytes(t, 2000).data(), g));
+        CHECK(!g.split);
+        CHECK(std::fabs(g.ms[5] - 36.0) < 1e-9);
+    }
+}
+
+void testParseFrameNegativeHold() {
+    // Decode Query 3 ms BEFORE Decode End (the frame missed its slot): hold is signed, display absorbs it
+    uint32_t t[13] = {};
+    baseFields(t);
+    t[12] = t[9] - 3000;
+    Frame f;
+    CHECK(parseFrame(frameBytes(t, 2000).data(), f));
+    CHECK(f.split);
+    CHECK(std::fabs(f.ms[7] - (-3.0)) < 1e-9);
+    CHECK(std::fabs(f.ms[8] - 39.0) < 1e-9);
+    CHECK(std::fabs(f.ms[7] + f.ms[8] - f.ms[5]) < 1e-9);
+}
+
+void testParseFrameHoldDisplayU32Wrap() {
+    // t[9] just under the wrap, t[12] and t[10] past it: the deltas must come out as true elapsed time
+    uint32_t t[13] = {};
+    baseFields(t, /*wgpRelease=*/0xFFFFFE00u - 17320u); // Decode End lands at 0xFFFFFE00
+    t[12] = t[9] + 4000;                                // wrapped
+    CHECK(t[9] == 0xFFFFFE00u && t[12] < t[9] && t[10] < t[9]);
+    Frame f;
+    CHECK(parseFrame(frameBytes(t, 2000).data(), f));
+    CHECK(f.split);
+    CHECK(std::fabs(f.ms[7] - 4.0) < 1e-9);
+    CHECK(std::fabs(f.ms[8] - 32.0) < 1e-9);
+
+    // negative hold across the wrap: t[12] numerically BIG, t[9] small
+    uint32_t u[13] = {};
+    baseFields(u, 1000);
+    u[9] = 2000;
+    u[8] = u[9] - 100;
+    u[7] = u[8] - 50;
+    u[6] = u[7] - 1000;
+    u[5] = u[6] - 100;
+    u[4] = u[5] - 100;
+    u[3] = u[4] - 100;
+    u[2] = u[3] - 100;
+    u[1] = u[2] - 100;
+    u[10] = u[9] + 36000;
+    u[12] = u[9] - 3000; // wraps below 0
+    CHECK(u[12] > u[9]);
+    Frame g;
+    CHECK(parseFrame(frameBytes(u, 2000).data(), g));
+    CHECK(g.split);
+    CHECK(std::fabs(g.ms[7] - (-3.0)) < 1e-9);
+    CHECK(std::fabs(g.ms[8] - 39.0) < 1e-9);
+}
+
 // ==================== FrameWindow ====================
 
 /** A full 144-slot tail: slots [0, validCount) are complete, distinct, closely-spaced records; the rest
@@ -422,9 +513,14 @@ void writeMap(FakeMemory& mem, uint64_t srv, uint64_t head, uint64_t rootBase, c
     }
 }
 
+/** Decode Query offset after Decode End (us) written into every fixture record; 0 = no Decode Query. */
+uint32_t gFixtureDecodeQueryUs = 0;
+
 void writeAftmRecord(FakeMemory& mem, uint64_t addr, uint32_t presentId, uint32_t wgpRelease) {
     uint32_t t[13] = {};
     baseFields(t, wgpRelease, presentId);
+    if (gFixtureDecodeQueryUs != 0)
+        t[12] = t[9] + gFixtureDecodeQueryUs;
     mem.write(addr, t, sizeof(t));
     const int32_t ping = 2000; // matches the sPingMS below for the L3 cross-check
     mem.poke<int32_t>(addr + 0x38, ping);
@@ -576,6 +672,34 @@ void testReaderGoldenPath() {
     CHECK(isOkF32(store, metric::kPcStreamLink0Share, 100.0 * 434 / 1059, 1e-4));
     CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
     CHECK(isOkF32(store, metric::kPcStreamEncodeAvg, 2.6, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamTotalAvg, 53.32, 1e-3));
+    // no record carries a Decode Query: slack stays, hold/display go N/A (NoFrames), the rest still publishes
+    CHECK(isOkF32(store, metric::kPcStreamSlackAvg, 36.0, 1e-6));
+    for (uint16_t id = 1054; id <= 1057; ++id) {
+        CHECK(notOk(store, id));
+        CHECK(store.get(id)->reason == Reason::NoFrames);
+    }
+}
+
+void testReaderPublishesHoldDisplay() {
+    gFixtureDecodeQueryUs = 4000;
+    FakeMemory mem;
+    constexpr uint32_t kBuild = kKnownBuild;
+    setupModule(mem, kBuild);
+    setActiveServer(mem, buildWorld(mem, 0x10000, /*index=*/300, /*extraTail=*/0, /*idStart=*/0).srv);
+
+    Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, 72.0, store);
+    gFixtureDecodeQueryUs = 0;
+
+    CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
+    CHECK(isOkF32(store, metric::kPcStreamSlackAvg, 36.0, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamSlackP95, 36.0, 1e-6));
+    CHECK(isOkF32(store, 1054, 4.0, 1e-6));  // HoldAvg
+    CHECK(isOkF32(store, 1055, 4.0, 1e-6));  // HoldP95
+    CHECK(isOkF32(store, 1056, 32.0, 1e-6)); // DisplayAvg
+    CHECK(isOkF32(store, 1057, 32.0, 1e-6)); // DisplayP95
     CHECK(isOkF32(store, metric::kPcStreamTotalAvg, 53.32, 1e-3));
 }
 
@@ -928,12 +1052,17 @@ int main() {
     testParseFrameIncomplete();
     testParseFrameBounds();
     testParseFrameU32Wrap();
+    testParseFrameHoldDisplay();
+    testParseFrameNoDecodeQuery();
+    testParseFrameNegativeHold();
+    testParseFrameHoldDisplayU32Wrap();
     testFrameWindowDedupeAndLateCompletion();
     testFrameWindowWrongSizeIgnored();
     testFrameWindowStallReadsAsNoFrames();
     testFrameWindowInteriorLateCompletion();
     testFrameWindowInteriorLateCompletionWraps();
     testReaderGoldenPath();
+    testReaderPublishesHoldDisplay();
     testReaderHeaderMismatchOnlyL3();
     testReaderRttiMismatchOnlyL2();
     testReaderOwnerChangeWaitsForNewBaseline();

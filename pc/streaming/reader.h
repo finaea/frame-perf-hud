@@ -36,7 +36,9 @@ bool rttiIs(Memory& memory, uint64_t obj, uint64_t module, uint32_t imageSize, c
 std::string readLinkEndpoint(Memory& memory, uint64_t link, uint64_t module, const Anchors& anchors);
 struct Frame {
     uint32_t id = 0, illum = 0;
-    std::array<double, 7> ms{}; // game, encode, send, network, decode (queue included), slack, total
+    // game, encode, send, network, decode (queue included), slack, total, hold, display. Slack = hold + display.
+    std::array<double, 9> ms{};
+    bool split = false; // hold and display are valid; Decode Query is 0 on startup records
     double ping = 0;
 };
 bool parseFrame(const uint8_t* bytes, Frame& frame);

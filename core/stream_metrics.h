@@ -34,6 +34,10 @@
     X(SlackP95, 1051, "slack_p95", "ms", F32)                                                                          \
     X(TotalAvg, 1052, "total_avg", "ms", F32)                                                                          \
     X(TotalP95, 1053, "total_p95", "ms", F32)                                                                          \
+    X(HoldAvg, 1054, "hold_avg", "ms", F32)                                                                            \
+    X(HoldP95, 1055, "hold_p95", "ms", F32)                                                                            \
+    X(DisplayAvg, 1056, "display_avg", "ms", F32)                                                                      \
+    X(DisplayP95, 1057, "display_p95", "ms", F32)                                                                      \
     X(Link0Ping, 1060, "link0_ping", "ms", F32)                                                                        \
     X(Link0Share, 1061, "link0_share", "%", F32)                                                                       \
     X(Link1Ping, 1062, "link1_ping", "ms", F32)                                                                        \

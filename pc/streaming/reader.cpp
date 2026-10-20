@@ -312,6 +312,13 @@ bool parseFrame(const uint8_t* b, Frame& f) {
             return false;
         f.ms[j] = us / 1000.0;
     }
+    // Slack splits at Decode Query: hold waits for the compositor's run start, display is its fixed lead to
+    // illumination. Hold is signed, since a frame can miss its slot.
+    const int32_t hold = static_cast<int32_t>(t[12] - t[9]);
+    const uint32_t display = t[10] - t[12];
+    f.split = t[12] && hold > -500000 && hold < 500000 && display <= 500000;
+    f.ms[7] = f.split ? hold / 1000.0 : 0;
+    f.ms[8] = f.split ? display / 1000.0 : 0;
     const int32_t ping = at<int32_t>(b, 0x38);
     if (ping < 0 || ping > 500000)
         return false;
@@ -595,7 +602,7 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
         return;
     }
     if (waiting) {
-        naRange(out, 1030, 1053, Reason::NoFrames, now);
+        naRange(out, 1030, 1059, Reason::NoFrames, now);
         frames_.clear();
         enabled3_ = false;
         out.setText(kPcStreamL3Note, "stream reset; waiting", now);
@@ -621,7 +628,7 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
     frames_.add(tail, now);
     auto window = frames_.recent(now);
     if (window.empty()) {
-        naRange(out, 1030, 1053, Reason::NoFrames, now);
+        naRange(out, 1030, 1059, Reason::NoFrames, now);
         out.setText(kPcStreamL3Note, "no frames", now);
         return;
     }
@@ -666,10 +673,10 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
         }
         ++rate;
     }
-    std::array<std::vector<double>, 7> stages;
+    std::array<std::vector<double>, 9> stages;
     std::vector<double> pings;
     for (const auto& f : window) {
-        for (size_t j = 0; j < 7; ++j)
+        for (size_t j = 0; j < (f.split ? 9 : 7); ++j)
             stages[j].push_back(f.ms[j]);
         pings.push_back(f.ping);
     }
@@ -698,7 +705,12 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
                                      kPcStreamLogicMbps, kPcStreamAudioMbps, kPcStreamRetryMbps};
     for (unsigned j = 0; j < 6; ++j)
         out.setF32(bandwidthIds[j], bytes[j] * 8.0 / 1048576.0, now);
-    for (unsigned j = 0; j < 7; ++j) {
+    for (unsigned j = 0; j < 9; ++j) {
+        if (stages[j].empty()) {
+            naRange(out, static_cast<uint16_t>(1040 + 2 * j), static_cast<uint16_t>(1041 + 2 * j), Reason::NoFrames,
+                    now);
+            continue;
+        }
         out.setF32(static_cast<uint16_t>(1040 + 2 * j), average(stages[j]), now);
         out.setF32(static_cast<uint16_t>(1041 + 2 * j), p95(stages[j]), now);
     }
