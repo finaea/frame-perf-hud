@@ -20,6 +20,8 @@ const WidgetText& widgetText() {
         "General",
         "Headset camera",
         "Eye camera",
+        "HTTP camera",
+        "Only one HTTP camera at a time",
         // Frame
         "Reproj ",
         "Dropped ",

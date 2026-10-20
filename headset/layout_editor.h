@@ -75,6 +75,19 @@ public:
     /** @return true while a press or a drag is held (the caller polls input faster) */
     bool busy() const { return press_ != Press::None; }
 
+    /** HTTP camera: Edit was tapped next to the address. The caller opens SteamVR's keyboard with `url`. */
+    struct AddressEdit {
+        fph::WidgetRef ref;    ///< the widget; the keyboard's text applies only if it's still there,
+        uint32_t version = 0;  ///< in this layout version
+        std::string url;       ///< its address now
+        bool valid() const { return ref.valid(); }
+    };
+    /** @return false if Edit wasn't tapped since the last call */
+    bool takeAddressEdit(AddressEdit& out);
+
+    /** Shows a line in the status spot (an address that wasn't applied), until the next press. */
+    void showNote(const std::string& note);
+
     // ---- For tests: the geometry the hit-testing uses ----
 
     /** One card in the lanes, in dashboard px (scroll applied). */
@@ -97,11 +110,13 @@ public:
     /** @return the settings buttons for the selected widget, by id (see Setting) */
     enum class Setting {
         Remove, RowsDown, RowsUp, SameNameOn, SameNameOff, AdapterDongle, AdapterHome,
-        Camera0, Camera1, Camera2, Camera3, FullSizeOn,      // T10 Headset camera (R3: Full size On | Off)
+        Camera0, Camera1, Camera2, Camera3, FullSizeOn,      // T10 Headset camera (R3: Full res On | Off)
         FpsDown, FpsUp,                                      // T10 both camera widgets
         CompactOn, CompactOff,                               // R2 Frame, Power, Battery, Temp
         HideSystemOn, HideSystemOff,                         // R2 process lists (third row)
-        FullSizeOff                                          // R3 Headset camera
+        FullSizeOff,                                         // R3 Headset camera
+        AddressEdit, FullSizeToggle, RotationDown, RotationUp,  // HTTP camera
+        SizeDown, SizeUp
     };
     const std::vector<std::pair<Setting, EditorRect>>& settingButtons() const { return settings_; }
 
@@ -139,7 +154,10 @@ private:
     uint32_t commitBase_ = 0;
     fph::Layout commitLayout_;
     fph::WidgetRef selectAfterCommit_;
-    int status_ = -1;  ///< -1 none, else a CommitOutcome
+    int status_ = -1;  ///< -1 none, else a CommitOutcome, or kStatusNote
+    static constexpr int kStatusNote = 3;
+    std::string note_;  ///< HTTP camera: why an address wasn't applied
+    AddressEdit addressEdit_;  ///< HTTP camera: Edit tapped, not taken yet
 
     void relayout();
     void clampScroll();

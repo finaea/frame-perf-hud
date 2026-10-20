@@ -34,5 +34,13 @@ bool showSettingsDialog(HINSTANCE instance, HWND parent, SettingsDialogData& dat
  */
 bool showRenameDialog(HINSTANCE instance, HWND parent, std::string& name);
 
+/**
+ * HTTP camera: a text box for the widget's address. An address parseHttpUrl refuses gets a short message and the
+ * dialog stays open.
+ * @param url in: the current address (selected); out: the new one, trimmed
+ * @return true on OK with a valid address that differs; false on Cancel
+ */
+bool showHttpCameraDialog(HINSTANCE instance, HWND parent, std::string& url);
+
 }  // namespace pc
 }  // namespace fph

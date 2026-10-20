@@ -912,6 +912,70 @@ void testSettingsButtons() {
 
 // ---- Drawing: the hit boxes are where the cards are painted ----
 
+// HTTP camera: the Size stepper (shares the FPS row), steps through 40..100 and stops at both ends
+void testHttpCameraSizeStepper() {
+    Rig first(make({{W::HttpCamera}}));
+    first.tap(first.centre({0, 0}));
+    EditorRect fpsDown {}, fpsUp {}, sizeDown {}, sizeUp {};
+    for (const auto& b : first.ed.settingButtons()) {
+        if (b.first == Setting::FpsDown) fpsDown = b.second;
+        if (b.first == Setting::FpsUp) fpsUp = b.second;
+        if (b.first == Setting::SizeDown) sizeDown = b.second;
+        if (b.first == Setting::SizeUp) sizeUp = b.second;
+    }
+    CHECK(fpsDown.w > 0 && fpsUp.w > 0 && sizeDown.w > 0 && sizeUp.w > 0);
+    CHECK(sizeDown.y == fpsDown.y && sizeUp.y == fpsDown.y);                 // one row
+    CHECK(fpsUp.x + fpsUp.w <= sizeDown.x && sizeDown.x + sizeDown.w <= sizeUp.x);  // FPS pair, then Size pair
+    for (const auto& s : first.ed.settingButtons()) {
+        CHECK(s.second.x >= kPaletteCard.x && s.second.x + s.second.w <= kPaletteCard.x + kPaletteCard.w);
+        CHECK(s.second.y + s.second.h <= kPaletteCard.y + kPaletteCard.h);
+    }
+    // only the HTTP camera has it
+    Rig other(make({{W::HeadsetCamera, W::EyeCamera}}));
+    other.tap(other.centre({0, 0}));
+    CHECK(!other.hasSetting(Setting::SizeDown) && !other.hasSetting(Setting::SizeUp));
+    other.tap(other.centre({0, 1}));
+    CHECK(!other.hasSetting(Setting::SizeDown) && !other.hasSetting(Setting::SizeUp));
+
+    struct Step {
+        uint8_t from;
+        Setting button;
+        int to;  // -1 = nothing queued
+    };
+    const Step steps[] = {
+        {100, Setting::SizeDown, 90}, {90, Setting::SizeDown, 80}, {80, Setting::SizeDown, 70}, {70, Setting::SizeDown, 60},
+        {60, Setting::SizeDown, 50},  {50, Setting::SizeDown, 40}, {40, Setting::SizeDown, -1}, {40, Setting::SizeUp, 50},
+        {50, Setting::SizeUp, 60},    {60, Setting::SizeUp, 70},   {70, Setting::SizeUp, 80},   {80, Setting::SizeUp, 90},
+        {90, Setting::SizeUp, 100},   {100, Setting::SizeUp, -1},
+    };
+    for (const Step& step : steps) {
+        Layout l = make({{W::Frame, W::HttpCamera}});
+        l.columns[0].widgets[1].cameraSize = step.from;
+        l.columns[0].widgets[1].rotation = 3;  // nothing else moves with it
+        l.columns[0].widgets[1].cameraFps = 30;
+        Rig rig(l);
+        rig.tap(rig.centre({0, 1}));
+        WidgetInstance out;
+        const bool queued = pressSetting(rig, step.button, {0, 1}, out);
+        if (step.to < 0) {
+            CHECK(!queued);
+        } else {
+            CHECK(queued);
+            if (out.cameraSize != step.to) std::printf("  (size %u -> %u, wanted %d)\n", step.from, out.cameraSize, step.to);
+            CHECK(out.cameraSize == step.to);
+            CHECK(out.type == W::HttpCamera && out.rotation == 3 && out.cameraFps == 30 && out.url == fph::kDefaultHttpCameraUrl);
+        }
+    }
+    // the other widget in the layout isn't touched
+    {
+        Rig rig(make({{W::Frame, W::HttpCamera}}));
+        rig.tap(rig.centre({0, 1}));
+        WidgetInstance out;
+        CHECK(pressSetting(rig, Setting::SizeDown, {0, 1}, out));
+        CHECK(rig.layout.columns[0].widgets[0].type == W::Frame);
+    }
+}
+
 void testRenderMatchesHitBoxes() {
     Config cfg;
     cfg.language = Language::En;
@@ -1499,6 +1563,7 @@ void testChipLabelSizes() {
         else if (type == W::RamItems) label = text.paletteRamItems;
         else if (type == W::HeadsetCamera) label = text.paletteHeadsetCamera;
         else if (type == W::EyeCamera) label = text.paletteEyeCamera;
+        else if (type == W::HttpCamera) label = text.paletteHttpCamera;
         else {
             WidgetInstance w;
             w.type = type;
@@ -1541,6 +1606,7 @@ int main() {
     testChipDrag();
     testLimitsInEditor();
     testSettingsButtons();
+    testHttpCameraSizeStepper();
     testRenderMatchesHitBoxes();
     testPanelLeaveCancelsDrag();
     testProfilesPanel();

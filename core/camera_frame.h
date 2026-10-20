@@ -17,39 +17,55 @@ namespace cam {
 
 /**
  * Camera ids, used as the link's BLOB stream id and in SUBSCRIBE wants bits 8-15 (bit 8 + id).
- * 0-3 = the outward cams (/dev/video0, 3, 9, 13: the helper's cam index), 4-5 = the two eye cams.
+ * 0-3 = the outward cams (/dev/video0, 3, 9, 13: the helper's cam index), 4-5 = the two eye cams, 6 = the HTTP
+ * camera widget's stream (headset/http_camera.*, not the helper).
  */
 constexpr uint8_t kOutwardCount = 4;
 constexpr uint8_t kEyeBase = 4;
-constexpr uint8_t kCameraCount = 6;
+constexpr uint8_t kHttpCamera = 6;
+constexpr uint8_t kCameraCount = 7;
+/** The helper's cameras (0-5): what CameraService handles. */
+constexpr uint8_t kHelperCameraMask = 0x3F;
 
 inline bool isOutward(uint8_t id) { return id < kOutwardCount; }
-inline bool isEye(uint8_t id) { return id >= kEyeBase && id < kCameraCount; }
+inline bool isEye(uint8_t id) { return id >= kEyeBase && id < kEyeBase + 2; }
 
 /** @return the SUBSCRIBE wants bit for a camera */
 inline uint32_t wantBit(uint8_t id) { return 1u << (8 + id); }
-/** Every camera's wants bit. */
-constexpr uint32_t kWantCameraMask = 0x3Fu << 8;
+/**
+ * Every camera's wants bit. Bit 14 (HTTP camera) is only ever set for a headset whose layout holds the widget (the
+ * PC asks for camerasInLayout): an older headset's SUBSCRIBE decoder doesn't expect the fps byte then and would
+ * reject the whole SUBSCRIBE, but an older headset can't hold widget 14 either.
+ */
+constexpr uint32_t kWantCameraMask = 0x7Fu << 8;
 /**
  * SUBSCRIBE wants bit 31: this SUBSCRIBE only registers the address camera frames go to (the PC's dongle path);
  * it doesn't renew or move the lease. See LinkServer::onSubscribe.
  */
 constexpr uint32_t kWantCameraPathOnly = 1u << 31;
 
-/** @return a 6-bit mask (bit = camera id) from SUBSCRIBE wants */
-inline uint8_t camerasFromWants(uint32_t wants) { return static_cast<uint8_t>((wants >> 8) & 0x3F); }
+/** @return a 7-bit mask (bit = camera id) from SUBSCRIBE wants */
+inline uint8_t camerasFromWants(uint32_t wants) { return static_cast<uint8_t>((wants >> 8) & 0x7F); }
 
-/** @return "video0" ... "video13", "Eye 1", "Eye 2" */
+/** @return "video0" ... "video13", "Eye 1", "Eye 2", "HTTP camera" */
 const char* cameraName(uint8_t id);
 
 /**
- * The cameras a layout shows: each Headset camera widget's outward mask, both eyes for an Eye camera widget.
- * @return a 6-bit mask (bit = camera id)
+ * The cameras a layout shows: each Headset camera widget's outward mask, both eyes for an Eye camera widget, id 6
+ * for an HTTP camera widget.
+ * @return a 7-bit mask (bit = camera id)
  */
 uint8_t camerasInLayout(const Layout& layout);
 
-/** @return true if any Headset camera widget in the layout asks for full-size frames */
+/** @return true if any Headset camera widget in the layout asks for full-size frames (the helper's outward cams) */
 bool fullSizeInLayout(const Layout& layout);
+
+/**
+ * The HTTP camera widget that's live: the first one in column order (layoutGrid's order). Any later one only shows
+ * "Only one HTTP camera at a time".
+ * @return it, or nullptr when the layout has none
+ */
+const WidgetInstance* httpCameraIn(const Layout& layout);
 
 /**
  * The headset frame rate per camera: the highest `fps` of the widgets showing it (two widgets showing one camera
@@ -68,10 +84,17 @@ enum class CameraState : uint8_t {
     HelperOutdated = 4,  ///< the installed helper speaks another protocol version
     Unavailable = 5,     ///< SteamVR / XRService / the eye tracker isn't running, or this cam isn't there
     Off = 6,             ///< nothing asked for it
+    // HTTP camera (id 6)
+    Connecting = 7,      ///< connecting / waiting for the first frame
+    Unreachable = 8,     ///< the connection failed or dropped (retried every second)
+    NotMjpeg = 9,        ///< it answered, but not with a multipart/x-mixed-replace stream
 };
 
-/** @return the tile's text ("Headset not worn", "Camera helper not installed: run `sudo ...`", ...) */
-std::string cameraStateText(CameraState state);
+/**
+ * @param hostPort the HTTP camera's "host:port" (httpUrlHostPort), for its own states
+ * @return the tile's text ("Headset not worn", "Camera helper not installed: run `sudo ...`", ...)
+ */
+std::string cameraStateText(CameraState state, const std::string& hostPort = "");
 
 // ------------------------------------------------------------------------------------------------ tiles
 
@@ -85,13 +108,17 @@ struct Tile {
     int labelY = 0;  ///< baseline row of the camera's label, above the image area
 };
 
-/** @return the native size of a camera's frames (outward 0/1: 1056×1024, 2/3: 640×480, eyes 512×400) */
+/**
+ * @return the native size of a camera's frames (outward 0/1: 1056×1024, 2/3: 640×480, eyes 512×400; the HTTP camera
+ *         is taken as 640×480, its tile's aspect before rotation)
+ */
 void nativeSize(uint8_t camera, int& width, int& height);
 
 /**
- * The tiles of a Headset camera (12) or Eye camera (13) widget, in id order. One outward cam fills the card's
- * width; two or more sit two per row; the eyes sit side by side.
- * @return empty for other types
+ * The tiles of a Headset camera (12), Eye camera (13) or HTTP camera (14) widget, in id order. One outward cam fills
+ * the card's width; two or more sit two per row; the eyes sit side by side. The HTTP camera is one tile across the
+ * card, 4:3, or 3:4 when turned a quarter (other aspects letterbox through fitFrame).
+ * @return empty for other types, and for an HTTP camera that isn't the live one (httpCameraExtra)
  */
 std::vector<Tile> cameraTiles(const WidgetInstance& w);
 
@@ -134,6 +161,13 @@ double sampleLevel(const uint8_t* src, int width, int height, size_t pitch, cons
 
 /** Grey → opaque RGBA. */
 void greyToRgba(uint8_t* dst, const uint8_t* grey, size_t pixels);
+
+/**
+ * Turns a grey image clockwise by quarter turns (Toggle's preview rotation, so 270 here = 270 in Baballonia).
+ * @param dst width × height bytes (0, 2 turns) or height × width (1, 3 turns); not src
+ * @param turns 0-3 (taken mod 4)
+ */
+void rotateGrey(uint8_t* dst, const uint8_t* src, int width, int height, int turns);
 
 /**
  * The outward cams alternate a normal exposure with a near-black one (~68 fps, camviewer.py:274-280). This learns

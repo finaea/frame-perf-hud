@@ -36,6 +36,9 @@ constexpr double kRowGap = 8;
 constexpr double kFpsStepperW = 200;  // T10: the camera widgets' FPS − n + (no room for a third settings row)
 constexpr double kFpsStep = 60;
 constexpr uint32_t kRowsMin = 1;
+constexpr double kEditW = 110;        // HTTP camera: Edit next to the address
+constexpr double kPairGap = 16;       // HTTP camera: between the FPS and Size steppers sharing a row
+constexpr double kPairStep = 52;      // ... and their − / + buttons
 
 /** Card height in the lanes. */
 double boxHeight(const fph::WidgetInstance& w) {
@@ -65,6 +68,7 @@ std::string chipLabel(fph::WidgetType type, const UiText& text) {
     if (type == fph::WidgetType::RamItems) return text.paletteRamItems;
     if (type == fph::WidgetType::HeadsetCamera) return text.paletteHeadsetCamera;
     if (type == fph::WidgetType::EyeCamera) return text.paletteEyeCamera;
+    if (type == fph::WidgetType::HttpCamera) return text.paletteHttpCamera;
     fph::WidgetInstance w;
     w.type = type;
     return fph::widgetTitle(w);
@@ -168,7 +172,7 @@ void LayoutEditor::relayout() {
     } else if (w->type == fph::WidgetType::Network) {
         settings_.push_back({Setting::AdapterDongle, {controlX, rowA, controlW / 2, kRowH}});
         settings_.push_back({Setting::AdapterHome, {controlX + controlW / 2, rowA, controlW / 2, kRowH}});
-    } else if (w->type == fph::WidgetType::HeadsetCamera) {  // T10: one toggle per outward cam; FPS − n +; Full size
+    } else if (w->type == fph::WidgetType::HeadsetCamera) {  // T10: one toggle per outward cam; FPS − n +; Full res
         // R3: the cam toggles are one-part pills; they take the whole row (no "Cameras" label) so "video13" + ✓ fits
         const double cw = (sw + 8) / 4;
         for (int c = 0; c < 4; ++c)
@@ -176,13 +180,26 @@ void LayoutEditor::relayout() {
                                  {sx + c * cw, rowA, cw - 8, kRowH}});
         settings_.push_back({Setting::FpsDown, {controlX - 70, rowB, kFpsStep, kRowH}});
         settings_.push_back({Setting::FpsUp, {controlX - 70 + kFpsStepperW - kFpsStep, rowB, kFpsStep, kRowH}});
-        // R3: Full size is an On | Off pill on its own row (it shared row B with FPS as a single toggle button)
+        // R3: Full res is an On | Off pill on its own row (it shared row B with FPS as a single toggle button)
         const double rowC = rowB + kRowH + kRowGap;
         settings_.push_back({Setting::FullSizeOn, {controlX, rowC, controlW / 2, kRowH}});
         settings_.push_back({Setting::FullSizeOff, {controlX + controlW / 2, rowC, controlW / 2, kRowH}});
     } else if (w->type == fph::WidgetType::EyeCamera) {  // T10: FPS − n +
         settings_.push_back({Setting::FpsDown, {controlX - 70, rowA, kFpsStep, kRowH}});
         settings_.push_back({Setting::FpsUp, {controlX - 70 + kFpsStepperW - kFpsStep, rowA, kFpsStep, kRowH}});
+    } else if (w->type == fph::WidgetType::HttpCamera) {
+        // [address .......... Edit] / − n fps + − Size n% + / [Full res] Rotation − n° + (the card has room for 3
+        // rows, so FPS and Size share one, their units in the value instead of a label)
+        settings_.push_back({Setting::AddressEdit, {sx + sw - kEditW, rowA, kEditW, kRowH}});
+        const double pairW = (sw - kPairGap) / 2;
+        settings_.push_back({Setting::FpsDown, {sx, rowB, kPairStep, kRowH}});
+        settings_.push_back({Setting::FpsUp, {sx + pairW - kPairStep, rowB, kPairStep, kRowH}});
+        settings_.push_back({Setting::SizeDown, {sx + pairW + kPairGap, rowB, kPairStep, kRowH}});
+        settings_.push_back({Setting::SizeUp, {sx + sw - kPairStep, rowB, kPairStep, kRowH}});
+        const double rowC = rowB + kRowH + kRowGap;
+        settings_.push_back({Setting::FullSizeToggle, {sx, rowC, 170, kRowH}});
+        settings_.push_back({Setting::RotationDown, {sx + sw - kFpsStepperW, rowC, kFpsStep, kRowH}});
+        settings_.push_back({Setting::RotationUp, {sx + sw - kFpsStep, rowC, kFpsStep, kRowH}});
     }
 }
 
@@ -262,6 +279,18 @@ void LayoutEditor::queueCommit(const fph::Layout& edited, fph::WidgetRef selectA
     selectAfterCommit_ = selectAfter;
 }
 
+bool LayoutEditor::takeAddressEdit(AddressEdit& out) {
+    if (!addressEdit_.valid()) return false;
+    out = addressEdit_;
+    addressEdit_ = {};
+    return true;
+}
+
+void LayoutEditor::showNote(const std::string& note) {
+    note_ = note;
+    status_ = kStatusNote;
+}
+
 bool LayoutEditor::takeCommit(uint32_t& baseVersion, fph::Layout& layout) {
     if (!commitQueued_) return false;
     commitQueued_ = false;
@@ -294,6 +323,10 @@ void LayoutEditor::applySetting(Setting setting) {
         queueCommit(edited, {});
         return;
     }
+    if (setting == Setting::AddressEdit) {  // the keyboard's text comes back as an edit on this version
+        addressEdit_ = {selected_, layout_.version, w->url};
+        return;
+    }
     fph::WidgetInstance& e = edited.columns[static_cast<size_t>(selected_.column)].widgets[static_cast<size_t>(selected_.index)];
     switch (setting) {
         case Setting::RowsDown: e.maxItems = rowsDown(e.maxItems); break;
@@ -319,7 +352,13 @@ void LayoutEditor::applySetting(Setting setting) {
         case Setting::CompactOff: e.compact = false; break;
         case Setting::HideSystemOn: e.hideSystem = true; break;
         case Setting::HideSystemOff: e.hideSystem = false; break;
-        case Setting::Remove: break;
+        case Setting::FullSizeToggle: e.cameraFullSize = !e.cameraFullSize; break;  // HTTP camera
+        case Setting::RotationDown: e.rotation = static_cast<uint8_t>((e.rotation + 3) & 3); break;
+        case Setting::RotationUp: e.rotation = static_cast<uint8_t>((e.rotation + 1) & 3); break;
+        case Setting::SizeDown: e.cameraSize = fph::cameraSizeStep(e.cameraSize, -1); break;
+        case Setting::SizeUp: e.cameraSize = fph::cameraSizeStep(e.cameraSize, +1); break;
+        case Setting::Remove:
+        case Setting::AddressEdit: break;
     }
     if (e != *w) queueCommit(edited, selected_);
 }
@@ -498,6 +537,10 @@ void LayoutEditor::drawLanes(const Pen& pen, const UiText& text) const {
     } else if (status_ == static_cast<int>(CommitOutcome::Failed)) {
         line = text.layoutSaveFailed;
         color = kDanger;
+        bold = true;
+    } else if (status_ == kStatusNote) {
+        line = note_;
+        color = kWarn;
         bold = true;
     }
     const double lineSize = fitSize(pen, line, 18, 13, card.w - 2 * kCardPad - titleW - 16, bold);
@@ -722,6 +765,39 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
     } else if (w->type == fph::WidgetType::EyeCamera) {  // T10
         pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowFps, 20, kTextMuted);
         fpsStepper(rowA);
+    } else if (w->type == fph::WidgetType::HttpCamera) {
+        const double urlW = card.w - 2 * kCardPad - kEditW - 12;
+        const std::string url = ellipsize(pen, w->url, 18, urlW, false);
+        pen.text(sx, centerBaseline(rowA, kRowH, 18), url, 18, kText);
+        button(Setting::AddressEdit, text.editAddress, false);
+        // − 15 fps +   − Size 70% +: the value between each pair of buttons
+        const auto pairValue = [&](Setting down, Setting up, const std::string& value) {
+            const EditorRect* a = nullptr;
+            const EditorRect* b = nullptr;
+            for (const auto& [id, r] : settings_) {
+                if (id == down) a = &r;
+                if (id == up) b = &r;
+            }
+            if (a == nullptr || b == nullptr) return;
+            button(down, "−", false);
+            button(up, "+", false);
+            const double size = fitSize(pen, value, 22, 14, b->x - (a->x + a->w) - 8, true);
+            textCentered(pen, (a->x + a->w + b->x) / 2, centerBaseline(rowB, kRowH, size), value, size, kText, true);
+        };
+        pairValue(Setting::FpsDown, Setting::FpsUp, std::to_string(w->cameraFps) + " fps");
+        char sizeText[32];
+        std::snprintf(sizeText, sizeof(sizeText), text.sizeFormat, unsigned(fph::cameraSizeNearest(w->cameraSize)));
+        pairValue(Setting::SizeDown, Setting::SizeUp, sizeText);
+        const double rowC = rowB + kRowH + kRowGap;
+        toggle(Setting::FullSizeToggle, text.rowFullSize, w->cameraFullSize);
+        pen.text(sx + 182, centerBaseline(rowC, kRowH, 18), text.rowRotation, 18, kTextMuted);
+        button(Setting::RotationDown, "−", false);
+        button(Setting::RotationUp, "+", false);
+        for (const auto& [id, r] : settings_) {
+            if (id != Setting::RotationDown) continue;
+            textCentered(pen, r.x + kFpsStepperW / 2.0, centerBaseline(rowC, kRowH, 22),
+                         std::to_string(w->rotation * 90) + "°", 22, kText, true);
+        }
     } else {
         pen.text(sx, centerBaseline(rowA, kRowH, 18), text.noSettings, 18, kTextMuted);
     }

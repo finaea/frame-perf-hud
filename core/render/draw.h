@@ -130,6 +130,9 @@ struct Pen {
  */
 double fitSize(const Pen& pen, const std::string& text, double size, double minSize, double maxWidth, bool bold);
 
+/** HTTP camera: text cut at the end with "..." so it fits maxWidth (whole UTF-8 characters). */
+std::string ellipsize(const Pen& pen, const std::string& text, double size, double maxWidth, bool bold);
+
 /**
  * 文字を、ある高さの帯の縦の真ん中に置いたときのベースライン。
  * @param top 帯の上

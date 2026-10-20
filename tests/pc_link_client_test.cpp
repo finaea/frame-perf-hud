@@ -1,5 +1,6 @@
 // pc/link_client: the PC side of the link driven by a fake headset built on core/link_wire (06's LinkServer is
 // Linux-only). Covers discovery, the lease phases, rediscovery + blob assembler resets, layout self-heal and edits.
+#include "camera_frame.h"
 #include "link_client.h"
 #include "link_wire.h"
 
@@ -421,6 +422,72 @@ void testWantsFollowLayout() {
     const Sent s = env.ofType(PacketType::Subscribe).back();
     CHECK(decodeSubscribe(s.payload.data(), s.payload.size(), sub));
     CHECK(sub.wants == (kWantMetrics | kWantCpuList));
+}
+
+uint32_t lastWants(const FakeEnv& env) {
+    Subscribe sub;
+    const std::vector<Sent> subs = env.ofType(PacketType::Subscribe);
+    if (subs.empty() || !decodeSubscribe(subs.back().payload.data(), subs.back().payload.size(), sub)) return 0;
+    return sub.wants;
+}
+
+/**
+ * HTTP camera: bit 14 (and the fps byte it brings) only once this headset's own layout holds the widget. An older
+ * headset rejects such a SUBSCRIBE, so neither a cached layout nor our optimistic copy after an ACK may ask for it.
+ */
+void testHttpCameraWantsNeedHeadsetLayout() {
+    const uint32_t bit = cam::wantBit(cam::kHttpCamera);
+    WidgetInstance http;
+    http.type = WidgetType::HttpCamera;
+
+    // A cached layout with one: not asked for
+    {
+        FakeEnv env;
+        LinkClient c(env, kPcId, "TestPC");
+        Layout cached = layoutV(1);
+        cached.columns[0].widgets.push_back(http);
+        c.setCachedLayout(cached);
+        c.setDiscoveryTargets({}, kHeadset.ip);
+        c.tick(0.0);
+        feed(c, helloAck(PeerStatus::Allowed, 1), kHeadset, 0.0);
+        CHECK(env.count(PacketType::Subscribe) > 0 && !(lastWants(env) & bit));
+    }
+
+    Rig r;
+    r.connect();
+    // Added from this PC: the ACK makes it ours, not the headset's; a LAYOUT_GET asks for the headset's copy
+    Layout e = r.client.layout();
+    e.columns[0].widgets.push_back(http);
+    CHECK(r.client.submitEdit(e, 3, r.now));
+    const std::vector<EditCopy> copies = editCopies(r.env);
+    CHECK(copies.size() == 1);
+    const size_t gets = r.env.count(PacketType::LayoutGet);
+    LayoutAck ack;
+    ack.requestId = copies.empty() ? 0 : copies[0].set.requestId;
+    ack.version = 4;
+    feed(r.client, pkt(PacketType::LayoutAck, encodeLayoutAck(ack)), kHeadset, r.now);
+    CHECK(!r.client.editPending() && cam::httpCameraIn(r.client.layout()) != nullptr);
+    feedMetrics(r.client, 4, r.now);  // announces the ACK's own version before the tick: the GET must still go
+    r.client.tick(r.now);
+    CHECK(r.env.count(PacketType::LayoutGet) == gets + 1);
+    r.run(6.0);  // past a lease renewal
+    CHECK(r.env.count(PacketType::LayoutGet) > gets);
+    CHECK(!(lastWants(r.env) & bit));
+
+    // An older headset dropped it: its layout replaces ours, still not asked for
+    feedLayout(r.client, 20, layoutV(4), r.now);
+    CHECK(cam::httpCameraIn(r.client.layout()) == nullptr);
+    r.run(6.0);
+    CHECK(!(lastWants(r.env) & bit));
+
+    // A headset whose own layout has it: asked for at once, with the fps byte
+    Layout withHttp = layoutV(5);
+    withHttp.columns[0].widgets.push_back(http);
+    const size_t subs = r.env.count(PacketType::Subscribe);
+    feedLayout(r.client, 21, withHttp, r.now);
+    r.client.tick(r.now);
+    CHECK(r.env.count(PacketType::Subscribe) > subs);
+    CHECK(lastWants(r.env) & bit);
 }
 
 void testEditAck() {
@@ -1020,6 +1087,7 @@ int main() {
     testLayoutBlobIdRestartWithoutReset();
     testLayoutGetSelfHeal();
     testWantsFollowLayout();
+    testHttpCameraWantsNeedHeadsetLayout();
     testEditAck();
     testEditRejectStale();
     testEditRejectOtherReasons();

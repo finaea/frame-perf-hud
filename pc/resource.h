@@ -16,3 +16,6 @@
 
 #define IDD_RENAME 210      // R3: a headset profile's new name
 #define IDC_RENAME_EDIT 211
+
+#define IDD_HTTP_CAMERA 220  // the HTTP camera widget's address
+#define IDC_HTTP_CAMERA_URL 221

@@ -168,7 +168,7 @@ struct UiText {
     const char* pcDeny;
     const char* forgetPcsFormat;     ///< footer button (%zu = allowed PCs)
     const char* rowCameras;          ///< T10 Headset camera: which outward cams
-    const char* rowFullSize;         ///< T10 Headset camera: full-size frames in the headset
+    const char* rowFullSize;         ///< T10 Headset / HTTP camera: full-resolution frames in the headset ("Full res")
     const char* rowFps;              ///< T10 camera widgets: headset frame rate
     const char* rowCompact;          ///< R2: Frame, Power, Battery, Temp: the short card
     const char* rowHideSystem;       ///< R2 process lists: leave SteamOS / Steam / SteamVR out (hide_rules.json)
@@ -205,6 +205,12 @@ struct UiText {
     const char* profileNotSaved;     ///< no active profile and the live layout isn't saved in any
     const char* profileHint;         ///< what a profile holds
     const char* profileKeyboard;     ///< the keyboard's description when renaming
+    // ---- HTTP camera (14) ----
+    const char* paletteHttpCamera;   ///< palette chip
+    const char* editAddress;         ///< the button next to its address: opens the keyboard
+    const char* rowRotation;         ///< clockwise turn of the picture
+    const char* addressKeyboard;     ///< the keyboard's description when editing the address
+    const char* sizeFormat;          ///< its Size stepper's value ("Size %u%%": share of the card's width)
 };
 
 /**

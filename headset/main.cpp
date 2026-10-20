@@ -19,6 +19,7 @@
 #include "camera_link.h"     // T10
 #include "camera_service.h"  // T10
 #include "camera_tile_geometry.h"  // T10
+#include "http_camera.h"    // HTTP camera (14)
 #include "metric_store.h"
 #include "paths.h"
 #include "hide_rules.h"  // R2
@@ -86,9 +87,11 @@ struct Options {
         DumpMetrics,  // T03
         ServeLink,    // T06
         CameraHelperDump,  // T09 (hidden)
-        CameraDump         // T10 (hidden): the camera thread on its own
+        CameraDump,        // T10 (hidden): the camera thread on its own
+        HttpCameraBench    // HTTP camera (hidden): its thread on its own against a real stream
     };
     CameraDumpOptions cameraDump;  // T10: --camera-dump
+    HttpCameraBenchOptions httpCameraBench;  // --http-camera-bench
     DumpMetricsOptions dumpMetrics;  // T03: --dump-metrics
     ServeLinkOptions serveLink;      // T06: --serve-link
     camhelper::CameraHelperDumpOptions cameraHelperDump;  // T09: --camera-helper-dump
@@ -172,21 +175,27 @@ double cpuSeconds() {
  * @param seconds timeout; +infinity waits until something happens
  * @param cameraFd the camera thread's eventfd, or -1 (a stub until ticket 10)
  * @param linkFd T06: the link's UDP socket, or -1 (only wakes the loop; the loop drains it)
- * @return true if the camera eventfd fired
+ * @param httpCameraFd the HTTP camera thread's eventfd, or -1
+ * @return true if a camera eventfd fired
  */
-bool waitForWake(double seconds, int cameraFd = -1, int linkFd = -1) {
+bool waitForWake(double seconds, int cameraFd = -1, int linkFd = -1, int httpCameraFd = -1) {
     if (gStopRequested || gToggleRequested || gDumpRequested) return false;
-    struct pollfd fds[3] = {{gWakeFd, POLLIN, 0}, {cameraFd, POLLIN, 0}, {linkFd, POLLIN, 0}};
+    struct pollfd fds[4] = {{gWakeFd, POLLIN, 0}, {cameraFd, POLLIN, 0}, {linkFd, POLLIN, 0}, {httpCameraFd, POLLIN, 0}};
     int timeoutMs = -1;
     if (std::isfinite(seconds)) timeoutMs = static_cast<int>(std::ceil(std::max(0.0, seconds) * 1000.0));
-    const int n = ::poll(fds, 3, timeoutMs);
+    const int n = ::poll(fds, 4, timeoutMs);
     uint64_t value = 0;
     if (n > 0 && (fds[0].revents & POLLIN)) (void)!::read(gWakeFd, &value, sizeof(value));
+    bool camera = false;
     if (n > 0 && cameraFd >= 0 && (fds[1].revents & POLLIN)) {
         (void)!::read(cameraFd, &value, sizeof(value));
-        return true;
+        camera = true;
     }
-    return false;
+    if (n > 0 && httpCameraFd >= 0 && (fds[3].revents & POLLIN)) {
+        (void)!::read(httpCameraFd, &value, sizeof(value));
+        camera = true;
+    }
+    return camera;
 }
 
 /** Waits until the time is up or a stop is requested (for --print and --dump-png). */
@@ -297,6 +306,13 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.cameraDump.cameras = static_cast<uint8_t>(std::strtoul(argv[++i], nullptr, 16) & 0x3F);
         } else if (arg == "--camera-pc") {  // T10: also make the PC's JPEGs
             options.cameraDump.pc = true;
+        } else if (arg == "--http-camera-bench") {  // --http-camera-bench [URL] [--seconds N] [--camera-pc] ...
+            options.mode = Options::Mode::HttpCameraBench;
+            if (hasNext && argv[i + 1][0] != '-') options.httpCameraBench.url = argv[++i];
+        } else if (arg == "--camera-fps" && hasNext) {  // HTTP camera bench: the tile rate
+            options.httpCameraBench.fps = std::atof(argv[++i]);
+        } else if (arg == "--camera-rotation" && hasNext) {  // HTTP camera bench: degrees clockwise
+            options.httpCameraBench.rotation = static_cast<uint8_t>((std::atoi(argv[++i]) / 90) & 3);
         } else if (arg == "--camera-full") {  // T10
             options.cameraDump.fullSize = true;
         } else if (arg == "--camera-standby") {  // T10: as if the HMD were in standby
@@ -633,11 +649,12 @@ frame_updater::UpdateStatus fakeUpdateStatus(const std::string& name) {
 /** T04: what the widgets draw with. */
 fph::WidgetContext widgetContext(const Config& config, const fph::MetricStore& store,
                                  const fph::ProcessListsView& lists, double now,
-                                 const CameraService* cameras = nullptr) {
+                                 const CameraService* cameras = nullptr, const HttpCamera* httpCamera = nullptr) {
     fph::WidgetContext ctx;
     if (cameras != nullptr) {  // T10: the camera cards' state text
         for (uint8_t c = 0; c < fph::cam::kCameraCount; ++c) ctx.cameraStates[c] = static_cast<uint8_t>(cameras->state(c));
     }
+    if (httpCamera != nullptr) ctx.cameraStates[fph::cam::kHttpCamera] = static_cast<uint8_t>(httpCamera->state());
     ctx.store = &store;
     ctx.processes = &lists;
     ctx.thresholds = config.thresholds;
@@ -647,9 +664,9 @@ fph::WidgetContext widgetContext(const Config& config, const fph::MetricStore& s
     return ctx;
 }
 
-/** T10: the camera thread's counters + the tiles' upload cost, for the debug dump. */
-std::string cameraDebugText(const CameraService& cameras, VrOverlay& vr) {
-    std::string text = cameras.debugText();
+/** T10: the camera threads' counters + the tiles' upload cost, for the debug dump. */
+std::string cameraDebugText(const CameraService& cameras, const HttpCamera& httpCamera, VrOverlay& vr) {
+    std::string text = cameras.debugText() + httpCamera.debugText();
     if (CameraOverlays* tiles = vr.cameraOverlays()) {
         double avgMs = 0.0;
         unsigned count = 0, hidden = 0;
@@ -1180,6 +1197,7 @@ int runOverlay(const Options& options) {
     ProfilesUiState profilesUi;
     std::string profileStatus;  // the last action's result, shown on the page
     std::string pendingRename;  // the profile SteamVR's keyboard is open for
+    LayoutEditor::AddressEdit pendingAddress;  // HTTP camera: the widget SteamVR's keyboard is open for (valid())
     /** Rebuilds the Profiles page's state. @return true if it changed (redraw) */
     const auto refreshProfilesUi = [&]() {
         ProfilesUiState next;
@@ -1251,6 +1269,7 @@ int runOverlay(const Options& options) {
                 if (vr.showKeyboard(uiText(config.language).profileKeyboard, selectedName,
                                     static_cast<uint32_t>(ProfileStore::kMaxNameBytes), error)) {
                     pendingRename = selected->id;
+                    pendingAddress = {};
                     profileStatus.clear();
                     ok = true;
                 } else {
@@ -1380,6 +1399,16 @@ int runOverlay(const Options& options) {
     fph::GridGeometry cameraGeometry;  // the grid the camera tiles were last placed on
     bool haveCameraGeometry = false;
     uint64_t cameraStateRevision = 0;
+    // HTTP camera (14): its own thread, idle (no socket) until the widget is on and someone looks
+    HttpCamera httpCamera;
+    if (!httpCamera.start()) std::fprintf(stderr, "[http-camera] couldn't start the thread\n");
+    uint64_t httpCameraStateRevision = 0;
+    // ids 0-5 from the helper's thread, 6 from the HTTP camera's
+    const CameraLink::Source cameraSource {
+        [&](uint8_t c, CameraJpeg& out) {
+            return c == fph::cam::kHttpCamera ? httpCamera.takeJpeg(out) : cameras.takeJpeg(c, out);
+        },
+        [&](uint8_t c) { return c == fph::cam::kHttpCamera ? httpCamera.state() : cameras.state(c); }};
 
     // Wait for SteamVR
     std::string lastMessage;
@@ -1506,7 +1535,38 @@ int runOverlay(const Options& options) {
             std::fprintf(stderr, "[profiles] %s\n", profileStatus.c_str());
             settingsDirty |= refreshProfilesUi();
         }
-        if (events.keyboardClosed) pendingRename.clear();
+        // HTTP camera: the keyboard opened by Edit next to its address
+        if (events.keyboardDone && pendingAddress.valid()) {
+            const LayoutEditor::AddressEdit edit = pendingAddress;
+            pendingAddress = {};
+            std::string url = events.keyboardText;
+            while (!url.empty() && (url.back() == ' ' || url.back() == '\n')) url.pop_back();
+            while (!url.empty() && url.front() == ' ') url.erase(0, 1);
+            fph::HttpUrl parsed;
+            std::string why;
+            const fph::WidgetInstance* w = fph::widgetAt(config.layout, edit.ref);
+            if (config.layout.version != edit.version || w == nullptr || w->type != fph::WidgetType::HttpCamera) {
+                settings.layoutNote("The layout changed meanwhile: the address wasn't applied");
+            } else if (!fph::parseHttpUrl(url, parsed, &why)) {
+                settings.layoutNote(why + ". The address wasn't changed");
+            } else if (url != w->url) {
+                fph::Layout edited = config.layout;
+                edited.columns[static_cast<size_t>(edit.ref.column)].widgets[static_cast<size_t>(edit.ref.index)].url = url;
+                const LayoutAuthority::Result r = layoutAuthority.trySetLayout(edit.version, edited);
+                settings.layoutCommitResult(r.applied() ? LayoutEditor::CommitOutcome::Applied
+                                            : r.outcome == LayoutAuthority::Outcome::Stale
+                                                ? LayoutEditor::CommitOutcome::Stale
+                                                : LayoutEditor::CommitOutcome::Failed);
+                std::fprintf(stderr, "[editor] HTTP camera address -> %s: %s\n", url.c_str(),
+                             r.applied() ? "applied" : "not applied");
+                if (r.applied()) nextPanel = std::min(nextPanel, nowSeconds());
+            }
+            settingsDirty = true;
+        }
+        if (events.keyboardClosed) {
+            pendingRename.clear();
+            pendingAddress = {};
+        }
         if (events.closeRequested) {
             std::fprintf(stderr, "[VR] Closed from the dashboard; exiting\n");
             userQuit = true;
@@ -1595,6 +1655,19 @@ int runOverlay(const Options& options) {
                              r.applied() ? "applied" : (r.outcome == LayoutAuthority::Outcome::Stale ? "stale" : "save failed"),
                              r.version, r.error.empty() ? "" : ": ", r.error.c_str());
                 if (r.applied()) nextPanel = std::min(nextPanel, nowSeconds());  // show it on the HUD now
+                settingsDirty = true;
+            }
+            // HTTP camera: Edit next to the address opens SteamVR's keyboard with it; Done is handled above
+            LayoutEditor::AddressEdit addressEdit;
+            if (settings.takeAddressEdit(addressEdit)) {
+                std::string error;
+                if (vr.showKeyboard(uiText(config.language).addressKeyboard, addressEdit.url,
+                                    static_cast<uint32_t>(fph::kMaxHttpCameraUrl), error)) {
+                    pendingRename.clear();
+                    pendingAddress = addressEdit;
+                } else {
+                    settings.layoutNote("The keyboard didn't open: " + error);
+                }
                 settingsDirty = true;
             }
         }
@@ -1745,7 +1818,7 @@ int runOverlay(const Options& options) {
                 const double w2 = nowSeconds();
                 const fph::ProcessListsView lists = bridge.processListsView();
                 renderer.setOverlay(sessions.hudCard(now));  // T11: the end card, 10 s
-                const bool changed = renderer.render(widgetContext(config, store, lists, now, &cameras));
+                const bool changed = renderer.render(widgetContext(config, store, lists, now, &cameras, &httpCamera));
                 const double c3 = cpuSeconds();
                 const double w3 = nowSeconds();
                 bool sent = false;
@@ -1778,7 +1851,7 @@ int runOverlay(const Options& options) {
             gDumpRequested = 0;
             writeDebugDump(scheduler, store, activityLevel, settingsVisible, nowSeconds(),
                            bridge.debugText() + renderStats.text(renderer.geometry()) +
-                               linkService.debugText(nowSeconds()) + cameraDebugText(cameras, vr) +
+                               linkService.debugText(nowSeconds()) + cameraDebugText(cameras, httpCamera, vr) +
                                sessions.debugText());  // T06, T10, T11
         }
 
@@ -1787,13 +1860,28 @@ int runOverlay(const Options& options) {
             const uint8_t widgetCams = fph::cam::camerasInLayout(config.layout);
             const std::vector<CameraTarget> targets = linkService.server().cameraTargets(nowSeconds());
             CameraWants wants;
-            wants.display = config.visible ? widgetCams : 0;  // kept on in standby: waking up is then instant
-            wants.pc = CameraLink::wanted(targets, widgetCams);
+            // kept on in standby: waking up is then instant
+            wants.display = config.visible ? static_cast<uint8_t>(widgetCams & fph::cam::kHelperCameraMask) : 0;
+            wants.pc = CameraLink::wanted(targets, widgetCams & fph::cam::kHelperCameraMask);
             wants.fullSize = fph::cam::fullSizeInLayout(config.layout);
             wants.worn = scheduler.demand().hmdInUse;
             wants.pcFps = CameraLink::fps(targets);
             fph::cam::displayFpsInLayout(config.layout, wants.displayFps);  // each widget's fps; the max per camera
             cameras.setWants(wants);
+            // HTTP camera: unlike the helper's, the stream is dropped in standby unless a PC watches it
+            HttpCameraWants httpWants;
+            if (const fph::WidgetInstance* http = fph::cam::httpCameraIn(config.layout)) {
+                const uint8_t bit = 1u << fph::cam::kHttpCamera;
+                httpWants.url = http->url;
+                httpWants.display = config.visible && wants.worn;
+                httpWants.pc = (CameraLink::wanted(targets, widgetCams) & bit) != 0;
+                httpWants.worn = wants.worn;
+                httpWants.displayFps = http->cameraFps;
+                httpWants.pcFps = wants.pcFps;
+                httpWants.fullSize = http->cameraFullSize;
+                httpWants.rotation = http->rotation;
+            }
+            httpCamera.setWants(httpWants);
             CameraOverlays* tiles = vr.cameraOverlays();
             if (tiles != nullptr) {
                 // re-placed on any grid change that moves a camera tile, layout edit or not (a widget above it
@@ -1804,20 +1892,28 @@ int runOverlay(const Options& options) {
                     haveCameraGeometry = true;
                 }
                 uint8_t live = 0;
-                for (uint8_t c = 0; c < fph::cam::kCameraCount; ++c) {
+                for (uint8_t c = 0; c < fph::cam::kHttpCamera; ++c) {
                     if (cameras.state(c) == fph::cam::CameraState::Live) live |= static_cast<uint8_t>(1u << c);
                     CameraImage image;
                     if (cameras.takeImage(c, image) && wants.display) tiles->onFrame(c, image);
                 }
+                if (httpCamera.state() == fph::cam::CameraState::Live) live |= 1u << fph::cam::kHttpCamera;
+                CameraImage image;
+                if (httpCamera.takeImage(image) && httpWants.display) tiles->onFrame(fph::cam::kHttpCamera, image);
                 tiles->setLive(live);
+            } else {
+                CameraImage drop;
+                httpCamera.takeImage(drop);  // nothing to show it on
             }
-            cameraLink.pump(cameras, targets, widgetCams, nowSeconds(),
+            cameraLink.pump(cameraSource, targets, widgetCams, nowSeconds(),
                             [&](const LinkEndpoint& to, uint8_t camera, const std::vector<uint8_t>& blob) {
                                 linkService.server().sendCameraBlob(to, camera, blob);
                             });
             // a camera state changed (live, not worn, helper missing, ...): redraw the cards' text now
-            if (cameras.stateRevision() != cameraStateRevision) {
+            if (cameras.stateRevision() != cameraStateRevision ||
+                httpCamera.stateRevision() != httpCameraStateRevision) {
                 cameraStateRevision = cameras.stateRevision();
+                httpCameraStateRevision = httpCamera.stateRevision();
                 if (widgetCams) nextPanel = std::min(nextPanel, nowSeconds());
             }
         }
@@ -1834,13 +1930,14 @@ int runOverlay(const Options& options) {
         // T05: the Detached HUD waits for a laser press while it takes the laser, and follows it smoothly while held
         if (vr.panelInteractive()) wakeAt = std::min(wakeAt, now + (grab.active() ? kGrabPollSec : kSettingsPollSec));
         wakeAt = std::min(wakeAt, vr.nextPlacementAt());  // +infinity when no placement check is planned
-        waitForWake(wakeAt - now, cameraFd, linkService.fd());  // the camera's texture upload goes here in ticket 10
+        waitForWake(wakeAt - now, cameraFd, linkService.fd(), httpCamera.eventFd());
     }
 
     // Same cleanup for SIGTERM / SIGINT, SteamVR quitting, vrserver vanishing, and Quit
     sessions.shutdown();     // T11: the open session's files, Record closed, the crash marker removed
     linkService.shutdown();  // T06: BYE to lease holders, so PCs go back to discovery at once
     cameras.stop();          // T10: the camera thread and the helper (it exits on socket EOF)
+    httpCamera.stop();
     vr.shutdown();           // destroys the camera tiles with the panel
     std::fprintf(stderr, "[VR] Shut down\n");
     if (lockFd >= 0) ::close(lockFd);
@@ -1882,6 +1979,12 @@ int main(int argc, char** argv) {
         case Options::Mode::CameraDump:  // T10
             if (options.secondsGiven) options.cameraDump.seconds = options.dumpSeconds;
             return runCameraDump(options.cameraDump, gStopRequested);
+        case Options::Mode::HttpCameraBench:
+            if (options.secondsGiven) options.httpCameraBench.seconds = options.dumpSeconds;
+            options.httpCameraBench.pc = options.cameraDump.pc;
+            options.httpCameraBench.fullSize = options.cameraDump.fullSize;
+            options.httpCameraBench.snapshotDir = options.cameraDump.snapshotDir;
+            return runHttpCameraBench(options.httpCameraBench, gStopRequested);
         case Options::Mode::Overlay: break;
     }
     return runOverlay(options);

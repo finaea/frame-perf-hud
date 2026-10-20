@@ -1,6 +1,6 @@
 // The widgets (brief's table, 1-13) drawn in frame-perf-overlay's look. Each widget reads only the metrics it
 // owns (core/metric_registry.h) from the MetricStore, so the headset and the PC app draw the same thing.
-// The camera widgets (12, 13) draw their cards, labels and state text; the pictures go on top (T10).
+// The camera widgets (12, 13, 14) draw their cards, labels and state text; the pictures go on top (T10).
 #pragma once
 
 #include "draw.h"
@@ -42,9 +42,9 @@ struct WidgetContext {
     double now = 0.0;        ///< monotonic seconds (graph right edge)
     int graphSeconds = 30;   ///< graph window
     int clockFormat = 24;    ///< 12 or 24; 0 = the dashboard's clock "Off": General hides its Time row
-    /** T10: per camera id (0-5), a cam::CameraState. A Live tile is left dark (the picture goes on top of it:
+    /** T10: per camera id (0-6), a cam::CameraState. A Live tile is left dark (the picture goes on top of it:
      *  an overlay in the headset, CameraFeed::paint on the PC); any other state is written in the tile. */
-    uint8_t cameraStates[6] = {1, 1, 1, 1, 1, 1};
+    uint8_t cameraStates[7] = {1, 1, 1, 1, 1, 1, 1};
 };
 
 /** Graph history one widget instance keeps between redraws. */

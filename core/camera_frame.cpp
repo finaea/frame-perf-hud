@@ -27,7 +27,8 @@ int roundDiv(int a, int b) {
 }  // namespace
 
 const char* cameraName(uint8_t id) {
-    static const char* const kNames[kCameraCount] = {"video0", "video3", "video9", "video13", "Eye 1", "Eye 2"};
+    static const char* const kNames[kCameraCount] = {"video0", "video3", "video9", "video13", "Eye 1", "Eye 2",
+                                                      "HTTP camera"};
     return id < kCameraCount ? kNames[id] : "?";
 }
 
@@ -37,9 +38,17 @@ uint8_t camerasInLayout(const Layout& layout) {
         for (const WidgetInstance& w : column.widgets) {
             if (w.type == WidgetType::HeadsetCamera) mask |= static_cast<uint8_t>(w.cameras & 0x0F);
             if (w.type == WidgetType::EyeCamera) mask |= static_cast<uint8_t>(0x3u << kEyeBase);
+            if (w.type == WidgetType::HttpCamera) mask |= static_cast<uint8_t>(1u << kHttpCamera);
         }
     }
     return mask;
+}
+
+const WidgetInstance* httpCameraIn(const Layout& layout) {
+    for (const LayoutColumn& column : layout.columns)
+        for (const WidgetInstance& w : column.widgets)
+            if (w.type == WidgetType::HttpCamera) return &w;
+    return nullptr;
 }
 
 bool fullSizeInLayout(const Layout& layout) {
@@ -60,9 +69,10 @@ void displayFpsInLayout(const Layout& layout, double (&fps)[kCameraCount]) {
                 if (mask & (1u << c)) fps[c] = std::max(fps[c], static_cast<double>(w.cameraFps));
         }
     }
+    if (const WidgetInstance* http = httpCameraIn(layout)) fps[kHttpCamera] = http->cameraFps;  // only the live one
 }
 
-std::string cameraStateText(CameraState state) {
+std::string cameraStateText(CameraState state, const std::string& hostPort) {
     switch (state) {
         case CameraState::Live: return "";
         case CameraState::Starting: return "Starting the camera...";
@@ -73,6 +83,9 @@ std::string cameraStateText(CameraState state) {
             return "Camera helper is outdated: run `sudo ~/.local/share/frame-perf-hud/install-camera-helper.sh`";
         case CameraState::Unavailable: return "Camera unavailable (is SteamVR running?)";
         case CameraState::Off: return "Camera off";
+        case CameraState::Connecting: return "Connecting to " + hostPort + "...";
+        case CameraState::Unreachable: return "Can't reach " + hostPort + ". Is the stream running?";
+        case CameraState::NotMjpeg: return hostPort + " isn't an MJPEG stream";
     }
     return "";
 }
@@ -83,7 +96,7 @@ void nativeSize(uint8_t camera, int& width, int& height) {
     if (camera < 2) {
         width = 1056;
         height = 1024;
-    } else if (camera < kOutwardCount) {
+    } else if (camera < kOutwardCount || camera == kHttpCamera) {
         width = 640;
         height = 480;
     } else {
@@ -100,6 +113,16 @@ std::vector<Tile> cameraTiles(const WidgetInstance& w) {
         if (ids.empty()) ids.push_back(0);  // a hand-edited 0 mask still shows something
     } else if (w.type == WidgetType::EyeCamera) {
         ids = {kEyeBase, static_cast<uint8_t>(kEyeBase + 1)};
+    } else if (w.type == WidgetType::HttpCamera && !w.httpCameraExtra) {
+        Tile t;
+        t.camera = kHttpCamera;
+        // Size: a share of the card's width, centred (a turned 3:4 picture at full width is very tall)
+        t.w = roundDiv(kContentW * cameraSizeNearest(w.cameraSize), 100);
+        t.x = kContentX + (kContentW - t.w) / 2;
+        t.labelY = kTilesTop + 14;
+        t.y = kTilesTop + kLabelH;
+        t.h = (w.rotation & 1) ? roundDiv(t.w * 4, 3) : roundDiv(t.w * 3, 4);
+        return {t};
     } else {
         return {};
     }
@@ -138,7 +161,9 @@ std::vector<Tile> cameraTiles(const WidgetInstance& w) {
 }
 
 int cameraWidgetHeight(const WidgetInstance& w) {
-    const std::vector<Tile> tiles = cameraTiles(w);
+    WidgetInstance live = w;
+    live.httpCameraExtra = false;  // the "only one" card keeps the height its own settings give it
+    const std::vector<Tile> tiles = cameraTiles(live);
     int bottom = kTilesTop;
     for (const Tile& t : tiles) bottom = std::max(bottom, t.y + t.h);
     return bottom + kBottom;
@@ -209,6 +234,29 @@ void greyToRgba(uint8_t* dst, const uint8_t* grey, size_t pixels) {
         dst[4 * i + 1] = v;
         dst[4 * i + 2] = v;
         dst[4 * i + 3] = 255;
+    }
+}
+
+void rotateGrey(uint8_t* dst, const uint8_t* src, int width, int height, int turns) {
+    turns &= 3;
+    const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (turns == 0) {
+        std::memcpy(dst, src, n);
+        return;
+    }
+    if (turns == 2) {
+        for (size_t i = 0; i < n; ++i) dst[i] = src[n - 1 - i];
+        return;
+    }
+    // A quarter turn: the output is height wide and width tall (toggles/src/preview.cpp rotateInto)
+    const int ow = height;
+    for (int yo = 0; yo < width; ++yo) {
+        uint8_t* row = dst + static_cast<size_t>(yo) * ow;
+        for (int xo = 0; xo < ow; ++xo) {
+            const int xi = turns == 1 ? yo : width - 1 - yo;
+            const int yi = turns == 1 ? height - 1 - xo : xo;
+            row[xo] = src[static_cast<size_t>(yi) * width + xi];
+        }
     }
 }
 
@@ -300,7 +348,7 @@ bool decodeCameraBlob(const uint8_t* data, size_t size, BlobHeader& h, const uin
     jpegSize = 0;
     if (data == nullptr || size < BlobHeader::kSize || data[0] != BlobHeader::kVersion) return false;
     h.camera = data[1];
-    if (h.camera >= kCameraCount || data[2] > static_cast<uint8_t>(CameraState::Off)) return false;
+    if (h.camera >= kCameraCount || data[2] > static_cast<uint8_t>(CameraState::NotMjpeg)) return false;
     h.state = static_cast<CameraState>(data[2]);
     h.width = static_cast<uint16_t>(data[4] | data[5] << 8);
     h.height = static_cast<uint16_t>(data[6] | data[7] << 8);

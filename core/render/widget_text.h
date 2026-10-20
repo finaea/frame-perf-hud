@@ -21,6 +21,8 @@ struct WidgetText {
     const char* general;
     const char* headsetCamera;
     const char* eyeCamera;
+    const char* httpCamera;
+    const char* httpCameraOnlyOne;  ///< on every HTTP camera card after the first
     // Frame
     const char* reproj;   ///< followed by %
     const char* dropped;  ///< followed by a count

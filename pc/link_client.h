@@ -224,6 +224,8 @@ private:
     uint64_t layoutRevision_ = 0;
     uint32_t headsetVersion_ = 0;
     bool needLayout_ = false;
+    bool headsetHasHttpCamera_ = false;  ///< the last layout this headset sent (not ours) has an HTTP camera
+    bool awaitHeadsetLayout_ = false;    ///< our ACKed layout added one: keep asking until the headset's copy comes
     std::unique_ptr<PendingEdit> pending_;
     std::string notice_;
     bool seenFresh_ = false;

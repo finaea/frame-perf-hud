@@ -30,11 +30,21 @@ public:
     enum class CommitOutcome { Applied, Stale, Failed };
     enum class Setting {
         Remove, RowsDown, RowsUp, SameNameOn, SameNameOff, AdapterDongle, AdapterHome,
-        Camera0, Camera1, Camera2, Camera3, FullSizeOn,      // T10 Headset camera (R3: Full size On | Off)
+        Camera0, Camera1, Camera2, Camera3, FullSizeOn,      // T10 Headset camera (R3: Full res On | Off)
         FpsDown, FpsUp,                                      // T10 both camera widgets
         CompactOn, CompactOff,                               // R2 Frame, Power, Battery, Temp
         HideSystemOn, HideSystemOff,                         // R2 process lists (third row)
-        FullSizeOff                                          // R3 Headset camera
+        FullSizeOff,                                         // R3 Headset camera
+        AddressEdit, RotationDown, RotationUp,               // HTTP camera (Full res: FullSizeOn / Off)
+        SizeDown, SizeUp
+    };
+
+    /** HTTP camera: Edit was clicked next to the address. The window opens the address dialog. */
+    struct AddressEdit {
+        WidgetRef ref;         ///< the widget; the dialog's address applies only if it's still there,
+        uint32_t version = 0;  ///< in this layout version
+        std::string url;       ///< its address now
+        bool valid() const { return ref.valid(); }
     };
 
     /** Where things are this frame. */
@@ -83,6 +93,8 @@ public:
 
     bool takeCommit(uint32_t& baseVersion, Layout& layout);
     void commitResult(CommitOutcome outcome);
+    /** HTTP camera: @return false if Edit wasn't clicked since the last call */
+    bool takeAddressEdit(AddressEdit& out);
 
     /** @return the selected widget (invalid = none) */
     WidgetRef selected() const { return selected_; }
@@ -125,6 +137,7 @@ private:
     uint32_t commitBase_ = 0;
     Layout commitLayout_;
     int status_ = -1;  ///< -1 none, else a CommitOutcome
+    AddressEdit addressEdit_;  ///< HTTP camera: Edit clicked, not taken yet
 
     void relayout();
     void revalidateSelection();

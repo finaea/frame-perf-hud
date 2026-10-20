@@ -1,5 +1,6 @@
 #include "settings_dialog.h"
 
+#include "layout.h"
 #include "link_wire.h"
 #include "resource.h"
 #include "win_text.h"
@@ -123,7 +124,54 @@ INT_PTR CALLBACK renameProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     return FALSE;
 }
 
+INT_PTR CALLBACK httpCameraProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
+    auto* url = reinterpret_cast<std::string*>(GetWindowLongPtrW(dlg, DWLP_USER));
+    switch (msg) {
+        case WM_INITDIALOG: {
+            SetWindowLongPtrW(dlg, DWLP_USER, lp);
+            url = reinterpret_cast<std::string*>(lp);
+            HWND edit = GetDlgItem(dlg, IDC_HTTP_CAMERA_URL);
+            SendMessageW(edit, EM_LIMITTEXT, static_cast<WPARAM>(kMaxHttpCameraUrl), 0);
+            SetWindowTextW(edit, widen(*url).c_str());
+            SendMessageW(edit, EM_SETSEL, 0, -1);
+            SetFocus(edit);
+            return FALSE;  // focus set here
+        }
+        case WM_COMMAND:
+            if (LOWORD(wp) == IDOK) {
+                const std::string text = trim(dialogText(dlg, IDC_HTTP_CAMERA_URL));
+                HttpUrl parsed;
+                std::string why;
+                if (!parseHttpUrl(text, parsed, &why)) {
+                    MessageBoxW(dlg, widen(why + ".").c_str(), L"frame-perf-hud", MB_OK | MB_ICONWARNING);
+                    SetFocus(GetDlgItem(dlg, IDC_HTTP_CAMERA_URL));
+                    return TRUE;
+                }
+                *url = text;
+                EndDialog(dlg, IDOK);
+                return TRUE;
+            }
+            if (LOWORD(wp) == IDCANCEL) {
+                EndDialog(dlg, IDCANCEL);
+                return TRUE;
+            }
+            break;
+    }
+    return FALSE;
+}
+
 }  // namespace
+
+bool showHttpCameraDialog(HINSTANCE instance, HWND parent, std::string& url) {
+    std::string edited = url;
+    if (DialogBoxParamW(instance, MAKEINTRESOURCEW(IDD_HTTP_CAMERA), parent, httpCameraProc,
+                        reinterpret_cast<LPARAM>(&edited)) != IDOK ||
+        edited == url) {
+        return false;
+    }
+    url = edited;
+    return true;
+}
 
 bool showRenameDialog(HINSTANCE instance, HWND parent, std::string& name) {
     std::string edited = name;

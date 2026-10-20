@@ -30,10 +30,11 @@ enum class WidgetType : uint8_t {
     General = 11,
     HeadsetCamera = 12,
     EyeCamera = 13,
+    HttpCamera = 14,  ///< any MJPEG-over-HTTP stream (e.g. a mouth camera from Toggle's mouthcam)
 };
 
 /** Number of WidgetType values including None (for arrays indexed by type). */
-constexpr size_t kWidgetTypeCount = 14;
+constexpr size_t kWidgetTypeCount = 15;
 
 /**
  * A source is one thing that gets read (a sysfs file group, a /proc file, an nl80211 query, an OpenVR call).

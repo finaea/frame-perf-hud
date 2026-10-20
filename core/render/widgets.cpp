@@ -447,6 +447,7 @@ const char* titleOf(const WidgetInstance& w) {
         case WidgetType::General: return t.general;
         case WidgetType::HeadsetCamera: return t.headsetCamera;
         case WidgetType::EyeCamera: return t.eyeCamera;
+        case WidgetType::HttpCamera: return t.httpCamera;
         case WidgetType::None: break;
     }
     return "";
@@ -1345,15 +1346,24 @@ void drawStreaming(const Pen& pen, double x, double y, const WidgetInstance& w, 
 
 /** T10: each tile's label, and its state written in the tile unless it's live (the picture covers it). */
 void drawCameras(const Pen& pen, double x, double y, const WidgetInstance& w, const WidgetContext& ctx) {
+    if (w.type == WidgetType::HttpCamera && w.httpCameraExtra) {  // a second one: only the first connects
+        const std::string text = widgetText().httpCameraOnlyOne;
+        const double size = fitSize(pen, text, 16, 10, 484 - 16, false);
+        textCentered(pen, x + 6 + 484 / 2.0, y + cam::cameraWidgetHeight(w) / 2.0 + 5, text, size, kTextMuted, false);
+        return;
+    }
+    // the HTTP camera's label and state text name its host:port, so a wrong address shows at a glance
+    const std::string hostPort = w.type == WidgetType::HttpCamera ? httpUrlHostPort(w.url) : std::string();
     for (const cam::Tile& t : cam::cameraTiles(w)) {
-        pen.text(x + t.x, y + t.labelY, cam::cameraName(t.camera), 14, kTextMuted);
+        const std::string label = hostPort.empty() ? std::string(cam::cameraName(t.camera)) : hostPort;
+        pen.text(x + t.x, y + t.labelY, label, fitSize(pen, label, 14, 10, t.w, false), kTextMuted);
         pen.color(kBg);
         pen.roundedRect(x + t.x, y + t.y, t.w, t.h, 6);
         cairo_fill(pen.cr);
         const auto state = static_cast<cam::CameraState>(ctx.cameraStates[t.camera]);
         if (state == cam::CameraState::Live) continue;
         // "Camera helper not installed: run `sudo ...`" goes on two lines
-        const std::string text = cam::cameraStateText(state);
+        const std::string text = cam::cameraStateText(state, hostPort);
         const size_t cut = text.find(": ");
         const std::string first = cut == std::string::npos ? text : text.substr(0, cut);
         const std::string second = cut == std::string::npos ? "" : text.substr(cut + 2);
@@ -1402,7 +1412,7 @@ uint64_t widgetSignature(const WidgetInstance& w, const WidgetContext& ctx) {
     mix(&ctx.thresholds, sizeof(ctx.thresholds));
     mix(&ctx.graphSeconds, sizeof(ctx.graphSeconds));
     mix(&ctx.clockFormat, sizeof(ctx.clockFormat));
-    if (w.type == WidgetType::HeadsetCamera || w.type == WidgetType::EyeCamera)  // T10: state text per tile
+    if (isCameraWidget(w.type))  // T10: state text per tile
         mix(ctx.cameraStates, sizeof(ctx.cameraStates));
     const bool hasStore = ctx.store != nullptr;
     const bool hasLists = ctx.processes != nullptr;
@@ -1439,7 +1449,8 @@ int widgetHeight(const WidgetInstance& w, const WidgetContext* ctx) {
         }
         case WidgetType::Streaming: return ctx ? measureStreaming(*ctx, w.compact).height : (w.compact ? 230 : 504);
         case WidgetType::HeadsetCamera:
-        case WidgetType::EyeCamera: return cam::cameraWidgetHeight(w);  // T10
+        case WidgetType::EyeCamera:
+        case WidgetType::HttpCamera: return cam::cameraWidgetHeight(w);  // T10
         case WidgetType::None: break;
     }
     return 0;
@@ -1490,7 +1501,8 @@ void drawWidgetDynamic(const Pen& pen, double x, double y, const WidgetInstance&
         case WidgetType::General: drawGeneral(pen, x, y, ctx); break;
         case WidgetType::Streaming: drawStreaming(pen, x, y, w, ctx); break;
         case WidgetType::HeadsetCamera:
-        case WidgetType::EyeCamera: drawCameras(pen, x, y, w, ctx); break;  // T10
+        case WidgetType::EyeCamera:
+        case WidgetType::HttpCamera: drawCameras(pen, x, y, w, ctx); break;  // T10
         case WidgetType::None: break;
     }
 }

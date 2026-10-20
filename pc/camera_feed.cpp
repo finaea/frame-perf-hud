@@ -8,6 +8,10 @@
 namespace fph {
 namespace pc {
 
+namespace {
+constexpr double kPi = 3.14159265358979323846;
+}  // namespace
+
 CameraFeed::CameraFeed() : tj_(tjInitDecompress()) {}
 
 CameraFeed::~CameraFeed() {
@@ -104,17 +108,25 @@ uint32_t CameraFeed::wantsFor(const Layout& layout) {
 
 void CameraFeed::paint(cairo_t* cr, const GridGeometry& geometry, double scale, double now) const {
     for (const WidgetSlot& slot : geometry.slots) {
-        if (slot.widget.type != WidgetType::HeadsetCamera && slot.widget.type != WidgetType::EyeCamera) continue;
+        if (!isCameraWidget(slot.widget.type)) continue;
+        // HTTP camera: the headset relays its JPEGs as they came, so the picture is turned here, by the widget's
+        // rotation (clockwise quarter turns, like the headset's tiles)
+        const int turns = slot.widget.type == WidgetType::HttpCamera ? slot.widget.rotation & 3 : 0;
         for (const cam::Tile& tile : cam::cameraTiles(slot.widget)) {
             const Cam& c = cams_[tile.camera];
             if (!c.surface || state(tile.camera, now) != cam::CameraState::Live) continue;
-            const cam::Rect r = cam::fitFrame(tile, c.width, c.height);
+            const int shownW = (turns & 1) ? c.height : c.width;
+            const int shownH = (turns & 1) ? c.width : c.height;
+            const cam::Rect r = cam::fitFrame(tile, shownW, shownH);
             cairo_save(cr);
             cairo_scale(cr, scale, scale);
             cairo_rectangle(cr, slot.x + r.x, slot.y + r.y, r.w, r.h);
             cairo_clip(cr);
-            cairo_translate(cr, slot.x + r.x, slot.y + r.y);
-            cairo_scale(cr, r.w / c.width, r.h / c.height);
+            // about the rect's centre, then the picture's own size centred on it
+            cairo_translate(cr, slot.x + r.x + r.w / 2, slot.y + r.y + r.h / 2);
+            cairo_rotate(cr, turns * kPi / 2);
+            cairo_scale(cr, r.w / shownW, r.h / shownH);
+            cairo_translate(cr, -c.width / 2.0, -c.height / 2.0);
             cairo_set_source_surface(cr, c.surface, 0, 0);
             cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
             cairo_paint(cr);

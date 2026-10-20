@@ -532,12 +532,15 @@ void testFitFrame() {
 
 void testIdsAndLayout() {
     CHECK(wantBit(0) == 1u << 8 && wantBit(5) == 1u << 13);
-    CHECK(kWantCameraMask == 0x3F00u);
+    CHECK(kWantCameraMask == 0x7F00u);
+    CHECK(wantBit(kHttpCamera) == 1u << 14 && kCameraCount == 7);
     CHECK((kWantCameraPathOnly & kWantCameraMask) == 0);
     CHECK(camerasFromWants(wantBit(1) | wantBit(4) | 0x1u | kWantCameraPathOnly) == ((1u << 1) | (1u << 4)));
     CHECK(isOutward(3) && !isOutward(4) && isEye(4) && isEye(5) && !isEye(6));
     CHECK(std::strcmp(cameraName(0), "video0") == 0 && std::strcmp(cameraName(3), "video13") == 0);
-    CHECK(std::strcmp(cameraName(4), "Eye 1") == 0 && std::strcmp(cameraName(6), "?") == 0);
+    CHECK(std::strcmp(cameraName(4), "Eye 1") == 0 && std::strcmp(cameraName(6), "HTTP camera") == 0);
+    CHECK(std::strcmp(cameraName(7), "?") == 0 && !isOutward(6));
+    CHECK(camerasFromWants(wantBit(6)) == (1u << 6) && camerasFromWants(1u << 15) == 0);
 
     Layout l;
     LayoutColumn c0, c1;
@@ -559,6 +562,188 @@ void testIdsAndLayout() {
     CHECK(cameraStateText(CameraState::HelperMissing).find("install-camera-helper") != std::string::npos);
     CHECK(!cameraStateText(CameraState::Starting).empty());
     CHECK(!cameraStateText(CameraState::Off).empty());
+    // the HTTP camera's own states name the address
+    CHECK(cameraStateText(CameraState::Connecting, "127.0.0.1:8082").find("127.0.0.1:8082") != std::string::npos);
+    CHECK(cameraStateText(CameraState::Unreachable, "127.0.0.1:8082").find("127.0.0.1:8082") != std::string::npos);
+    CHECK(cameraStateText(CameraState::NotMjpeg, "cam.local:80").find("cam.local:80") != std::string::npos);
+    CHECK(cameraStateText(CameraState::Unreachable, "cam.local:80") == "Can't reach cam.local:80. Is the stream running?");
+    CHECK(cameraStateText(CameraState::Unreachable, "cam.local:80").find("mouthcam") == std::string::npos);
+    CHECK(cameraStateText(CameraState::NotMjpeg, "cam.local:80").find("MJPEG") != std::string::npos);
+    CHECK(static_cast<int>(CameraState::Connecting) == 7 && static_cast<int>(CameraState::Unreachable) == 8 &&
+          static_cast<int>(CameraState::NotMjpeg) == 9);  // they go over the link
+}
+
+// ---------------------------------------------------------------------------------------------- HTTP camera
+
+WidgetInstance httpCam(uint8_t rotation = 0, uint8_t fps = 15) {
+    WidgetInstance w;
+    w.type = WidgetType::HttpCamera;
+    w.rotation = rotation;
+    w.cameraFps = fps;
+    return w;
+}
+
+void testHttpCameraLayoutHelpers() {
+    Layout l;
+    LayoutColumn c0, c1;
+    c0.widgets.push_back(headset(0x01));
+    CHECK(httpCameraIn(l) == nullptr);
+    l.columns = {c0};
+    CHECK(httpCameraIn(l) == nullptr);
+    CHECK(camerasInLayout(l) == 0x01);
+
+    // the first one in column order is the live one, not the one with the lowest fps or the last
+    WidgetInstance first = httpCam(1, 10), second = httpCam(2, 30);
+    first.url = "http://first:1/";
+    second.url = "http://second:2/";
+    c1.widgets = {first};
+    LayoutColumn c2;
+    c2.widgets = {headset(0x02), second};
+    l.columns = {c0, c1, c2};
+    const WidgetInstance* live = httpCameraIn(l);
+    CHECK(live != nullptr && live->url == "http://first:1/" && live == &l.columns[1].widgets[0]);
+    CHECK(camerasInLayout(l) == (0x01 | 0x02 | (1u << 6)));
+
+    // fps: only the live one counts
+    double fps[kCameraCount];
+    displayFpsInLayout(l, fps);
+    CHECK(fps[6] == 10);
+    CHECK(fps[0] == 15 && fps[1] == 15 && fps[4] == 0 && fps[5] == 0);
+    l.columns[1].widgets.clear();
+    CHECK(httpCameraIn(l)->url == "http://second:2/");
+    displayFpsInLayout(l, fps);
+    CHECK(fps[6] == 30);
+    // none: 0
+    l.columns[2].widgets.pop_back();
+    displayFpsInLayout(l, fps);
+    CHECK(fps[6] == 0 && httpCameraIn(l) == nullptr);
+
+    // an HTTP camera alone sets bit 6 only
+    Layout only;
+    only.columns.resize(1);
+    only.columns[0].widgets = {httpCam()};
+    CHECK(camerasInLayout(only) == (1u << 6));
+    // full size is about the helper's cams (the HTTP camera's is per widget)
+    WidgetInstance big = httpCam();
+    big.cameraFullSize = true;
+    only.columns[0].widgets = {big};
+    CHECK(!fullSizeInLayout(only));
+}
+
+void testHttpCameraTiles() {
+    for (const uint8_t rotation : {0, 1, 2, 3}) {
+        const WidgetInstance w = httpCam(rotation);
+        const std::vector<Tile> t = cameraTiles(w);
+        CHECK(t.size() == 1);
+        if (t.size() != 1) continue;
+        CHECK(t[0].camera == kHttpCamera && t[0].w == 484);
+        if (rotation & 1) {
+            CHECK(t[0].h == 645);  // 3:4 portrait: 484 * 4 / 3
+        } else {
+            CHECK(t[0].h == 363);  // 4:3: 484 * 3 / 4
+        }
+        checkInsideCard(w);
+        CHECK(cameraWidgetHeight(w) > t[0].y + t[0].h);
+    }
+    CHECK(cameraWidgetHeight(httpCam(1)) > cameraWidgetHeight(httpCam(0)));
+    CHECK(cameraWidgetHeight(httpCam(3)) == cameraWidgetHeight(httpCam(1)));
+    CHECK(cameraWidgetHeight(httpCam(2)) == cameraWidgetHeight(httpCam(0)));
+
+    // an extra one (layoutGrid marks it): no tile, but the card is as tall as the live one
+    for (const uint8_t rotation : {0, 1}) {
+        WidgetInstance extra = httpCam(rotation);
+        extra.httpCameraExtra = true;
+        CHECK(cameraTiles(extra).empty());
+        CHECK(cameraWidgetHeight(extra) == cameraWidgetHeight(httpCam(rotation)));
+    }
+    int w = 0, h = 0;
+    nativeSize(kHttpCamera, w, h);
+    CHECK(w == 640 && h == 480);
+}
+
+void testHttpCameraSize() {
+    // Size: the picture is a percent of the card's width, centred. 100% is the default (484 wide at x = 6).
+    WidgetInstance w = httpCam(0);
+    CHECK(w.cameraSize == 100);
+    {
+        const Tile t = cameraTiles(w)[0];
+        CHECK(t.w == 484 && t.x == 6 && t.h == 363);
+    }
+    struct Case {
+        uint8_t size, rotation;
+        int w, x, h;
+    };
+    // w = round(484 * size / 100), x = 6 + (484 - w) / 2, h = w * 3/4 (0, 2) or w * 4/3 (1, 3), rounded
+    const Case cases[] = {
+        {40, 0, 194, 151, 146}, {40, 3, 194, 151, 259}, {40, 1, 194, 151, 259}, {40, 2, 194, 151, 146},
+        {50, 0, 242, 127, 182}, {70, 0, 339, 78, 254},  {100, 3, 484, 6, 645},  {100, 0, 484, 6, 363},
+    };
+    for (const Case& c : cases) {
+        w = httpCam(c.rotation);
+        w.cameraSize = c.size;
+        const std::vector<Tile> t = cameraTiles(w);
+        CHECK(t.size() == 1);
+        if (t.size() != 1) continue;
+        if (t[0].w != c.w || t[0].x != c.x || t[0].h != c.h)
+            std::printf("size %d rot %d: got w %d x %d h %d\n", c.size, c.rotation, t[0].w, t[0].x, t[0].h);
+        CHECK(t[0].w == c.w && t[0].x == c.x && t[0].h == c.h);
+        CHECK(t[0].camera == kHttpCamera);
+        checkInsideCard(w);
+        CHECK(cameraWidgetHeight(w) > t[0].y + t[0].h);
+        // centred in the card's content width (6 .. 490)
+        CHECK(std::abs((t[0].x - 6) - (490 - (t[0].x + t[0].w))) <= 1);
+    }
+    // the card is as tall as the picture needs: smaller picture, shorter card
+    WidgetInstance big = httpCam(3), small = httpCam(3);
+    small.cameraSize = 40;
+    CHECK(cameraWidgetHeight(small) < cameraWidgetHeight(big));
+    CHECK(cameraWidgetHeight(big) - cameraWidgetHeight(small) == cameraTiles(big)[0].h - cameraTiles(small)[0].h);
+    // an extra one is as tall as a live one at the same size
+    WidgetInstance extra = small;
+    extra.httpCameraExtra = true;
+    CHECK(cameraTiles(extra).empty() && cameraWidgetHeight(extra) == cameraWidgetHeight(small));
+}
+
+void testRotateGrey() {
+    // 3 wide, 2 tall:   1 2 3
+    //                   4 5 6
+    const uint8_t src[6] = {1, 2, 3, 4, 5, 6};
+    uint8_t dst[6];
+    rotateGrey(dst, src, 3, 2, 0);
+    CHECK(std::memcmp(dst, src, 6) == 0);
+    // a quarter clockwise: 2 wide, 3 tall   4 1 / 5 2 / 6 3
+    const uint8_t r1[6] = {4, 1, 5, 2, 6, 3};
+    rotateGrey(dst, src, 3, 2, 1);
+    CHECK(std::memcmp(dst, r1, 6) == 0);
+    // half: 3 wide, 2 tall   6 5 4 / 3 2 1
+    const uint8_t r2[6] = {6, 5, 4, 3, 2, 1};
+    rotateGrey(dst, src, 3, 2, 2);
+    CHECK(std::memcmp(dst, r2, 6) == 0);
+    // three quarters: 2 wide, 3 tall   3 6 / 2 5 / 1 4
+    const uint8_t r3[6] = {3, 6, 2, 5, 1, 4};
+    rotateGrey(dst, src, 3, 2, 3);
+    CHECK(std::memcmp(dst, r3, 6) == 0);
+    // taken mod 4
+    rotateGrey(dst, src, 3, 2, 5);
+    CHECK(std::memcmp(dst, r1, 6) == 0);
+    rotateGrey(dst, src, 3, 2, 4);
+    CHECK(std::memcmp(dst, src, 6) == 0);
+    // four quarters are the identity, on a bigger odd-sized image
+    const int iw = 7, ih = 5;
+    Bytes img(iw * ih), a(iw * ih), b(iw * ih);
+    for (size_t i = 0; i < img.size(); ++i) img[i] = static_cast<uint8_t>(i * 5 + 1);
+    rotateGrey(a.data(), img.data(), iw, ih, 1);
+    rotateGrey(b.data(), a.data(), ih, iw, 1);
+    rotateGrey(a.data(), b.data(), iw, ih, 1);
+    rotateGrey(b.data(), a.data(), ih, iw, 1);
+    CHECK(b == img);
+    // a column of one pixel and a row of one pixel
+    const uint8_t col[3] = {7, 8, 9};
+    uint8_t out3[3];
+    rotateGrey(out3, col, 1, 3, 1);  // 1 wide 3 tall -> 3 wide 1 tall, clockwise: bottom to top becomes left to right
+    CHECK(out3[0] == 9 && out3[1] == 8 && out3[2] == 7);
+    rotateGrey(out3, col, 1, 3, 3);
+    CHECK(out3[0] == 7 && out3[1] == 8 && out3[2] == 9);
 }
 
 // ---------------------------------------------------------------------------------------------- blob
@@ -588,7 +773,8 @@ void testBlobRoundTrip() {
 
     // a non-Live state round-trips with no jpeg; any jpeg passed is dropped
     for (CameraState s : {CameraState::Starting, CameraState::NotWorn, CameraState::HelperMissing,
-                          CameraState::HelperOutdated, CameraState::Unavailable, CameraState::Off}) {
+                          CameraState::HelperOutdated, CameraState::Unavailable, CameraState::Off,
+                          CameraState::Connecting, CameraState::Unreachable, CameraState::NotMjpeg}) {
         BlobHeader n;
         n.camera = 5;
         n.state = s;
@@ -634,15 +820,19 @@ void testBlobMalformed() {
     CHECK(!decodeCameraBlob(b.data(), b.size(), d, j, jn));
 
     b = good;
-    b[1] = 6;  // camera >= kCameraCount
+    b[1] = 7;  // camera >= kCameraCount
     CHECK(!decodeCameraBlob(b.data(), b.size(), d, j, jn));
     b[1] = 255;
     CHECK(!decodeCameraBlob(b.data(), b.size(), d, j, jn));
+    b[1] = 6;  // the HTTP camera
+    CHECK(decodeCameraBlob(b.data(), b.size(), d, j, jn) && d.camera == 6);
     b[1] = 5;
     CHECK(decodeCameraBlob(b.data(), b.size(), d, j, jn));
 
     b = good;
-    b[2] = 7;  // unknown state
+    b[2] = 10;  // unknown state (9 = NotMjpeg is the last)
+    CHECK(!decodeCameraBlob(b.data(), b.size(), d, j, jn));
+    b[2] = 255;
     CHECK(!decodeCameraBlob(b.data(), b.size(), d, j, jn));
 
     // too short / null
@@ -692,6 +882,10 @@ int main() {
     testNativeSize();
     testFitFrame();
     testIdsAndLayout();
+    testHttpCameraLayoutHelpers();
+    testHttpCameraTiles();
+    testHttpCameraSize();
+    testRotateGrey();
     testBlobRoundTrip();
     testBlobMalformed();
     if (failures == 0) std::printf("camera_frame_test: all passed\n");

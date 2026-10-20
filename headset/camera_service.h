@@ -22,7 +22,7 @@ struct CameraWants {
     uint8_t pc = 0;         ///< cameras a PC asked for whose widget is on
     bool fullSize = false;  ///< outward frames for the headset at full size (default 2x down)
     bool worn = true;       ///< the HMD isn't in standby (the cameras pause in standby)
-    double displayFps[fph::cam::kCameraCount] = {15, 15, 15, 15, 15, 15};  ///< per camera (cam::displayFpsInLayout)
+    double displayFps[fph::cam::kCameraCount] = {15, 15, 15, 15, 15, 15, 15};  ///< per camera (cam::displayFpsInLayout)
     double pcFps = 10.0;
 
     bool operator==(const CameraWants& o) const {

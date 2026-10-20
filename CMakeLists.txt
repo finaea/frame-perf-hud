@@ -22,6 +22,7 @@ add_library(fph-core STATIC
   core/stream_metrics.cpp   # T08: typed PC streaming snapshots and freshness
   core/layout_edit.cpp      # T05: move / insert / remove widgets, drop slots (headset editor, PC editor)
   core/camera_frame.cpp     # T10: camera ids, tiles, frame copy + dark filter, recheck gate, camera BLOB
+  core/mjpeg_stream.cpp     # HTTP camera: MJPEG-over-HTTP answer -> JPEG frames
 )
 target_include_directories(fph-core PUBLIC core)
 if(NOT MSVC)
@@ -120,6 +121,7 @@ if(FPH_BUILD_HEADSET)
     headset/camera_overlay.cpp    # T10: one overlay per camera tile
     headset/camera_link.cpp       # T10: camera BLOBs to the PCs
     headset/camera_dump.cpp       # T10: --camera-dump
+    headset/http_camera.cpp       # HTTP camera (14): its MJPEG reader thread, --http-camera-bench
     headset/crash_recorder.cpp    # T11: the 1 Hz crash ring
     headset/power_off.cpp         # T11: the last power-off reason (qcom-pon lines, kernel journal)
     headset/session_service.cpp   # T11: session logs, Save / Record in the main loop
@@ -233,6 +235,12 @@ if(BUILD_TESTING)
   target_link_libraries(core-layout-test PRIVATE fph-core)
   target_compile_options(core-layout-test PRIVATE -Wall -Wextra)
   add_test(NAME core-layout COMMAND core-layout-test)
+
+  # HTTP camera (14): the MJPEG-over-HTTP splitter
+  add_executable(core-mjpeg-stream-test tests/core_mjpeg_stream_test.cpp)
+  target_link_libraries(core-mjpeg-stream-test PRIVATE fph-core)
+  target_compile_options(core-mjpeg-stream-test PRIVATE -Wall -Wextra)
+  add_test(NAME core-mjpeg-stream COMMAND core-mjpeg-stream-test)
 
   # T05: layout edits (insert / move / remove, limits, drop slots)
   add_executable(core-layout-edit-test tests/core_layout_edit_test.cpp)
@@ -435,6 +443,13 @@ if(BUILD_TESTING)
     target_compile_options(camera-service-mailbox-test PRIVATE -Wall -Wextra)
     target_link_libraries(camera-service-mailbox-test PRIVATE fph-core PkgConfig::TURBOJPEG Threads::Threads)
     add_test(NAME camera-service-mailbox COMMAND camera-service-mailbox-test)
+
+    # HTTP camera (14): the reader thread against a local MJPEG server (reconnect, Unreachable / NotMjpeg, rotation)
+    add_executable(http-camera-test tests/http_camera_test.cpp headset/http_camera.cpp)
+    target_include_directories(http-camera-test PRIVATE headset)
+    target_compile_options(http-camera-test PRIVATE -Wall -Wextra)
+    target_link_libraries(http-camera-test PRIVATE fph-core PkgConfig::TURBOJPEG Threads::Threads)
+    add_test(NAME http-camera COMMAND http-camera-test)
 
     # T10 review: the eye search's wake-up vs its work (no busy spin), the shown watermark reset with a fresh CAM
     add_executable(camera-review-fixes-test tests/camera_review_fixes_test.cpp)

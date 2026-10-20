@@ -78,7 +78,11 @@ uint32_t LinkClient::wants() const {
             if (i.type == WidgetType::RamItems) w |= kWantRamList;
         }
     }
-    return w | CameraFeed::wantsFor(layout_);  // T10: the cameras of this layout's camera widgets
+    w |= CameraFeed::wantsFor(layout_);  // T10: the cameras of this layout's camera widgets
+    // HTTP camera: bit 14 brings the fps byte, which an older headset's SUBSCRIBE decoder rejects (and with it the
+    // lease). layout_ may be our own optimistic or cached copy, so only a layout this headset sent says it's safe
+    if (!headsetHasHttpCamera_) w &= ~cam::wantBit(cam::kHttpCamera);
+    return w;
 }
 
 void LinkClient::sendSubscribe(double now) {
@@ -120,6 +124,8 @@ void LinkClient::backToDiscovery(double now, const char* why) {
     if (headsetEp_.ip != 0) lastHeadsetIp_ = headsetEp_.ip;
     phase_ = LinkPhase::Discovery;
     headsetEp_ = Endpoint();
+    headsetHasHttpCamera_ = false;  // learned again from the next headset's own layout
+    awaitHeadsetLayout_ = false;
     // A restarted headset numbers its blobs from 1 again: forget what was completed before
     blobs_ = BlobAssembler();
     cameras_.reset();  // T10
@@ -435,7 +441,7 @@ void LinkClient::onSubscribeAck(const SubscribeAck& ack, double now) {
 
 void LinkClient::noteHeadsetVersion(uint32_t version) {
     headsetVersion_ = version;
-    needLayout_ = !haveLayout_ || !layoutLive_ || layout_.version != version;
+    needLayout_ = !haveLayout_ || !layoutLive_ || layout_.version != version || awaitHeadsetLayout_;
 }
 
 void LinkClient::onMetrics(const Metrics& m, double now) {
@@ -462,7 +468,6 @@ void LinkClient::sendPcMetrics(const std::vector<link::WireValue>& values) {
 }
 
 void LinkClient::onBlob(const Blob& blob, double now) {
-    (void)now;
     if (blob.kind == BlobKind::Layout) {
         if (pending_ != nullptr) return;  // the edit's answer decides what's shown
         Layout fresh;
@@ -480,6 +485,10 @@ void LinkClient::onBlob(const Blob& blob, double now) {
             logLine("[link] layout v%u from the headset", fresh.version);
             setLayout(fresh, true);
         }
+        awaitHeadsetLayout_ = false;
+        const bool hasHttp = cam::httpCameraIn(fresh) != nullptr;
+        if (hasHttp && !headsetHasHttpCamera_) nextSubscribe_ = now;  // ask for its frames now, not in a few s
+        headsetHasHttpCamera_ = hasHttp;
         // A newer version may already be announced: keep asking until we hold it
         needLayout_ = fresh.version != headsetVersion_ && newerId(headsetVersion_, fresh.version);
         if (!needLayout_) headsetVersion_ = fresh.version;
@@ -510,7 +519,6 @@ void LinkClient::onBlob(const Blob& blob, double now) {
 }
 
 void LinkClient::onLayoutAck(const LayoutAck& ack, double now) {
-    (void)now;
     if (pending_ == nullptr || ack.requestId != pending_->requestId) return;
     logLine("[link] LAYOUT_ACK request %u: version %u (after %d copies)", ack.requestId, ack.version, pending_->copies);
     Layout applied = layout_;
@@ -518,6 +526,12 @@ void LinkClient::onLayoutAck(const LayoutAck& ack, double now) {
     pending_.reset();
     setLayout(applied, true);
     noteHeadsetVersion(ack.version);
+    // HTTP camera: an older headset ACKs a layout it dropped widget 14 from. Let its own copy say whether it's there
+    if (!headsetHasHttpCamera_ && cam::httpCameraIn(applied) != nullptr) {
+        awaitHeadsetLayout_ = true;  // until a Layout BLOB comes (METRICS announcing this version doesn't count)
+        needLayout_ = true;
+        nextLayoutGet_ = now;
+    }
 }
 
 void LinkClient::onLayoutReject(const LayoutReject& reject, double now) {

@@ -56,7 +56,7 @@ const UiText kEnglish = {
     "Saved", "Changed on a PC meanwhile, try again", "Couldn't save the layout",
     "PC \"%s\" wants to connect", "Allow", "Deny", "Forget PCs (%zu)",
     // T10: camera widget settings
-    "Cameras", "Full size", "FPS",
+    "Cameras", "Full res", "FPS",
     // R2: Compact cards, Hide system
     "Compact", "Hide system", ", no system",
     // T11: the Logs page
@@ -76,6 +76,8 @@ const UiText kEnglish = {
     "The layout you have now isn't saved in a profile",
     "A profile is the layout only: columns, widgets and their settings. Placement and app settings aren't part of it",
     "Profile name",
+    // HTTP camera
+    "HTTP cam", "Edit", "Rotation", "HTTP camera address, like http://127.0.0.1:8082/preview", "Size %u%%",
 };
 
 /** @return the value with no decimals */

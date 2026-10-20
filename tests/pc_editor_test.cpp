@@ -320,6 +320,75 @@ void testPills() {
     check(fps.w > 0 && full.w > 0 && full.y >= fps.y + fps.h, "Full size sits below the FPS row");
 }
 
+// HTTP camera: the Size stepper shares the FPS row, steps through 40..100 and stops at both ends
+void testHttpCameraSize() {
+    using S = PcEditor::Setting;
+    Layout l;
+    l.version = 1;
+    l.columns.resize(1);
+    l.columns[0].widgets = {make(WidgetType::Frame), make(WidgetType::HttpCamera)};
+    PcEditor e;
+    attach(e, l);
+    e.select({0, 1});
+    Box fpsDown, fpsUp, sizeDown, sizeUp;
+    for (const auto& b : e.settingButtons()) {
+        if (b.first == S::FpsDown) fpsDown = b.second;
+        if (b.first == S::FpsUp) fpsUp = b.second;
+        if (b.first == S::SizeDown) sizeDown = b.second;
+        if (b.first == S::SizeUp) sizeUp = b.second;
+    }
+    check(fpsDown.w > 0 && fpsUp.w > 0 && sizeDown.w > 0 && sizeUp.w > 0, "HTTP camera has FPS and Size steppers");
+    check(sizeDown.y == fpsDown.y && sizeUp.y == fpsDown.y, "Size is on the FPS row");
+    check(fpsUp.x + fpsUp.w <= sizeDown.x && sizeDown.x + sizeDown.w <= sizeUp.x, "FPS pair, then Size pair");
+
+    // only the HTTP camera has it
+    Layout h;
+    h.version = 1;
+    h.columns.resize(1);
+    h.columns[0].widgets = {make(WidgetType::HeadsetCamera), make(WidgetType::EyeCamera)};
+    PcEditor other;
+    attach(other, h);
+    other.select({0, 0});
+    check(!has(other, S::SizeDown) && !has(other, S::SizeUp), "Headset camera has no Size");
+    other.select({0, 1});
+    check(!has(other, S::SizeDown) && !has(other, S::SizeUp), "Eye camera has no Size");
+
+    struct Step {
+        uint8_t from;
+        S button;
+        int to;  // -1 = nothing queued
+    };
+    const Step steps[] = {
+        {100, S::SizeDown, 90}, {90, S::SizeDown, 80}, {80, S::SizeDown, 70}, {70, S::SizeDown, 60},
+        {60, S::SizeDown, 50},  {50, S::SizeDown, 40}, {40, S::SizeDown, -1}, {40, S::SizeUp, 50},
+        {50, S::SizeUp, 60},    {60, S::SizeUp, 70},   {70, S::SizeUp, 80},   {80, S::SizeUp, 90},
+        {90, S::SizeUp, 100},   {100, S::SizeUp, -1},
+    };
+    for (const Step& step : steps) {
+        Layout m = l;
+        m.columns[0].widgets[1].cameraSize = step.from;
+        m.columns[0].widgets[1].rotation = 3;
+        m.columns[0].widgets[1].cameraFps = 30;
+        PcEditor ed;
+        attach(ed, m);
+        ed.select({0, 1});
+        Layout edited;
+        const bool queued = press(ed, step.button, edited);
+        if (step.to < 0) {
+            check(!queued, "Size stops at its end");
+        } else {
+            check(queued, "Size press queues a commit");
+            if (!queued) continue;
+            const WidgetInstance& w = edited.columns[0].widgets[1];
+            check(w.cameraSize == step.to, "Size steps to the next value");
+            check(w.type == WidgetType::HttpCamera && w.rotation == 3 && w.cameraFps == 30 &&
+                      w.url == kDefaultHttpCameraUrl,
+                  "Size leaves the other settings alone");
+            check(edited.columns[0].widgets[0] == m.columns[0].widgets[0], "Size leaves the other widget alone");
+        }
+    }
+}
+
 // R3: the four cam toggles are one-part pills (PC: 2 x 2)
 void testCameraPills() {
     using S = PcEditor::Setting;
@@ -604,6 +673,50 @@ void writeScreens(const char* dir) {
         cairo_destroy(cr);
         cairo_surface_destroy(surface);
     }
+
+    // HTTP camera selected in the 1100 x 600 client: Size 40 / 100 %, rotation 0 / 270
+    for (const uint8_t size : {uint8_t(40), uint8_t(100)}) {
+        for (const uint8_t turns : {uint8_t(0), uint8_t(3)}) {
+            Layout l = base(1);
+            l.columns[0].widgets.insert(l.columns[0].widgets.begin(), make(WidgetType::HttpCamera));
+            l.columns[0].widgets.front().cameraSize = size;
+            l.columns[0].widgets.front().rotation = turns;
+            PcEditor e;
+            e.sync(l, layoutGrid(l));
+            const PcEditor::View v = shortClientView(1.0);
+            e.setView(v);
+            e.select({0, 0});
+            cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1100, 600);
+            cairo_t* cr = cairo_create(surface);
+            cairo_set_source_rgb(cr, 0.07, 0.07, 0.08);
+            cairo_paint(cr);
+            const Pen pen {cr, &fonts};
+            e.drawUnderPanel(pen);
+            GridRenderer renderer(fonts);
+            renderer.setLayout(l);
+            MetricStore s;
+            WidgetContext ctx;
+            ctx.store = &s;
+            ctx.now = 100;
+            renderer.render(ctx);
+            cairo_surface_t* panel = cairo_image_surface_create_for_data(
+                const_cast<uint8_t*>(renderer.pixels()), CAIRO_FORMAT_ARGB32, renderer.geometry().textureWidth,
+                renderer.geometry().textureHeight, renderer.geometry().textureWidth * 4);
+            cairo_save(cr);
+            cairo_rectangle(cr, v.viewport.x, v.viewport.y, v.viewport.w, v.viewport.h);
+            cairo_clip(cr);
+            cairo_set_source_surface(cr, panel, v.originX, v.originY);
+            cairo_paint(cr);
+            cairo_restore(cr);
+            cairo_surface_destroy(panel);
+            e.drawOverPanel(pen);
+            const std::string name =
+                "/pc_editor_http_camera_" + std::to_string(size) + "_" + std::to_string(turns * 90) + ".png";
+            cairo_surface_write_to_png(surface, (out + name).c_str());
+            cairo_destroy(cr);
+            cairo_surface_destroy(surface);
+        }
+    }
 }
 #endif
 
@@ -613,6 +726,7 @@ int main() {
     testCompactAndHideSystemButtons();
     testPills();
     testCameraPills();
+    testHttpCameraSize();
     testSettingsFitShortClient();
 #ifdef FPH_FONT_DIR
     testChipLabelSizes();

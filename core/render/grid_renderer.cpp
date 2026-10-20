@@ -33,6 +33,7 @@ GridGeometry layoutGrid(const Layout& layout, const WidgetContext* ctx) {
     g.columns = std::max<int>(1, static_cast<int>(layout.columns.size()));
     g.width = g.columns * kColumnWidth;
     int tallest = 0;
+    bool haveHttpCamera = false;  // the first HTTP camera in this order is the live one (cam::httpCameraIn)
     for (size_t c = 0; c < layout.columns.size(); ++c) {
         int y = kPanelPadY;
         bool first = true;
@@ -43,6 +44,10 @@ GridGeometry layoutGrid(const Layout& layout, const WidgetContext* ctx) {
             first = false;
             WidgetSlot slot;
             slot.widget = w;
+            if (w.type == WidgetType::HttpCamera) {
+                slot.widget.httpCameraExtra = haveHttpCamera;
+                haveHttpCamera = true;
+            }
             slot.column = static_cast<int>(c);
             slot.x = static_cast<int>(c) * kColumnWidth + kCardInsetX;
             slot.y = y;

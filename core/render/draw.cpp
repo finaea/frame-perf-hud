@@ -143,6 +143,17 @@ double fitSize(const Pen& pen, const std::string& text, double size, double minS
     return size;
 }
 
+std::string ellipsize(const Pen& pen, const std::string& text, double size, double maxWidth, bool bold) {
+    if (pen.measure(text, size, bold) <= maxWidth) return text;
+    std::string cut = text;
+    while (!cut.empty()) {
+        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) cut.pop_back();
+        if (!cut.empty()) cut.pop_back();  // the character's lead byte
+        if (pen.measure(cut + "...", size, bold) <= maxWidth) return cut + "...";
+    }
+    return "...";
+}
+
 double centerBaseline(double top, double h, double size) {
     return top + h / 2 + size * 0.36;
 }

@@ -51,7 +51,7 @@ inline ArcPose arcPose(double s, double radiusM, double lift) {
 inline bool sameTileGeometry(const fph::GridGeometry& a, const fph::GridGeometry& b) {
     if (a.width != b.width || a.height != b.height || a.scale != b.scale) return false;
     auto isCamera = [](const fph::WidgetSlot& s) {
-        return s.widget.type == fph::WidgetType::HeadsetCamera || s.widget.type == fph::WidgetType::EyeCamera;
+        return fph::isCameraWidget(s.widget.type);
     };
     size_t i = 0, j = 0;
     for (;;) {

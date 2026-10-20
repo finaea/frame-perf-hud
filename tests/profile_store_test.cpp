@@ -118,6 +118,13 @@ Layout fullLayout() {
     WidgetInstance net = inst(W::Network);
     net.adapter = fph::NetAdapter::Home;
     a.widgets.push_back(net);
+    WidgetInstance http = inst(W::HttpCamera);  // HTTP camera (14): its address and turn live on the widget
+    http.url = "http://192.168.1.50:8080/cam?x=\"1\"";
+    http.rotation = 3;
+    http.cameraFps = 5;
+    http.cameraFullSize = true;
+    http.cameraSize = 70;
+    a.widgets.push_back(http);
     layout.columns.push_back(a);
     fph::LayoutColumn b;
     WidgetInstance cam = inst(W::HeadsetCamera);
@@ -162,6 +169,32 @@ void testRoundTrip() {
     // The full layout really carries the settings (so a round trip that dropped them would fail above)
     CHECK(full.columns[0].widgets[0].maxItems == 33 && full.columns[0].widgets[0].hideSystem);
     CHECK(full.columns[1].widgets[2].compact);
+    CHECK(full.columns[0].widgets[3].type == W::HttpCamera && full.columns[0].widgets[3].rotation == 3);
+
+    // the HTTP camera's address, turn, fps and full size come back out of the file (not just "equal")
+    {
+        Profile in;
+        in.id = "profile-1";
+        in.name = "cam";
+        in.layout = full;
+        Profile out;
+        std::vector<std::string> w;
+        std::string e;
+        CHECK(ProfileStore::fromJson(ProfileStore::toJson(in), out, w, e));
+        const WidgetInstance& h = out.layout.columns[0].widgets[3];
+        CHECK(h.type == W::HttpCamera && h.url == "http://192.168.1.50:8080/cam?x=\"1\"" && h.rotation == 3 &&
+              h.cameraFps == 5 && h.cameraFullSize && h.cameraSize == 70);
+        // a changed address makes the profile's layout differ (it shows as unsaved)
+        Layout edited = full;
+        edited.columns[0].widgets[3].url = "http://192.168.1.51:8080/cam";
+        CHECK(!edited.sameWidgets(out.layout));
+        edited = full;
+        edited.columns[0].widgets[3].rotation = 0;
+        CHECK(!edited.sameWidgets(out.layout));
+        edited = full;
+        edited.columns[0].widgets[3].cameraSize = 100;
+        CHECK(!edited.sameWidgets(out.layout));
+    }
 
     // (c) an old file (no max_items / compact / hide_system / name keys) still loads with defaults
     const std::string old =

@@ -1226,6 +1226,21 @@ void App::takeEditorCommit() {
     uint32_t base = 0;
     Layout edited;
     if (editor_.takeCommit(base, edited)) submit(edited, base);
+    PcEditor::AddressEdit address;
+    if (editor_.takeAddressEdit(address)) {  // HTTP camera: Edit next to the address
+        if (GetCapture() == hwnd_) ReleaseCapture();
+        std::string url = address.url;
+        if (!showHttpCameraDialog(instance_, hwnd_, url)) return;
+        // the dialog was modal: the layout may have moved under it (an edit in VR)
+        Layout layout = client_->layout();
+        const WidgetInstance* w = widgetAt(layout, address.ref);
+        if (layout.version != address.version || w == nullptr || w->type != WidgetType::HttpCamera) {
+            setNotice("The layout changed meanwhile: the address wasn't applied.", 4);
+            return;
+        }
+        layout.columns[static_cast<size_t>(address.ref.column)].widgets[static_cast<size_t>(address.ref.index)].url = url;
+        submit(layout, address.version);
+    }
 }
 
 void App::cancelDrag() {

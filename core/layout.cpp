@@ -1,6 +1,7 @@
 #include "layout.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 
@@ -28,6 +29,7 @@ const KeyName kKeys[] = {
     {WidgetType::General, "general"},
     {WidgetType::HeadsetCamera, "headset_camera"},
     {WidgetType::EyeCamera, "eye_camera"},
+    {WidgetType::HttpCamera, "http_camera"},
 };
 
 bool isList(WidgetType type) {
@@ -41,15 +43,83 @@ WidgetInstance instance(WidgetType type, NetAdapter adapter = NetAdapter::Dongle
     return w;
 }
 
+bool lowerStartsWith(const std::string& text, const char* prefix) {
+    size_t i = 0;
+    for (; prefix[i] != '\0'; ++i) {
+        if (i >= text.size() || std::tolower(static_cast<unsigned char>(text[i])) != prefix[i]) return false;
+    }
+    return true;
+}
+
 }  // namespace
+
+bool parseHttpUrl(const std::string& url, HttpUrl& out, std::string* why) {
+    const auto fail = [why](const char* reason) {
+        if (why != nullptr) *why = reason;
+        return false;
+    };
+    if (url.size() > kMaxHttpCameraUrl) return fail("The address is too long (255 characters at most)");
+    for (const char c : url) {
+        if (static_cast<unsigned char>(c) <= 0x20 || c == 0x7F) return fail("The address can't have spaces");
+    }
+    if (lowerStartsWith(url, "https://")) return fail("Only http:// works, not https://");
+    if (!lowerStartsWith(url, "http://")) return fail("The address must start with http://");
+    const size_t hostStart = 7;
+    const size_t pathStart = std::min(url.find_first_of("/?#", hostStart), url.size());
+    const std::string authority = url.substr(hostStart, pathStart - hostStart);
+    if (authority.find('@') != std::string::npos) return fail("A user name or password can't go in the address");
+    HttpUrl u;
+    const size_t colon = authority.rfind(':');
+    u.host = authority.substr(0, colon);
+    if (colon != std::string::npos) {
+        const std::string port = authority.substr(colon + 1);
+        if (port.empty() || port.size() > 5 || port.find_first_not_of("0123456789") != std::string::npos ||
+            std::stoi(port) < 1 || std::stoi(port) > 65535) {
+            return fail("The port must be a number from 1 to 65535");
+        }
+        u.port = std::stoi(port);
+    }
+    if (u.host.empty()) return fail("The address needs a host, like http://127.0.0.1:8082/preview");
+    if (u.host.find_first_of("[]") != std::string::npos) return fail("IPv6 addresses aren't supported");
+    u.path = pathStart < url.size() ? url.substr(pathStart) : "/";
+    const size_t fragment = u.path.find('#');
+    if (fragment != std::string::npos) u.path.erase(fragment);
+    if (u.path.empty() || u.path[0] != '/') u.path.insert(0, "/");
+    out = u;
+    return true;
+}
+
+std::string httpUrlHostPort(const std::string& url) {
+    HttpUrl u;
+    if (!parseHttpUrl(url, u)) return url;
+    return u.host + ":" + std::to_string(u.port);
+}
 
 bool hasCompactView(WidgetType type) {
     return type == WidgetType::Frame || type == WidgetType::Power || type == WidgetType::Battery ||
            type == WidgetType::Temp || type == WidgetType::Streaming;  // R3: Streaming too
 }
 
-uint8_t cameraFpsMax(WidgetType type) {
+uint8_t cameraFpsMax(WidgetType type) {  // HTTP camera: 30 (the server pushes every frame; this caps decode)
     return type == WidgetType::HeadsetCamera ? 15 : 30;
+}
+
+uint8_t cameraSizeNearest(double percent) {
+    uint8_t best = kCameraSizeSteps[0];
+    for (uint8_t s : kCameraSizeSteps)
+        if (std::fabs(percent - s) < std::fabs(percent - best)) best = s;
+    return best;
+}
+
+uint8_t cameraSizeStep(uint8_t percent, int direction) {
+    const uint8_t now = cameraSizeNearest(percent);
+    for (size_t i = 0; i < kCameraSizeSteps.size(); ++i) {
+        if (kCameraSizeSteps[i] != now) continue;
+        if (direction < 0 && i > 0) return kCameraSizeSteps[i - 1];
+        if (direction > 0 && i + 1 < kCameraSizeSteps.size()) return kCameraSizeSteps[i + 1];
+        return now;
+    }
+    return now;
 }
 
 uint8_t cameraFpsNearest(double fps, WidgetType type) {
@@ -136,7 +206,13 @@ std::string layoutToJson(const Layout& layout, int indent) {
                 out += "," + sp + "\"cameras\":" + sp + std::to_string(w.cameras) + "," + sp +
                        "\"full_size\":" + sp + (w.cameraFullSize ? "true" : "false");
             }
-            if (w.type == WidgetType::HeadsetCamera || w.type == WidgetType::EyeCamera) {  // T10
+            if (w.type == WidgetType::HttpCamera) {
+                out += "," + sp + "\"url\":" + sp + jsonString(w.url) + "," + sp + "\"rotation\":" + sp +
+                       std::to_string((w.rotation & 3) * 90) + "," + sp + "\"size\":" + sp +
+                       std::to_string(w.cameraSize) + "," + sp + "\"full_size\":" + sp +
+                       (w.cameraFullSize ? "true" : "false");
+            }
+            if (isCameraWidget(w.type)) {  // T10
                 out += "," + sp + "\"fps\":" + sp + std::to_string(w.cameraFps);
             }
             // R2: only when on, so a layout without them reads the same as before (and older apps don't warn)
@@ -208,8 +284,9 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
                                    (k == "compact" && hasCompactView(w.type)) ||
                                    (k == "adapter" && w.type == WidgetType::Network) ||
                                    ((k == "cameras" || k == "full_size") && w.type == WidgetType::HeadsetCamera) ||
-                                   (k == "fps" &&
-                                    (w.type == WidgetType::HeadsetCamera || w.type == WidgetType::EyeCamera));
+                                   ((k == "url" || k == "rotation" || k == "size" || k == "full_size") &&
+                                    w.type == WidgetType::HttpCamera) ||
+                                   (k == "fps" && isCameraWidget(w.type));
                 if (!known) warnings.push_back(at + ": unknown key " + k + " for " + type->text);
             }
             if (isList(w.type)) {
@@ -257,13 +334,48 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
                     else warnings.push_back(at + ".full_size must be true or false");
                 }
             }
-            if (w.type == WidgetType::HeadsetCamera || w.type == WidgetType::EyeCamera) {  // T10
+            if (w.type == WidgetType::HttpCamera) {
+                if (const JsonValue* url = item.get("url")) {
+                    std::string why;
+                    HttpUrl parsed;
+                    if (url->isString() && parseHttpUrl(url->text, parsed, &why)) w.url = url->text;
+                    else warnings.push_back(at + ".url: " + (url->isString() ? why : "must be a string") +
+                                            ", using " + kDefaultHttpCameraUrl);
+                }
+                if (const JsonValue* rotation = item.get("rotation")) {
+                    if (rotation->isNumber()) {
+                        // degrees clockwise, snapped to the nearest quarter turn
+                        const double turns = std::fmod(std::fmod(std::round(rotation->number / 90.0), 4.0) + 4.0, 4.0);
+                        w.rotation = static_cast<uint8_t>(turns);
+                        if (w.rotation * 90.0 != rotation->number)
+                            warnings.push_back(at + ".rotation must be 0, 90, 180 or 270: using " +
+                                               std::to_string(w.rotation * 90));
+                    } else {
+                        warnings.push_back(at + ".rotation must be a number");
+                    }
+                }
+                if (const JsonValue* size = item.get("size")) {
+                    if (size->isNumber()) {
+                        w.cameraSize = cameraSizeNearest(size->number);
+                        if (w.cameraSize != size->number)
+                            warnings.push_back(at + ".size must be 40, 50, ... 100 (% of the card's width): using " +
+                                               std::to_string(w.cameraSize));
+                    } else {
+                        warnings.push_back(at + ".size must be a number");
+                    }
+                }
+                if (const JsonValue* full = item.get("full_size")) {
+                    if (full->isBool()) w.cameraFullSize = full->boolean;
+                    else warnings.push_back(at + ".full_size must be true or false");
+                }
+            }
+            if (isCameraWidget(w.type)) {  // T10
                 if (const JsonValue* fps = item.get("fps")) {
                     if (fps->isNumber()) {
                         const uint8_t snapped = cameraFpsNearest(fps->number, w.type);
                         if (snapped != fps->number)
                             warnings.push_back(at + ".fps must be 5, 10, 15" +
-                                               (w.type == WidgetType::EyeCamera ? " or 30" : "") + ": using " +
+                                               (cameraFpsMax(w.type) == 30 ? " or 30" : "") + ": using " +
                                                std::to_string(snapped));
                         w.cameraFps = snapped;
                     } else {

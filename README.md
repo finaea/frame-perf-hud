@@ -10,7 +10,7 @@ and GPU load, temperatures, power draw and battery, and adds a lot on top:
   link's share and ping, and the stream's error counters, measured from both the headset and the PC.
 - **Usage items:** the processes using the most CPU and the most memory.
 - **Camera feeds:** the headset's outward cameras and eye cameras, live, through an optional helper that needs sudo
-  once.
+  once. Plus any MJPEG camera stream over HTTP, such as a mouth camera, with no helper.
 
 The HUD runs on the headset itself (aarch64 SteamOS) as an OpenVR overlay and needs no sudo. A Windows app mirrors
 it, edits its layout and adds the PC's side of the stream.
@@ -64,7 +64,7 @@ preview tools), not captured inside the headset. Their numbers are sample values
   temperatures, fan, Wi-Fi, controllers and the running app.
 - Shows PC streaming (Steam Link) from both ends: the end-to-end latency and its stages, the bitrate, each wireless
   link, and the stream's error counters.
-- Shows the headset's outward and eye cameras, with an optional helper.
+- Shows the headset's outward and eye cameras, with an optional helper, and any MJPEG camera stream over HTTP.
 - Lets the layout be built from widgets, on the headset or on the PC, and kept in up to 8 profiles.
 - Logs game sessions: the samples stay in memory during play and each finished session is saved afterwards. Plus
   Save Logs, Record and an optional crash recorder.
@@ -90,6 +90,13 @@ preview tools), not captured inside the headset. Their numbers are sample values
 | General | | Controller batteries (a bolt while charging), the time, uptime, the running app, the HUD's own CPU, memory and power cost, the last power-off reason, and a note when a crash log was kept | |
 | Headset camera | | The outward cameras, live. Needs the camera helper | |
 | Eye camera | | The eye cameras, live. Needs the camera helper | |
+| HTTP camera | | Any MJPEG-over-HTTP stream, live, for example a mouth camera served on the headset. One per layout. No helper needed (see below) | |
+
+**HTTP camera** reads a stream like `http://127.0.0.1:8082/preview` (the default, where Toggle's mouthcam serves
+its camera). The HUD reads it only while the widget is on and someone is looking, and a connected Windows app gets
+the same pictures through the headset, so one address works for both. Only plain `http://` MJPEG streams work
+(`multipart/x-mixed-replace`), with no login, HTTPS or RTSP. The frame rate setting limits how often the picture is
+decoded and shown; the server still sends every frame. Pictures are shown in greyscale.
 
 Numbers over a threshold turn yellow, then red past a second one. The thresholds are in the settings file.
 
@@ -213,7 +220,8 @@ The HUD shows up whenever SteamVR runs. Its settings are in the SteamVR dashboar
   onto this side, or **Remove**, takes it off.
 - **A tap on a card** selects it and shows its settings: **Compact** for Frame, Power, Battery, Temp and Streaming;
   rows, **One row per name** and **Hide system** for the process lists; the adapter for Network; which cameras,
-  full size and frame rate for the camera widgets.
+  full res and frame rate for the camera widgets; for HTTP camera its address (**Edit** opens SteamVR's keyboard),
+  frame rate, **Size** (40 % to 100 % of the column's width), **Full res** and rotation.
 - Every change is saved at once. If the Windows app changed the layout in the meantime, the page says so and shows
   the newer one.
 
@@ -295,9 +303,10 @@ Settings that differ from frame-perf-overlay's:
 - `width_m` is the width of **one column** of widgets (default 0.2 m), so text keeps its size whatever the layout.
 - `layout` is the widget grid: `columns` is a list of columns, each a list of widgets from top to bottom. Types:
   `frame`, `cpu`, `gpu_ram`, `power`, `battery`, `temp`, `cpu_items`, `ram_items`, `network`, `streaming`,
-  `general`, `headset_camera`, `eye_camera`. Per widget: `compact`; `max_items`, `sum_same_name` and `hide_system`
-  for the process lists; `adapter` (`"dongle"` or `"home"`) for Network; `cameras`, `full_size` and `fps` for the
-  cameras. A widget that isn't listed is off and reads nothing.
+  `general`, `headset_camera`, `eye_camera`, `http_camera`. Per widget: `compact`; `max_items`, `sum_same_name` and
+  `hide_system` for the process lists; `adapter` (`"dongle"` or `"home"`) for Network; `cameras`, `full_size` and
+  `fps` for the cameras; `url`, `fps`, `size` (40 to 100, % of the column), `full_size` and `rotation` (0, 90, 180
+  or 270) for HTTP camera. A widget that isn't listed is off and reads nothing.
 - `crash_recorder` turns the crash recorder on, and `active_profile` names the active profile.
 - `link` holds the PC link's UDP port (47630) and the allowed PCs.
 - `font` / `font_bold` empty means the bundled Noto Sans. `language` is `"en"` for now.
@@ -345,7 +354,8 @@ Everything is in `%LOCALAPPDATA%\frame-perf-hud\`:
 ## Privacy and safety
 
 - **No telemetry.** Nothing is sent anywhere except the GitHub update checks, update downloads when an install is
-  asked for, and the link between the headset and PCs on the local network.
+  asked for, the link between the headset and PCs on the local network, and the HTTP camera's own address while
+  that widget is on.
 - **The headset** reads its sensors from sysfs and `/proc` and never writes there. For the network it reads the
   adapters' names, local IP addresses, signal, frequency, channel width, link rates and byte counters (no MAC
   addresses, no SSIDs). For the stream it counts a few kinds of vrlink log lines in the user journal, and once per
@@ -361,6 +371,8 @@ Everything is in `%LOCALAPPDATA%\frame-perf-hud\`:
   to SteamVR's memory, files or settings.
 - **The camera helper** holds one capability and can only do the few fixed things the HUD asks for. Camera pictures
   go to a PC only when that PC asks for them and a camera widget is on.
+- **HTTP camera** only reads from the address in its widget. That address is kept in plain text in the settings and
+  profiles and is sent to allowed PCs with the layout, so it shouldn't hold a password.
 - **Files written:** its own settings, profiles, logs and caches (listed above), the updaters' small caches, and
   a lock file and the debug dump in `/run/user/<uid>` (memory only). Session samples stay in memory during play and
   are written after the session ends; Save Logs, Record and the crash recorder can write while a game runs, and

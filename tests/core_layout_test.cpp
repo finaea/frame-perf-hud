@@ -281,6 +281,213 @@ void testCompactAndHideSystem() {
     CHECK(c != d);
 }
 
+Layout parseOk(const std::string& text, std::vector<std::string>& warnings) {
+    Layout out;
+    std::string error;
+    warnings.clear();
+    CHECK(parseLayoutText(text, out, warnings, error));
+    return out;
+}
+
+WidgetInstance httpCam(const char* json, std::vector<std::string>& warnings) {
+    const Layout layout = parseOk(std::string(R"({"columns":[[{"type":"http_camera")") + json + "}]]}", warnings);
+    if (layout.columns.size() != 1 || layout.columns[0].widgets.size() != 1) {
+        CHECK(false);
+        return WidgetInstance();
+    }
+    return layout.columns[0].widgets[0];
+}
+
+void testHttpCameraJson() {
+    // defaults
+    std::vector<std::string> warnings;
+    WidgetInstance d = httpCam("", warnings);
+    CHECK(warnings.empty());
+    CHECK(d.type == W::HttpCamera && d.url == kDefaultHttpCameraUrl && d.rotation == 0 && d.cameraFps == 15 &&
+          !d.cameraFullSize);
+    CHECK(std::string(kDefaultHttpCameraUrl) == "http://127.0.0.1:8082/preview");
+    CHECK(d.cameraSize == 100);
+    CHECK(cameraFpsMax(W::HttpCamera) == 30);
+
+    // round trip, every setting off its default; rotation is degrees in the JSON, quarter turns in memory.
+    // The quotes in the url go through the writer's escaping.
+    Layout layout;
+    layout.columns.resize(1);
+    WidgetInstance w = inst(W::HttpCamera);
+    w.url = "http://192.168.1.9:8080/cam?q=\"1\"";
+    w.rotation = 3;
+    w.cameraFps = 30;
+    w.cameraFullSize = true;
+    w.cameraSize = 60;
+    layout.columns[0].widgets = {w};
+    const std::string text = layoutToJson(layout, 0);
+    CHECK(text.find("\"rotation\":270") != std::string::npos || text.find("\"rotation\": 270") != std::string::npos);
+    for (const int indent : {0, 2}) {
+        const Layout back = parseOk(layoutToJson(layout, indent), warnings);
+        CHECK(warnings.empty());
+        CHECK(back.sameWidgets(layout));
+        const WidgetInstance& b = back.columns[0].widgets[0];
+        CHECK(b.url == w.url && b.rotation == 3 && b.cameraFps == 30 && b.cameraFullSize && b.cameraSize == 60);
+    }
+    // a default widget still round trips
+    Layout plain;
+    plain.columns.resize(1);
+    plain.columns[0].widgets = {inst(W::HttpCamera)};
+    CHECK(parseOk(layoutToJson(plain, 0), warnings).sameWidgets(plain));
+    CHECK(warnings.empty());
+
+    // bad url: warns, keeps the default
+    for (const char* bad : {R"(,"url":"ftp://x/y")", R"(,"url":"http://")", R"(,"url":5)", R"(,"url":"http://a b/")"}) {
+        const WidgetInstance g = httpCam(bad, warnings);
+        CHECK(warnings.size() == 1);
+        CHECK(g.url == kDefaultHttpCameraUrl);
+    }
+    // a good one with the other fields
+    d = httpCam(R"(,"url":"http://cam.local/stream","rotation":90,"fps":10,"full_size":true)", warnings);
+    CHECK(warnings.empty());
+    CHECK(d.url == "http://cam.local/stream" && d.rotation == 1 && d.cameraFps == 10 && d.cameraFullSize);
+
+    // rotation snapping
+    struct Case {
+        const char* json;
+        int turns;
+        bool warns;
+    };
+    const Case cases[] = {
+        {R"(,"rotation":0)", 0, false},   {R"(,"rotation":90)", 1, false}, {R"(,"rotation":180)", 2, false},
+        {R"(,"rotation":270)", 3, false}, {R"(,"rotation":100)", 1, true}, {R"(,"rotation":-90)", 3, true},
+        {R"(,"rotation":450)", 1, true},  {R"(,"rotation":360)", 0, true}, {R"(,"rotation":44)", 0, true},
+        {R"(,"rotation":136)", 2, true},
+    };
+    for (const Case& c : cases) {
+        const WidgetInstance g = httpCam(c.json, warnings);
+        if (g.rotation != c.turns || (warnings.size() == 1) != c.warns) std::printf("rotation case %s\n", c.json);
+        CHECK(g.rotation == c.turns);
+        CHECK((warnings.size() == 1) == c.warns);
+    }
+    d = httpCam(R"(,"rotation":"left")", warnings);
+    CHECK(warnings.size() == 1 && d.rotation == 0);
+    d = httpCam(R"(,"full_size":"yes")", warnings);
+    CHECK(warnings.size() == 1 && !d.cameraFullSize);
+    d = httpCam(R"(,"fps":7)", warnings);  // the shared fps rule: nearest step, with a warning
+    CHECK(warnings.size() == 1 && d.cameraFps == 5);
+
+    // size: percent of the card's width, snapped to 40, 50, ... 100
+    for (const int step : {40, 50, 60, 70, 80, 90, 100}) {
+        d = httpCam((std::string(R"(,"size":)") + std::to_string(step)).c_str(), warnings);
+        CHECK(warnings.empty() && d.cameraSize == step);
+    }
+    struct SizeCase {
+        const char* json;
+        int size;
+    };
+    const SizeCase sizes[] = {{R"(,"size":45)", 40},  {R"(,"size":55)", 50}, {R"(,"size":101)", 100}, {R"(,"size":10)", 40},
+                              {R"(,"size":200)", 100}, {R"(,"size":0)", 40},  {R"(,"size":-5)", 40},   {R"(,"size":64)", 60}};
+    for (const SizeCase& c : sizes) {
+        d = httpCam(c.json, warnings);
+        if (d.cameraSize != c.size || warnings.size() != 1) std::printf("size case %s: got %d\n", c.json, d.cameraSize);
+        CHECK(d.cameraSize == c.size && warnings.size() == 1);
+    }
+    d = httpCam(R"(,"size":"big")", warnings);
+    CHECK(warnings.size() == 1 && d.cameraSize == 100);
+    d = httpCam(R"(,"size":null)", warnings);
+    CHECK(warnings.size() == 1 && d.cameraSize == 100);
+    // written for http_camera only, as a percent
+    Layout sized;
+    sized.columns.resize(1);
+    WidgetInstance sw = inst(W::HttpCamera);
+    sw.cameraSize = 40;
+    sized.columns[0].widgets = {sw, inst(W::EyeCamera)};
+    const std::string sizedJson = layoutToJson(sized, 0);
+    CHECK(sizedJson.find("\"size\":40") != std::string::npos);
+    CHECK(sizedJson.find("\"size\"") == sizedJson.rfind("\"size\""));  // only once
+    // the steppers
+    CHECK(cameraSizeNearest(100) == 100 && cameraSizeNearest(44) == 40 && cameraSizeNearest(45) == 40 &&
+          cameraSizeNearest(46) == 50 && cameraSizeNearest(-1) == 40 && cameraSizeNearest(1000) == 100);
+    CHECK(cameraSizeStep(100, +1) == 100 && cameraSizeStep(100, -1) == 90 && cameraSizeStep(40, -1) == 40 &&
+          cameraSizeStep(40, +1) == 50 && cameraSizeStep(70, +1) == 80 && cameraSizeStep(70, -1) == 60);
+    CHECK(cameraSizeStep(65, +1) == 70 || cameraSizeStep(65, +1) == 80);  // an off-step value counts as its nearest
+
+    // the settings belong to http_camera only
+    const Layout other = parseOk(R"({"columns":[[{"type":"frame","url":"http://x/","rotation":90}]]})", warnings);
+    CHECK(other.columns[0].widgets[0].rotation == 0 && other.columns[0].widgets[0].url == kDefaultHttpCameraUrl);
+}
+
+void testHttpCameraEquality() {
+    WidgetInstance a = inst(W::HttpCamera), b = inst(W::HttpCamera);
+    CHECK(a == b);
+    b.url = "http://other:1/";
+    CHECK(a != b);
+    b = a;
+    b.rotation = 2;
+    CHECK(a != b);
+    b = a;
+    b.cameraFps = 30;
+    CHECK(a != b);
+    b = a;
+    b.cameraFullSize = true;
+    CHECK(a != b);
+    b = a;
+    b.cameraSize = 70;
+    CHECK(a != b);
+    // layoutGrid's marker isn't part of the identity
+    b = a;
+    b.httpCameraExtra = true;
+    CHECK(a == b);
+    Layout x, y;
+    x.columns.resize(1);
+    y.columns.resize(1);
+    x.columns[0].widgets = {a};
+    y.columns[0].widgets = {b};
+    CHECK(x.sameWidgets(y));
+    CHECK(layoutToJson(x, 0) == layoutToJson(y, 0));  // and it isn't written
+}
+
+void testParseHttpUrl() {
+    HttpUrl u;
+    std::string why;
+    CHECK(parseHttpUrl("http://127.0.0.1:8082/preview", u, &why));
+    CHECK(u.host == "127.0.0.1" && u.port == 8082 && u.path == "/preview");
+    CHECK(parseHttpUrl("http://cam.local", u));  // default port, path "/"
+    CHECK(u.host == "cam.local" && u.port == 80 && u.path == "/");
+    CHECK(parseHttpUrl("HTTP://Cam.Local:81/a/b?x=1&y=2", u));  // scheme is case-insensitive, query kept
+    CHECK(u.host == "Cam.Local" && u.port == 81 && u.path == "/a/b?x=1&y=2");
+    CHECK(parseHttpUrl("http://h?x=1", u) && u.path == "/?x=1");
+    CHECK(parseHttpUrl("http://h:65535/", u) && u.port == 65535);
+    CHECK(parseHttpUrl("http://h:1/", u) && u.port == 1);
+    CHECK(parseHttpUrl("http://h/p#frag", u) && u.path == "/p");
+
+    const char* bad[] = {
+        "",                 "127.0.0.1:8082/preview", "//h/",         "https://h/",    "ftp://h/",
+        "http:/h/",         "http://",                "http:///path", "http://:80/",   "http://h:0/",
+        "http://h:65536/",  "http://h:abc/",          "http://h:/",   "http://h:-1/",  "http://h:123456/",
+        "http://user@h/",   "http://user:pw@h:80/",   "http://h /x",  "http://h/a b",  " http://h/",
+        "http://h/\t",      "http://h/\n",
+    };
+    for (const char* s : bad) {
+        std::string reason;
+        if (parseHttpUrl(s, u, &reason)) std::printf("accepted %s\n", s);
+        CHECK(!parseHttpUrl(s, u, &reason));
+        CHECK(!reason.empty());
+        CHECK(!parseHttpUrl(s, u));  // why is optional
+    }
+    // 255 bytes is the limit
+    std::string url = "http://h/";
+    url.append(kMaxHttpCameraUrl - url.size(), 'a');
+    CHECK(url.size() == 255 && parseHttpUrl(url, u));
+    url += 'a';
+    CHECK(!parseHttpUrl(url, u, &why));
+
+    // a failed parse leaves `out` alone
+    HttpUrl keep;
+    keep.host = "keep";
+    CHECK(!parseHttpUrl("nope", keep) && keep.host == "keep");
+
+    CHECK(httpUrlHostPort("http://127.0.0.1:8082/preview") == "127.0.0.1:8082");
+    CHECK(httpUrlHostPort("http://cam.local/x") == "cam.local:80");
+    CHECK(httpUrlHostPort("not a url") == "not a url");
+}
+
 }  // namespace
 
 int main() {
@@ -289,6 +496,9 @@ int main() {
     testBadInput();
     testWidgetOffDropsRefs();
     testCompactAndHideSystem();
+    testHttpCameraJson();
+    testHttpCameraEquality();
+    testParseHttpUrl();
     if (failures == 0) std::printf("core-layout-test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

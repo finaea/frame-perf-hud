@@ -1,5 +1,6 @@
 // Link wire format (core/link_wire): header, every message, typed values, METRICS splitting, BLOB reassembly,
 // helpers. Platform-free: no POSIX headers, so it also builds with MSVC.
+#include "camera_frame.h"
 #include "link_wire.h"
 
 #include <cctype>
@@ -215,6 +216,45 @@ void testMessages() {
         CHECK(decodeSubscribe(b.data(), b.size(), o) && o.pcId == m.pcId && o.wants == m.wants);
         CHECK((allPrefixesFail<Subscribe>(b, decodeSubscribe)));
         CHECK((trailingByteFails<Subscribe>(b, decodeSubscribe)));
+    }
+    {
+        // HTTP camera (14): bit 14 is a camera want, so the fps byte rides with it
+        Subscribe m;
+        m.pcId = idOf(4);
+        m.wants = kWantMetrics | cam::wantBit(cam::kHttpCamera);
+        CHECK(m.wants & (1u << 14));
+        m.cameraFps = 30;
+        const Bytes b = encodeSubscribe(m);
+        Subscribe o;
+        CHECK(decodeSubscribe(b.data(), b.size(), o));
+        CHECK(o.pcId == m.pcId && o.wants == m.wants && o.cameraFps == 30);
+        const size_t base = b.size() - 1;  // the fps byte is the last one
+        CHECK(b.back() == 30);
+        CHECK((allPrefixesFail<Subscribe>(b, decodeSubscribe)));
+        CHECK((trailingByteFails<Subscribe>(b, decodeSubscribe)));
+        // bit 14 alone, and with the other cameras
+        m.wants = cam::wantBit(cam::kHttpCamera) | cam::wantBit(0) | cam::wantBit(5);
+        m.cameraFps = 5;
+        const Bytes c = encodeSubscribe(m);
+        CHECK(decodeSubscribe(c.data(), c.size(), o) && o.wants == m.wants && o.cameraFps == 5);
+        CHECK(cam::camerasFromWants(o.wants) == ((1u << 6) | 1u | (1u << 5)));
+        // without camera bits the fps byte is neither written nor read (byte-identical to before), whatever it holds
+        Subscribe plain;
+        plain.pcId = idOf(4);
+        plain.wants = kWantMetrics | kWantCpuList;
+        plain.cameraFps = 30;
+        const Bytes p = encodeSubscribe(plain);
+        CHECK(p.size() == base);  // no fps byte
+        // byte-identical to the old format: pc id (16) + wants (u32, little endian), nothing after
+        CHECK(p.size() == 20);
+        CHECK(std::memcmp(p.data(), plain.pcId.data(), 16) == 0);
+        const uint32_t wantsOut = plain.wants;
+        CHECK(p[16] == (wantsOut & 0xFF) && p[17] == ((wantsOut >> 8) & 0xFF) && p[18] == ((wantsOut >> 16) & 0xFF) &&
+              p[19] == (wantsOut >> 24));
+        CHECK(decodeSubscribe(p.data(), p.size(), o) && o.cameraFps == 0);
+        // a want bit outside the camera mask (bit 15, bit 7) doesn't bring the byte
+        plain.wants = (1u << 15) | (1u << 7);
+        CHECK(encodeSubscribe(plain).size() == base);
     }
     {
         SubscribeAck m;

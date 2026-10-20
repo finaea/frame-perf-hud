@@ -638,7 +638,7 @@ std::vector<uint8_t> encodeSubscribe(const Subscribe& m) {
     Writer w;
     w.id(m.pcId);
     w.u32(m.wants);
-    if (m.wants & (0x3Fu << 8)) w.u8(m.cameraFps);  // T10
+    if (m.wants & (0x7Fu << 8)) w.u8(m.cameraFps);  // T10 (bit 14: the HTTP camera, cam::kWantCameraMask)
     return std::move(w.bytes());
 }
 
@@ -647,7 +647,7 @@ bool decodeSubscribe(const uint8_t* payload, size_t size, Subscribe& out) {
     if (!readAll(payload, size, [&](Reader& r) {
             m.pcId = r.id();
             m.wants = r.u32();
-            if (m.wants & (0x3Fu << 8)) m.cameraFps = r.u8();  // T10: there exactly when cameras are wanted
+            if (m.wants & (0x7Fu << 8)) m.cameraFps = r.u8();  // T10: there exactly when cameras are wanted
         })) {
         return false;
     }

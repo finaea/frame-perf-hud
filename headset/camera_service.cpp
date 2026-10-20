@@ -608,7 +608,7 @@ void CameraWorker::pollEyes(double t) {
 
 void CameraWorker::updateStates(double t) {
     const uint8_t any = wants_.any();
-    for (uint8_t c = 0; c < cam::kCameraCount; ++c) {
+    for (uint8_t c = 0; c < cam::kHttpCamera; ++c) {  // the helper's cameras (id 6 is HttpCamera's)
         CameraState s = CameraState::Starting;
         const bool live = cam::isOutward(c) ? t - out_[c].lastLive < kLiveHoldSec
                                             : t - eyeLive_[c - cam::kEyeBase] < kLiveHoldSec;
@@ -797,7 +797,7 @@ CameraWants CameraService::readWants(bool& changed) {
 }
 
 void CameraService::post(uint8_t camera, CameraImage* image, CameraJpeg* jpeg) {
-    if (camera >= fph::cam::kCameraCount || (!image && !jpeg)) return;
+    if (camera >= fph::cam::kHttpCamera || (!image && !jpeg)) return;
     Mailbox& box = boxes_[camera];
     {
         std::lock_guard<std::mutex> lock(box.lock);
@@ -814,7 +814,7 @@ void CameraService::post(uint8_t camera, CameraImage* image, CameraJpeg* jpeg) {
 }
 
 bool CameraService::takeImage(uint8_t camera, CameraImage& out) {
-    if (camera >= fph::cam::kCameraCount) return false;
+    if (camera >= fph::cam::kHttpCamera) return false;
     Mailbox& box = boxes_[camera];
     std::lock_guard<std::mutex> lock(box.lock);
     if (!box.imageFresh) return false;
@@ -824,7 +824,7 @@ bool CameraService::takeImage(uint8_t camera, CameraImage& out) {
 }
 
 bool CameraService::takeJpeg(uint8_t camera, CameraJpeg& out) {
-    if (camera >= fph::cam::kCameraCount) return false;
+    if (camera >= fph::cam::kHttpCamera) return false;
     Mailbox& box = boxes_[camera];
     std::lock_guard<std::mutex> lock(box.lock);
     if (!box.jpegFresh) return false;
@@ -834,7 +834,7 @@ bool CameraService::takeJpeg(uint8_t camera, CameraJpeg& out) {
 }
 
 void CameraService::setState(uint8_t camera, CameraState state) {
-    if (camera >= fph::cam::kCameraCount) return;
+    if (camera >= fph::cam::kHttpCamera) return;
     if (states_[camera].exchange(static_cast<uint8_t>(state)) != static_cast<uint8_t>(state)) {
         stateRevision_.fetch_add(1);
         signal();
@@ -842,7 +842,7 @@ void CameraService::setState(uint8_t camera, CameraState state) {
 }
 
 CameraState CameraService::state(uint8_t camera) const {
-    if (camera >= fph::cam::kCameraCount) return CameraState::Off;
+    if (camera >= fph::cam::kHttpCamera) return CameraState::Off;
     return static_cast<CameraState>(states_[camera].load());
 }
 

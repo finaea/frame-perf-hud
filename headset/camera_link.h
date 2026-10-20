@@ -1,4 +1,4 @@
-// T10: camera frames to the PCs. Each lease holder that asked for a camera (SUBSCRIBE wants bits 8-13) whose
+// T10: camera frames to the PCs. Each lease holder that asked for a camera (SUBSCRIBE wants bits 8-14) whose
 // widget is on gets that camera's JPEGs as Camera BLOBs (stream id = camera), at its camera address (the PC's
 // dongle path when it registered one, else its lease address). A camera with no live frames sends its state
 // (not worn, helper missing, ...) once a second instead, so the PC's card says why. Single-threaded: main loop.
@@ -18,6 +18,11 @@ using CameraTarget = LinkCameraTarget;
 class CameraLink {
 public:
     using Send = std::function<void(const LinkEndpoint& to, uint8_t camera, const std::vector<uint8_t>& blob)>;
+    /** Where frames and states come from: CameraService for ids 0-5, HttpCamera for id 6 (main.cpp merges them). */
+    struct Source {
+        std::function<bool(uint8_t camera, CameraJpeg& out)> takeJpeg;
+        std::function<fph::cam::CameraState(uint8_t camera)> state;
+    };
 
     static constexpr double kStateEverySec = 1.0;
 
@@ -26,7 +31,7 @@ public:
      * aren't live (at most once a second each).
      * @param widgetCameras cameras whose widget is on (bit = camera id)
      */
-    void pump(CameraService& service, const std::vector<CameraTarget>& targets, uint8_t widgetCameras, double now,
+    void pump(const Source& source, const std::vector<CameraTarget>& targets, uint8_t widgetCameras, double now,
               const Send& send);
 
     /** @return cameras some target wants whose widget is on */

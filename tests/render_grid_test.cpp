@@ -1128,10 +1128,46 @@ void testStreamingHeaderDoesNotOverlap() {
     cairo_surface_destroy(surface);
 }
 
+void testHttpCameraExtra() {
+    // The first HTTP camera in column order is the live one; every later one is marked httpCameraExtra
+    // (the card says "Only one HTTP camera at a time"), whichever column it sits in. Same card height for both.
+    WidgetInstance http = inst(W::HttpCamera);
+    Layout layout;
+    layout.columns.resize(2);
+    layout.columns[0].widgets = {inst(W::Frame), http, http};
+    layout.columns[1].widgets = {inst(W::Power), http};
+    const GridGeometry g = layoutGrid(layout);
+    int seen = 0;
+    for (const WidgetSlot& slot : g.slots) {
+        if (slot.widget.type != W::HttpCamera) {
+            CHECK(!slot.widget.httpCameraExtra);
+            continue;
+        }
+        CHECK(slot.widget.httpCameraExtra == (seen > 0));
+        ++seen;
+    }
+    CHECK(seen == 3);
+    int height = -1;
+    for (const WidgetSlot& slot : g.slots) {
+        if (slot.widget.type != W::HttpCamera) continue;
+        if (height < 0) height = slot.h;
+        CHECK(slot.h == height);
+    }
+    // a lone one is live
+    for (const WidgetSlot& slot : layoutGrid(oneWidget(http)).slots) CHECK(!slot.widget.httpCameraExtra);
+    // the source layout isn't touched
+    CHECK(!layout.columns[0].widgets[2].httpCameraExtra);
+    // the panel renders (live card and the extra ones)
+    MetricStore store;
+    const Pixels px = renderPx(layout, store);
+    CHECK(!px.empty());
+}
+
 }  // namespace
 
 int main() {
     testGeometry();
+    testHttpCameraExtra();
     testListRows();
     testBatteryTimeRows();
     testUnmeasuredNegative();

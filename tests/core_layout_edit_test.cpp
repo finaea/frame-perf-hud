@@ -94,6 +94,26 @@ void testPaletteRules() {
     CHECK(canAdd(Layout(), W::Frame));        // empty layout: a new column can be made
 }
 
+void testHttpCameraIsSingle() {
+    CHECK(!isRepeatable(W::HttpCamera));
+    CHECK(isOfferedInPalette(W::HttpCamera));
+    Layout layout = make({{W::Frame}, {W::Cpu}});
+    CHECK(canAdd(layout, W::HttpCamera));
+    const WidgetInstance cam = newInstance(W::HttpCamera, layout);
+    CHECK(cam.type == W::HttpCamera && cam.url == kDefaultHttpCameraUrl && cam.rotation == 0);
+    CHECK(insertWidget(layout, cam, 0, 1));
+    CHECK(countType(layout, W::HttpCamera) == 1);
+    // A second one: the palette says no and insert refuses, leaving the layout alone
+    CHECK(!canAdd(layout, W::HttpCamera));
+    const Layout before = layout;
+    CHECK(!insertWidget(layout, cam, 1, 0));
+    CHECK(!insertWidget(layout, cam, 2, 0));
+    CHECK(layout.sameWidgets(before));
+    // Removing it frees the slot again
+    CHECK(removeWidget(layout, {0, 1}));
+    CHECK(canAdd(layout, W::HttpCamera));
+}
+
 void testNewInstanceAlternatesAdapters() {
     Layout layout;
     layout.columns.push_back({});
@@ -343,6 +363,7 @@ void testDropSlot() {
 
 int main() {
     testPaletteRules();
+    testHttpCameraIsSingle();
     testNewInstanceAlternatesAdapters();
     testInsert();
     testLimits();

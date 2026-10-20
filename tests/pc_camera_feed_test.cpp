@@ -6,6 +6,7 @@
 #include <cairo.h>
 #include <turbojpeg.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -109,10 +110,11 @@ void testTwoCameras() {
     CHECK(feed.onBlob(0, b0c.data(), b0c.size(), 10.3));
     CHECK(feed.width(0) == 128 && feed.height(0) == 96);
 
-    // out-of-range camera ids
-    CHECK(feed.state(6, 10.3) == CameraState::Off);
+    // out-of-range camera ids (6 is the HTTP camera now: a real camera, untouched so far)
+    CHECK(feed.state(6, 10.3) == CameraState::Starting);
+    CHECK(feed.state(7, 10.3) == CameraState::Off);
     CHECK(feed.state(255, 10.3) == CameraState::Off);
-    CHECK(feed.width(6) == 0 && feed.height(200) == 0 && feed.frameId(9) == 0);
+    CHECK(feed.width(7) == 0 && feed.height(200) == 0 && feed.frameId(9) == 0);
 }
 
 void testStale() {
@@ -196,13 +198,15 @@ void testRejects() {
     CHECK(feed.state(1, 1.1) == CameraState::Starting);
     CHECK(!feed.onBlob(6, good.data(), good.size(), 1.1));
     CHECK(feed.rejected() == 2);
+    CHECK(!feed.onBlob(7, good.data(), good.size(), 1.1));  // no such camera, whatever the header says
+    CHECK(feed.rejected() == 3);
 
     // corrupt JPEG with a valid header
     Bytes garbage(200);
     for (size_t i = 0; i < garbage.size(); ++i) garbage[i] = static_cast<uint8_t>(i * 7 + 3);
     const Bytes badJpeg = liveBlob(0, 32, 32, 2, garbage);
     CHECK(!feed.onBlob(0, badJpeg.data(), badJpeg.size(), 1.2));
-    CHECK(feed.rejected() == 3);
+    CHECK(feed.rejected() == 4);
     CHECK(feed.frameId(0) == 1);  // nothing changed
     CHECK(feed.state(0, 1.2) == CameraState::Live);
 
@@ -228,7 +232,7 @@ void testRejects() {
     CHECK(!feed.onBlob(0, good.data(), 5, 1.6));
     CHECK(!feed.onBlob(0, nullptr, 0, 1.6));
     CHECK(feed.decoded() == decoded);
-    CHECK(feed.rejected() >= 9);
+    CHECK(feed.rejected() >= 10);
 }
 
 void testReset() {
@@ -346,6 +350,140 @@ void testPaint() {
     CHECK(corner == 0);  // inside the tile but in the bar
 }
 
+/** A grey JPEG, white (255) on the left half and black on the right, or white on top and black below. */
+Bytes makeHalvesJpeg(int w, int h, bool leftRight) {
+    Bytes grey(static_cast<size_t>(w) * h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) grey[static_cast<size_t>(y) * w + x] = (leftRight ? x < w / 2 : y < h / 2) ? 255 : 0;
+    tjhandle tj = tjInitCompress();
+    unsigned char* buf = nullptr;
+    unsigned long size = 0;
+    const int rc = tjCompress2(tj, grey.data(), w, 0, h, TJPF_GRAY, &buf, &size, TJSAMP_GRAY, 95, TJFLAG_FASTDCT);
+    Bytes out;
+    if (rc == 0) out.assign(buf, buf + size);
+    tjFree(buf);
+    tjDestroy(tj);
+    return out;
+}
+
+WidgetInstance httpCamera(uint8_t rotation) {
+    WidgetInstance w;
+    w.type = WidgetType::HttpCamera;
+    w.rotation = rotation;
+    return w;
+}
+
+/** Paints one widget alone on a black panel and returns the blue channel at (fx, fy), fractions of its tile. */
+int paintedAt(const CameraFeed& feed, const WidgetInstance& w, double now, double fx, double fy) {
+    GridGeometry geometry;
+    WidgetSlot slot;
+    slot.widget = w;
+    slot.w = 496;
+    slot.h = cameraWidgetHeight(w);
+    geometry.slots.push_back(slot);
+    geometry.width = 512;
+    geometry.height = slot.h + 20;
+    cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 512, geometry.height);
+    cairo_t* cr = cairo_create(surf);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_paint(cr);
+    feed.paint(cr, geometry, 1.0, now);
+    cairo_surface_flush(surf);
+    const unsigned char* d = cairo_image_surface_get_data(surf);
+    const int stride = cairo_image_surface_get_stride(surf);
+    int v;
+    const std::vector<Tile> tiles = cameraTiles(w);
+    if (tiles.empty()) {  // no tile laid out (an extra HTTP camera): the brightest pixel anywhere
+        v = 0;
+        for (int y = 0; y < geometry.height; ++y)
+            for (int x = 0; x < 512; ++x) v = std::max(v, static_cast<int>(d[y * stride + x * 4]));
+    } else {
+        const Tile& t = tiles[0];
+        v = d[static_cast<int>(t.y + t.h * fy) * stride + static_cast<int>(t.x + t.w * fx) * 4];
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(surf);
+    return v;
+}
+
+void testHttpCameraBlobs() {
+    CameraFeed feed;
+    // camera 6 takes a BLOB like any other
+    const Bytes j = makeJpeg(64, 48, 100, true);
+    const Bytes b = liveBlob(6, 64, 48, 3, j);
+    CHECK(feed.state(6, 1.0) == CameraState::Starting);
+    CHECK(feed.onBlob(6, b.data(), b.size(), 1.0));
+    CHECK(feed.width(6) == 64 && feed.height(6) == 48 && feed.frameId(6) == 3);
+    CHECK(feed.state(6, 1.1) == CameraState::Live);
+    CHECK(feed.state(0, 1.1) == CameraState::Starting);  // the others are untouched
+    CHECK(feed.decoded() == 1 && feed.rejected() == 0);
+
+    // the HTTP camera's own states come through
+    for (const CameraState s : {CameraState::Connecting, CameraState::Unreachable, CameraState::NotMjpeg}) {
+        const Bytes sb = stateBlob(6, s);
+        CHECK(feed.onBlob(6, sb.data(), sb.size(), 2.0));
+        CHECK(feed.state(6, 2.1) == s);
+    }
+    // a state only a newer headset would send (10) is refused
+    Bytes bad = stateBlob(6, CameraState::NotMjpeg);
+    bad[2] = 10;
+    CHECK(!feed.onBlob(6, bad.data(), bad.size(), 2.2));
+    CHECK(feed.state(6, 2.3) == CameraState::NotMjpeg);
+
+    // wants: an HTTP camera widget asks for bit 14
+    Layout l;
+    l.columns.resize(1);
+    l.columns[0].widgets = {httpCamera(1)};
+    CHECK(CameraFeed::wantsFor(l) == wantBit(6));
+    CHECK(CameraFeed::wantsFor(l) == (1u << 14));
+}
+
+void testHttpCameraPaintRotation() {
+    CameraFeed feed;
+    // 64x48, white on the left, black on the right, relayed as the camera sent it
+    const Bytes j = makeHalvesJpeg(64, 48, true);
+    CHECK(!j.empty());
+    const Bytes b = liveBlob(6, 64, 48, 1, j);
+    CHECK(feed.onBlob(6, b.data(), b.size(), 10.0));
+
+    // rotation 0: as is. Sample a quarter in from each side.
+    CHECK(paintedAt(feed, httpCamera(0), 10.1, 0.25, 0.5) > 235);
+    CHECK(paintedAt(feed, httpCamera(0), 10.1, 0.75, 0.5) < 20);
+    // rotation 1 (clockwise): the left side goes to the top, the tile is portrait
+    CHECK(paintedAt(feed, httpCamera(1), 10.1, 0.5, 0.25) > 235);
+    CHECK(paintedAt(feed, httpCamera(1), 10.1, 0.5, 0.75) < 20);
+    // rotation 2: mirrored left to right
+    CHECK(paintedAt(feed, httpCamera(2), 10.1, 0.25, 0.5) < 20);
+    CHECK(paintedAt(feed, httpCamera(2), 10.1, 0.75, 0.5) > 235);
+    // rotation 3: the left side goes to the bottom
+    CHECK(paintedAt(feed, httpCamera(3), 10.1, 0.5, 0.25) < 20);
+    CHECK(paintedAt(feed, httpCamera(3), 10.1, 0.5, 0.75) > 235);
+
+    // a picture whose top is white, rotation 1: the top goes to the right
+    CameraFeed feed2;
+    const Bytes tj = makeHalvesJpeg(64, 48, false);
+    const Bytes tb = liveBlob(6, 64, 48, 1, tj);
+    CHECK(feed2.onBlob(6, tb.data(), tb.size(), 10.0));
+    CHECK(paintedAt(feed2, httpCamera(1), 10.1, 0.75, 0.5) > 235);
+    CHECK(paintedAt(feed2, httpCamera(1), 10.1, 0.25, 0.5) < 20);
+    CHECK(paintedAt(feed2, httpCamera(0), 10.1, 0.5, 0.25) > 235);
+    CHECK(paintedAt(feed2, httpCamera(0), 10.1, 0.5, 0.75) < 20);
+
+    // the turn is the HTTP camera widget's: a helper camera widget ignores the rotation field
+    WidgetInstance headsetTurned = headset(0x01);
+    headsetTurned.rotation = 1;
+    CameraFeed feed3;
+    const Bytes hb = liveBlob(0, 64, 48, 1, j);
+    CHECK(feed3.onBlob(0, hb.data(), hb.size(), 10.0));
+    CHECK(paintedAt(feed3, headsetTurned, 10.1, 0.1, 0.5) == paintedAt(feed3, headset(0x01), 10.1, 0.1, 0.5));
+
+    // stale: nothing painted; an extra HTTP camera: nothing painted either
+    CHECK(paintedAt(feed, httpCamera(1), 10.0 + CameraFeed::kStaleSec + 1.0, 0.5, 0.25) == 0);
+    WidgetInstance extra = httpCamera(0);
+    extra.httpCameraExtra = true;
+    CHECK(paintedAt(feed, extra, 10.1, 0.25, 0.5) == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -356,6 +494,8 @@ int main() {
     testReset();
     testWantsFor();
     testPaint();
+    testHttpCameraBlobs();
+    testHttpCameraPaintRotation();
     if (failures == 0) std::printf("pc_camera_feed_test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

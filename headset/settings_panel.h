@@ -174,6 +174,11 @@ public:
     /** T05: how the edit taken last went (shown in the editor). */
     void layoutCommitResult(LayoutEditor::CommitOutcome outcome) { editor_.commitResult(outcome); }
 
+    /** HTTP camera: takes the editor's Edit tap next to an address. @return false if none */
+    bool takeAddressEdit(LayoutEditor::AddressEdit& out) { return editor_.takeAddressEdit(out); }
+    /** HTTP camera: a line in the editor's status spot (why an address wasn't applied). */
+    void layoutNote(const std::string& note) { editor_.showNote(note); }
+
     /** T05: @return true while the editor holds a press or a drag (poll the pointer at the fast rate) */
     bool editorBusy() const { return editor_.busy(); }
 

@@ -365,6 +365,7 @@ const char* widgetName(WidgetType type) {
         case WidgetType::General: return "General";
         case WidgetType::HeadsetCamera: return "Headset camera";
         case WidgetType::EyeCamera: return "Eye camera";
+        case WidgetType::HttpCamera: return "HTTP camera";
     }
     return "unknown";
 }

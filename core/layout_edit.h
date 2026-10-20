@@ -21,7 +21,7 @@ struct WidgetRef {
     bool operator!=(const WidgetRef& o) const { return !(*this == o); }
 };
 
-/** @return true for the types a layout may hold more than once (Network, the two cameras) */
+/** @return true for the types a layout may hold more than once (Network, Headset / Eye camera; not HTTP camera) */
 bool isRepeatable(WidgetType type);
 
 /** @return true if the type can be added from the palette (every type but None) */
