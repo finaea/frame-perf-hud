@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.2 — 2026-10-21
+
+- **New widget: HTTP camera.** It shows any MJPEG camera stream over HTTP, live, in the headset and the Windows
+  app. Made for a mouth camera: the default address is `http://127.0.0.1:8082/preview`, where Toggle's mouthcam
+  serves its camera. Its settings are the address (typed on SteamVR's keyboard, or in a dialog on the PC), the frame
+  rate (5 to 30), **Size** (40 % to 100 % of the column's width, centred), **Full res** and rotation (0°, 90°, 180°,
+  270°). Profiles save them like any other widget setting. It needs no camera helper and no sudo.
+  - The headset reads the stream only while the widget is on and someone is looking, and passes the original JPEGs
+    on to a connected Windows app, so one address works for both and nothing is re-encoded.
+  - Only plain `http://` MJPEG streams work, with no login, HTTPS or RTSP, and pictures are greyscale. If the
+    stream stops, the card says so and reconnects by itself.
+  - One HTTP camera per layout.
+  - Update the headset and the Windows app together: an older Windows app can't show this widget, and editing the
+    layout from it removes the widget.
+- **Streaming: Slack is split into Hold and Display.** Hold is how long a decoded frame waits for the headset's
+  compositor to take it; Display is the compositor and the display after that. Display stays about the same at 72
+  and 90 Hz, while Hold is the part that changes with the refresh rate. Needs this version's Windows app; with an
+  older one the widget shows the single Slack segment as before. Session logs still record Slack.
+- The camera widgets' **Full size** setting is now called **Full res**. Saved settings and profiles keep working.
+
 ## 0.4.1 — 2026-10-18
 
 - **GPU load replaces GPU usage.** On SteamOS 0.5.6 (kernel 6.18) the kernel's GPU counter that GPU usage came from
