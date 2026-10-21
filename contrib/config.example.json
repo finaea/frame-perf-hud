@@ -37,5 +37,12 @@
     "wifi_crit_dbm": -78,
     "controller_warn_pct": 20,
     "controller_crit_pct": 10
+  },
+  "active_profile": "",
+  "layout": {
+    "version": 1,
+    "columns": [
+      [ { "type": "frame" }, { "type": "power" }, { "type": "temp" }, { "type": "cpu" }, { "type": "gpu_ram" }, { "type": "network" }, { "type": "battery", "compact": true }, { "type": "general" } ]
+    ]
   }
 }

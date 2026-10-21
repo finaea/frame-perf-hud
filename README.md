@@ -12,21 +12,28 @@ Recorded inside the headset while playing Half-Life: Alyx (no sound). The panel 
 
 The panel follows your head and sits in the lower left of your view by default. It can also be worn on your left or right controller like a wristwatch, and it shows the time on its bottom line. Where it's attached, position, facing, size, opacity, clock and language (English / Japanese) can be changed from the SteamVR dashboard.
 
-![The settings tab in the SteamVR dashboard](docs/images/settings-en.png)
+The panel is a grid of widgets (Frame, Power, Temp, CPU, GPU & RAM, Network, Battery, General). The **Layout** page of the dashboard tab moves them between columns, adds and removes them, and turns some into a shorter **Compact** card; the **Profiles** page saves layouts and switches between them. A widget that isn't on the panel reads nothing, and nothing is read at all while nobody can see the panel (hidden, headset off your head) unless the dashboard tab is open.
 
-These images were written out by the app itself (`--dump-png` / `--dump-settings-png`), not captured inside the headset. The frame numbers in the panel image are sample values.
+![The Layout page of the settings tab in the SteamVR dashboard](docs/images/settings-en.png)
+
+These images were written out by the app itself (`--dump-png` / `--dump-settings-png`), not captured inside the headset. The panel images show the default layout, and their numbers are sample values. The settings image shows the **Layout** page with the Temp card selected.
 
 ## What it shows
 
-| Row | Main number | Details | Graph (last 30 s) |
+The default layout is one column with what the panel has always shown, top to bottom. Each widget is a card; the ones with a graph show the last 30 s.
+
+| Widget | Main number | Details | Graph |
 |---|---|---|---|
-| Frame | The app's frame rate and the display refresh rate (e.g. `72 fps / 90Hz`) | GPU load of the VR app and SteamVR next to the title; GPU and CPU time per frame (ms), reprojection ratio, dropped frames | Frame rate, with the refresh rate as a dotted line and GPU usage as a shaded area. A yellow badge shows when SteamVR is holding the app at half (or a third) of the refresh rate |
-| Power | Power draw of the main supply rail (W) | Sum of all measured channels, fan speed | Main rail power |
-| Temp | CPU temperature (hottest core) | GPU, battery, and near the display / exhaust / heat sink | CPU and GPU, with the warning thresholds. A red badge and a red frame around the panel appear while heat is throttling the CPU or GPU |
-| Bottom line 1 | CPU usage (overall and busiest core), fastest cluster clock, GPU clock | | |
-| Bottom line 2 | Wireless. **Link** when a PC is on the Steam Link direct wireless link; otherwise **Wi-Fi** for the access point the headset is joined to (e.g. your home Wi-Fi). Signal strength (Wi-Fi icon and dBm), data actually flowing (↓ into the headset, ↑ out of it, Mbps) and link rates. A grey crossed-out icon means neither is connected | | |
-| Bottom line 3 | Headset battery, left and right controller batteries (a bolt while charging), memory | | |
-| Bottom line 4 | The time on the headset's clock (24-hour by default; 12-hour or off in the settings) | | |
+| Frame | The app's frame rate and the display refresh rate (e.g. `72 fps / 90Hz`) | GPU and CPU time per frame (ms), reprojection ratio, dropped frames | Frame rate, with the refresh rate as a dotted line. A yellow badge shows when SteamVR is holding the app at half (or a third) of the refresh rate |
+| Power | Power draw of the main supply rail (vph, W) | Sum of the rails measured under it | Main rail power, with the warning thresholds |
+| Temp | CPU temperature (hottest core) | GPU, DDR, fan speed; battery and near the display / exhaust / heat sink | CPU and GPU, with the warning thresholds. A red badge and a red frame around the card appear while heat is throttling the CPU or GPU |
+| CPU | Usage, overall and the busiest core | Fastest cluster clock, big core clock | |
+| GPU & RAM | GPU load of the VR app and SteamVR (%) | GPU clock (and its max), memory used / total | GPU load |
+| Network | Wireless. **Dongle** when a PC is on the Steam Link dongle; otherwise **Wi-Fi** for the access point the headset is joined to (e.g. your home Wi-Fi) | Signal strength (Wi-Fi icon and dBm), data actually flowing (↓ into the headset, ↑ out of it) and link rates. A grey crossed-out icon means neither is connected | |
+| Battery | Headset battery (%) and its state (a bolt while charging) | Power into / out of the battery (W); the full card adds the voltage × current line | |
+| General | Left and right controller batteries (a bolt while charging) | The time on the headset's clock (24-hour by default; 12-hour or off in the settings) | |
+
+Battery and Temp have a **Compact** card: Battery keeps the % and the W line, Temp drops the graph and the extra temperatures.
 
 Numbers over a threshold turn yellow, and red past a second threshold. The thresholds can be changed in the settings file.
 
@@ -94,8 +101,9 @@ Options:
 
   | Control | What it does |
   |---|---|
+  | Placement / Layout / Profiles | The three pages of the tab (next to the title). The tab opens on Placement, which has the controls below |
   | Show: On / Off | Show or hide the panel. While hidden, nothing is read or drawn |
-  | Size − / + | Panel width in 2 cm steps (6 cm to 1 m) |
+  | Size − / + | Width of one column of the panel in 2 cm steps (6 cm to 1 m). A layout with more columns is that many times wider |
   | Opacity − / + | In 10 % steps (20 % to 100 %) |
   | Clock: Off / 12h / 24h | The clock on the panel's bottom line: the headset's time, 24-hour by default, 12-hour with AM / PM, or hidden |
   | Reset | Put show, attachment, position and facing (head and both hands), tilt fade, clock, size and opacity back to the defaults. Language, thresholds, fonts and the update check setting stay |
@@ -116,6 +124,8 @@ Options:
   | Quit app | Click twice within 3 seconds to quit |
 
   Changes apply immediately and are saved to the settings file.
+- **Layout page**: the left card shows the panel's columns, one card per widget. Drag a card to another place or column (drop it on the dashed **New column** lane for a new one; up to 8 columns of 16 widgets), or onto the palette on the right to remove it. Tap a widget in the palette to add it to the shortest column, or drag it where you want it. Tap a card to select it: its settings show under the palette (**Compact** for Battery and Temp, and **Remove**). Every change is saved at once and shows on the panel. The thumbstick scrolls the columns when they don't fit.
+- **Profiles page**: a profile is a saved layout (columns, widgets and their settings; placement and app settings aren't part of it). **New profile** saves the layout you have now (up to 8), **Use** loads the selected one, **Save** writes the layout you have now into the active profile, **Rename** opens SteamVR's keyboard, **Delete** removes the selected one, and **Reset to default** puts the default layout back (your profiles stay). **Use** and **Reset to default** ask for a second tap when the layout's changes would be lost, and **Delete** always does. Profiles are files in `~/.config/frame-perf-overlay/profiles/`.
 - **On your hand**: the panel follows the controller (SteamVR's tracking of the controller, not hand tracking). If the controller or the headset loses tracking, the panel hides at once and fades back in when tracking returns. The **Perf** tab still works while the panel is hidden. The best position and facing depend on how you hold the controller, so adjust them with the headset on.
 - **Updates**: a bar in the title row, right of the title, always shows the running version, e.g. `Up to date (0.2.0)` (with the automatic check turned off, just the version until you check), with a **Check now** button that asks GitHub right away (it works even with the automatic check turned off). What the bar shows:
   - **New version**: a pink border, `Version 0.2.1 is available`, **Check now** and **Update**. **Update** asks `Update to 0.2.1?` with **Cancel** / **Update**; the second **Update** starts the install.
@@ -145,11 +155,13 @@ A file with every key at its default value is in [`contrib/config.example.json`]
 | `wrist_fade` | `true` | On a hand, fade the panel out as its face turns away from your head (the headset). `false` keeps it shown at any angle |
 | `wrist_fade_end_deg` | `75` | Angle (degrees, 35 to 90) between the panel's face and the direction to your head (the headset) at which the panel on a hand is gone. It starts fading 30° earlier |
 | `clock_format` | `24` | The clock on the panel's bottom line: `24` (24-hour), `12` (12-hour with AM / PM) or `0` (hidden) |
-| `width_m` | `0.2` | Panel width in meters. The height follows from the aspect ratio: 512 × 460 with the clock, 512 × 434 with the clock off |
+| `width_m` | `0.2` | Width of one column of the panel in meters (512 px). The panel is columns × this wide, and its height follows from the widgets in the tallest column. A settings file from before the widget grid had the whole panel's width here; it gets the one-column default layout, so the panel keeps its width |
 | `alpha` | `0.9` | Opacity of the whole panel (0 to 1) |
 | `update_interval_ms` | `500` | Update interval (100 to 5000 ms) |
 | `graph_seconds` | `30` | Seconds shown in the graphs (5 to 300) |
 | `font` / `font_bold` | Noto Sans CJK Regular / Bold | Font files. If they can't be read, "Noto Sans CJK JP" is looked up with fontconfig |
+| `layout` | one column: Frame, Power, Temp, CPU, GPU & RAM, Network, Battery (compact), General | The widget grid, written by the **Layout** page: `{"version": N, "columns": [[{"type": "frame"}, ...], ...]}`. Widget types are `frame`, `cpu`, `gpu_ram`, `power`, `battery`, `temp`, `network` and `general`; `battery` and `temp` take `"compact": true`. A file without `layout` (or with a broken one) gets the default, and the next save writes it out |
+| `active_profile` | `""` | The profile last used or saved on the **Profiles** page (`"profile-2"`), `""` for none |
 | `thresholds.fps_warn_ratio` / `fps_crit_ratio` | `0.95` / `0.75` | Yellow / red when the app's frame rate is **below** refresh rate × this ratio |
 | `thresholds.frame_warn_ratio` / `frame_crit_ratio` | `0.9` / `1.0` | Yellow / red when GPU or CPU time is at least the frame budget × this factor |
 | `thresholds.reproj_warn_pct` / `reproj_crit_pct` | `5` / `20` | Reprojection ratio (%). Any dropped frame also turns it yellow |
@@ -256,7 +268,7 @@ Build on the headset (the program links against SteamOS's cairo, FreeType, libnl
 ```sh
 cmake -G Ninja -S . -B build
 cmake --build build
-ctest --test-dir build --output-on-failure  # tests (wrist geometry, fade, clock, settings file, settings buttons, pixel conversion, sensors)
+ctest --test-dir build --output-on-failure  # tests (wrist geometry, fade, clock, settings file and its upgrade, settings buttons, pixel conversion, sensors, widgets and layout editor, the read schedule)
 ./install.sh               # installs build/frame-perf-overlay
 scripts/package.sh         # release build: dist/frame-perf-overlay-<version>.tar.gz, dist/SHA256SUMS
 ```
@@ -266,6 +278,10 @@ Useful options (all of them work without SteamVR, except the last one):
 ```sh
 ./build/frame-perf-overlay --print --count 5        # print the readings once a second, 5 times
 ./build/frame-perf-overlay --dump-png panel.png --seconds 30 --fake-frames --language en
+./build/frame-perf-overlay --dump-png grid.png --layout my-layout.json --fake-frames  # another layout (a layout object or a whole config)
+./build/frame-perf-overlay --dump-settings-png layout.png --preview-page layout --preview-select 0,2 --language en
+./build/frame-perf-overlay --dump-metrics --widgets 1,4 --count 3  # every metric and what the scheduler read, without the overlay
+./build/frame-perf-overlay --debug-dump             # the running instance's sources, read counters and metrics
 ./build/frame-perf-overlay --dump-settings-png settings.png --language en
 ./build/frame-perf-overlay --dump-settings-png wrist.png --config wrist.json --language en  # wrist.json: {"attachment": "left_wrist"}
 ./build/frame-perf-overlay --dump-settings-png update.png --preview-update available --language en
@@ -273,7 +289,9 @@ Useful options (all of them work without SteamVR, except the last one):
 ./build/frame-perf-overlay --verbose                # run as the overlay and log the values every few seconds
 ```
 
-`--help` lists every option, including every `--preview-update` state. The version is set in `CMakeLists.txt` (`project(... VERSION ...)`) and shown by `--version`.
+`--help` lists every option, including every `--preview-update` state.
+
+The code is in `core/` (platform-free: the metric registry, the value store, the demand-driven scheduler, the layout and its edits), `core/render/` (cairo: the widgets and the grid renderer) and `headset/` (OpenVR, sensors, the dashboard tab). Every reading goes through the registry: each metric has one owner widget and one source, and a source is read only when a widget on the panel needs it and someone is looking. The version is set in `CMakeLists.txt` (`project(... VERSION ...)`) and shown by `--version`.
 
 Release builds use size optimization, section garbage collection and LTO when the compiler supports it. Set `-DFRAME_PERF_OPTIMIZE_SIZE=OFF` to use the compiler's ordinary speed optimization with LTO. Exceptions, floating-point rules and debug builds are unchanged. The tests include exact pixel-conversion and placement checks and synthetic CPU/GPU sensor files; `./build/ui-helpers-test --benchmark` compares conversion CPU time with the previous algorithm.
 
