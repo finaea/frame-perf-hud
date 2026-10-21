@@ -12,7 +12,7 @@
 struct DumpMetricsOptions {
     int count = 5;                         ///< prints
     double intervalSec = 1.0;              ///< between prints
-    std::vector<fph::WidgetType> widgets;  ///< enabled widgets; empty = all
+    std::vector<frame_perf_overlay::WidgetType> widgets;  ///< enabled widgets; empty = all
     bool vr = false;                       ///< connect to SteamVR (Background) for frame timing and controllers
 };
 
@@ -20,7 +20,7 @@ struct DumpMetricsOptions {
  * Parses "1,4,9" (WidgetType numbers).
  * @return false on anything that isn't a known widget number
  */
-bool parseWidgetList(const std::string& text, std::vector<fph::WidgetType>& out);
+bool parseWidgetList(const std::string& text, std::vector<frame_perf_overlay::WidgetType>& out);
 
 /**
  * Runs the dump.

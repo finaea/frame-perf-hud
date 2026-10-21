@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /** Largest texture side (px). */
 constexpr int kMaxTextureSide = 2048;
@@ -121,4 +121,4 @@ private:
     void applyGeometry(const GridGeometry& next);
 };
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

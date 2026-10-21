@@ -37,7 +37,7 @@ std::string clockText() {
 
 }  // namespace
 
-bool parseWidgetList(const std::string& text, std::vector<fph::WidgetType>& out) {
+bool parseWidgetList(const std::string& text, std::vector<frame_perf_overlay::WidgetType>& out) {
     out.clear();
     std::stringstream in(text);
     std::string item;
@@ -45,8 +45,9 @@ bool parseWidgetList(const std::string& text, std::vector<fph::WidgetType>& out)
         if (item.empty()) continue;
         char* end = nullptr;
         const long n = std::strtol(item.c_str(), &end, 10);
-        if (*end != '\0' || n < 1 || n > 255 || fph::widgetKey(static_cast<fph::WidgetType>(n)) == nullptr) return false;
-        out.push_back(static_cast<fph::WidgetType>(n));
+        if (*end != '\0' || n < 1 || n > 255) return false;
+        if (frame_perf_overlay::widgetKey(static_cast<frame_perf_overlay::WidgetType>(n)) == nullptr) return false;
+        out.push_back(static_cast<frame_perf_overlay::WidgetType>(n));
     }
     return true;
 }
@@ -61,14 +62,14 @@ int runDumpMetrics(const DumpMetricsOptions& options, const volatile std::sig_at
         vrOk = vr.connectReadOnly(message);
         if (!vrOk) std::fprintf(stderr, "[VR] Can't connect (continuing without SteamVR): %s\n", message.c_str());
     }
-    fph::MetricStore store;
-    fph::Scheduler scheduler;
+    frame_perf_overlay::MetricStore store;
+    frame_perf_overlay::Scheduler scheduler;
     SensorBridge bridge(sensors, vrOk ? &vr : nullptr, store);
     bridge.registerSources(scheduler);
-    std::vector<fph::WidgetType> widgets = options.widgets;
+    std::vector<frame_perf_overlay::WidgetType> widgets = options.widgets;
     if (widgets.empty()) widgets = SensorBridge::allWidgets();
     scheduler.setEnabledWidgets(widgets);
-    fph::DemandInputs demand;
+    frame_perf_overlay::DemandInputs demand;
     demand.hudShown = true;
     demand.hmdInUse = true;
     scheduler.setDemand(demand);

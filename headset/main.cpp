@@ -333,9 +333,8 @@ void loadFonts(FontSet& fonts, const Config& config) {
 
 /** Prints one sample for --print. */
 void printSample(const SensorSample& s) {
-    std::printf("  CPU      usage %s%% (max core %s%%)  fastest cluster %s MHz  big core %s MHz\n",
-                fmt(s.cpuUsagePct, 1).c_str(), fmt(s.cpuMaxCorePct, 1).c_str(), fmt(s.cpuFreqMHz, 0).c_str(),
-                fmt(s.cpuBigFreqMHz, 0).c_str());
+    std::printf("  CPU      usage %s%% (max core %s%%)  fastest cluster %s MHz\n", fmt(s.cpuUsagePct, 1).c_str(),
+                fmt(s.cpuMaxCorePct, 1).c_str(), fmt(s.cpuFreqMHz, 0).c_str());
     // No GPU load here: it comes from SteamVR's frame timing, which --print doesn't read
     std::printf("  GPU      %s MHz (max %s MHz)\n", fmt(s.gpuFreqMHz, 0).c_str(), fmt(s.gpuMaxFreqMHz, 0).c_str());
     std::printf("  Temp     CPU %s °C  GPU %s °C  DDR %s °C  battery %s °C\n", fmt(s.cpuTempC, 1).c_str(),
@@ -363,8 +362,8 @@ void printSample(const SensorSample& s) {
 }
 
 /** Demand for the offline modes (--print, --dump-png): someone is "looking" at the terminal / PNG. */
-fph::DemandInputs offlineDemand() {
-    fph::DemandInputs demand;
+frame_perf_overlay::DemandInputs offlineDemand() {
+    frame_perf_overlay::DemandInputs demand;
     demand.hudShown = true;
     demand.hmdInUse = true;
     return demand;
@@ -375,8 +374,8 @@ int runPrint(const Options& options) {
     Sensors sensors;
     sensors.discover();
     std::printf("== Sensors found ==\n%s\n", sensors.describe().c_str());
-    fph::MetricStore store;
-    fph::Scheduler scheduler;
+    frame_perf_overlay::MetricStore store;
+    frame_perf_overlay::Scheduler scheduler;
     SensorBridge bridge(sensors, nullptr, store);
     bridge.registerSources(scheduler);
     scheduler.setEnabledWidgets(SensorBridge::allWidgets());
@@ -419,8 +418,8 @@ FrameStats fakeFrameStats(double t, double fps) {
 }
 
 /** Puts fake frame stats into the store, the way SensorBridge::readFrameTiming does. */
-void storeFakeFrame(fph::MetricStore& st, const FrameStats& f, double now) {
-    using namespace fph::metric;
+void storeFakeFrame(frame_perf_overlay::MetricStore& st, const FrameStats& f, double now) {
+    using namespace frame_perf_overlay::metric;
     st.setF32(kFrameAppFps, f.appFps, now);
     st.setF32(kFrameDisplayHz, f.displayHz, now);
     st.setF32(kFrameGpuMs, f.gpuMs, now);
@@ -435,13 +434,13 @@ void storeFakeFrame(fph::MetricStore& st, const FrameStats& f, double now) {
 }
 
 /** Fake controller batteries (left charging). low = the low-battery picture (right hand not connected). */
-void storeFakeControllers(fph::MetricStore& st, bool low, double now) {
-    using namespace fph::metric;
+void storeFakeControllers(frame_perf_overlay::MetricStore& st, bool low, double now) {
+    using namespace frame_perf_overlay::metric;
     st.setF32(kCtrlLeftPct, low ? 8.0 : 80.0, now);
     st.setEnum(kCtrlLeftCharging, 1, now);
     if (low) {
-        st.setNa(kCtrlRightPct, fph::Reason::NotConnected, now);
-        st.setNa(kCtrlRightCharging, fph::Reason::NotConnected, now);
+        st.setNa(kCtrlRightPct, frame_perf_overlay::Reason::NotConnected, now);
+        st.setNa(kCtrlRightCharging, frame_perf_overlay::Reason::NotConnected, now);
     } else {
         st.setF32(kCtrlRightPct, 75.0, now);
         st.setEnum(kCtrlRightCharging, 0, now);
@@ -449,14 +448,14 @@ void storeFakeControllers(fph::MetricStore& st, bool low, double now) {
 }
 
 /** Replaces some readings with bad values to check the warning colours. */
-void storeFakeWarnings(fph::MetricStore& st, double now) {
-    using namespace fph::metric;
+void storeFakeWarnings(frame_perf_overlay::MetricStore& st, double now) {
+    using namespace frame_perf_overlay::metric;
     st.setEnum(kThrottleCpu, 1, now);
     st.setEnum(kThrottleGpu, 1, now);
     st.setF32(kGpuBusyPct, 97.0, now);
     st.setF32(kTempCpuC, 86.0, now);
     st.setF32(kBatteryPct, 12.0, now);
-    st.setEnum(kBatteryStatus, static_cast<uint32_t>(fph::BatteryStatus::Discharging), now);
+    st.setEnum(kBatteryStatus, static_cast<uint32_t>(frame_perf_overlay::BatteryStatus::Discharging), now);
     st.setEnum(kBatteryChargerOnline, 0, now);
     st.setEnum(kNetInterfaceUp, 1, now);
     st.setEnum(kNetConnected, 1, now);
@@ -481,8 +480,8 @@ void applyFakeThrottle(FrameStats& frame, double t) {
 }
 
 /** Fakes the link: "-65" (dongle), "home:-47" (home Wi-Fi) or "none" / "home:none" (not connected). */
-void storeFakeWifi(fph::MetricStore& st, const std::string& value, double now) {
-    using namespace fph::metric;
+void storeFakeWifi(frame_perf_overlay::MetricStore& st, const std::string& value, double now) {
+    using namespace frame_perf_overlay::metric;
     const bool home = value.rfind("home:", 0) == 0;
     const std::string rest = value.substr(home ? 5 : 0);
     st.setEnum(kNetInterfaceUp, 1, now);
@@ -548,8 +547,9 @@ frame_updater::UpdateStatus fakeUpdateStatus(const std::string& name) {
 }
 
 /** What the widgets draw with. */
-fph::WidgetContext widgetContext(const Config& config, const fph::MetricStore& store, double now) {
-    fph::WidgetContext ctx;
+frame_perf_overlay::WidgetContext widgetContext(const Config& config, const frame_perf_overlay::MetricStore& store,
+                                                double now) {
+    frame_perf_overlay::WidgetContext ctx;
     ctx.store = &store;
     ctx.thresholds = config.thresholds;
     ctx.now = now;
@@ -565,12 +565,12 @@ double updateIntervalSec(const Config& config) {
 }
 
 /** Applies a layout to the scheduler: a widget that isn't in it reads nothing. */
-void applyLayout(const fph::Layout& layout, fph::Scheduler& scheduler) {
-    scheduler.setEnabledWidgets(fph::enabledWidgets(layout));
+void applyLayout(const frame_perf_overlay::Layout& layout, frame_perf_overlay::Scheduler& scheduler) {
+    scheduler.setEnabledWidgets(frame_perf_overlay::enabledWidgets(layout));
 }
 
 /** --layout: reads a layout file (a layout object, or a whole config with a "layout" key). */
-bool loadLayoutFile(const std::string& path, fph::Layout& layout) {
+bool loadLayoutFile(const std::string& path, frame_perf_overlay::Layout& layout) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
         std::fprintf(stderr, "Can't read %s\n", path.c_str());
@@ -585,7 +585,7 @@ bool loadLayoutFile(const std::string& path, fph::Layout& layout) {
         return false;
     }
     const JsonValue* object = root.get("layout") != nullptr ? root.get("layout") : &root;
-    const bool ok = fph::layoutFromJson(*object, layout, warnings, error);
+    const bool ok = frame_perf_overlay::layoutFromJson(*object, layout, warnings, error);
     for (const std::string& w : warnings) std::fprintf(stderr, "[layout] %s\n", w.c_str());
     if (!ok) std::fprintf(stderr, "%s: %s\n", path.c_str(), error.c_str());
     return ok;
@@ -596,16 +596,16 @@ int runDumpPng(const Options& options) {
     ConfigWatcher watcher(options.configPath);
     Config config = watcher.loadInitial();
     if (!options.language.empty()) parseLanguage(options.language, config.language);
-    fph::Layout layout = config.layout;
+    frame_perf_overlay::Layout layout = config.layout;
     if (!options.layoutPath.empty() && !loadLayoutFile(options.layoutPath, layout)) return 1;
     Sensors sensors;
     sensors.discover();
     FontSet fonts;
     loadFonts(fonts, config);
-    fph::GridRenderer renderer(fonts);
+    frame_perf_overlay::GridRenderer renderer(fonts);
     renderer.setLayout(layout);
-    fph::MetricStore store;
-    fph::Scheduler scheduler;
+    frame_perf_overlay::MetricStore store;
+    frame_perf_overlay::Scheduler scheduler;
     SensorBridge bridge(sensors, nullptr, store);
     bridge.registerSources(scheduler);
     applyLayout(layout, scheduler);
@@ -638,7 +638,7 @@ int runDumpPng(const Options& options) {
         std::fprintf(stderr, "Couldn't write the PNG: %s\n", options.pngPath.c_str());
         return 1;
     }
-    const fph::GridGeometry& g = renderer.geometry();
+    const frame_perf_overlay::GridGeometry& g = renderer.geometry();
     std::printf("Wrote %s (%dx%d texture, layout %dx%d px, %d column%s, scale %.3f, %zu widgets)\n",
                 options.pngPath.c_str(), g.textureWidth, g.textureHeight, g.width, g.height, g.columns,
                 g.columns == 1 ? "" : "s", g.scale, g.slots.size());
@@ -846,8 +846,8 @@ bool hmdInUse(int activityLevel) {
  * Writes the debug dump (signals, sources with reference and read counters, every metric) to
  * paths::debugDumpPath(), via a temp file + rename so a reader never sees half of it.
  */
-void writeDebugDump(const fph::Scheduler& scheduler, const fph::MetricStore& store, int activityLevel,
-                    bool settingsVisible, double now, const std::string& extra = "") {
+void writeDebugDump(const frame_perf_overlay::Scheduler& scheduler, const frame_perf_overlay::MetricStore& store,
+                    int activityLevel, bool settingsVisible, double now, const std::string& extra = "") {
     std::string text = "frame-perf-overlay " FRAME_PERF_OVERLAY_VERSION " debug dump, pid " +
                        std::to_string(::getpid()) + ", " + localTimeText() + "\n";
     text += "hmd activity level: " + std::to_string(activityLevel) + " (" + activityName(activityLevel) +
@@ -918,7 +918,7 @@ struct RenderStats {
         maxRenderWallMs = std::max(maxRenderWallMs, wallMs);
     }
 
-    std::string text(const fph::GridGeometry& g) const {
+    std::string text(const frame_perf_overlay::GridGeometry& g) const {
         char buffer[512];
         const double n = redraws > 0 ? static_cast<double>(redraws) : 1.0;
         const double u = uploads > 0 ? static_cast<double>(uploads) : 1.0;
@@ -990,7 +990,7 @@ int runOverlay(const Options& options) {
     sensors.discover();
     FontSet fonts;
     loadFonts(fonts, config);
-    fph::GridRenderer renderer(fonts);
+    frame_perf_overlay::GridRenderer renderer(fonts);
     renderer.setLayout(config.layout);
     SettingsPanel settings(fonts);
     Autostart autostart;  // autostart (systemd user unit): state and switching
@@ -1000,8 +1000,8 @@ int runOverlay(const Options& options) {
     vr.setVerbose(options.verbose);
 
     // Registry + scheduler: nothing is read until the demand says someone is looking
-    fph::MetricStore store;
-    fph::Scheduler scheduler;
+    frame_perf_overlay::MetricStore store;
+    frame_perf_overlay::Scheduler scheduler;
     SensorBridge bridge(sensors, &vr, store);
     bridge.registerSources(scheduler);
     applyLayout(config.layout, scheduler);  // a widget off in the layout reads nothing
@@ -1009,7 +1009,7 @@ int runOverlay(const Options& options) {
     // Every live layout edit (the editor, the Profiles page) is a compare-and-set here
     LayoutAuthority layoutAuthority(
         config, [&watcher](const Config& c, std::string& error) { return watcher.save(c, error); },
-        [&](const fph::Layout& layout) {
+        [&](const frame_perf_overlay::Layout& layout) {
             renderer.setLayout(layout);
             applyLayout(layout, scheduler);
         });
@@ -1055,7 +1055,7 @@ int runOverlay(const Options& options) {
         const Profile* selected = profiles.find(selectedId);
         const std::string selectedName = selected != nullptr ? selected->name : std::string();
         /** The live layout -> target, through the same compare-and-set as an edit */
-        const auto setLive = [&](const fph::Layout& target, const std::string& activeAfter) {
+        const auto setLive = [&](const frame_perf_overlay::Layout& target, const std::string& activeAfter) {
             const std::string before = config.activeProfile;
             config.activeProfile = activeAfter;  // saved with the layout in one write
             const LayoutAuthority::Result r = layoutAuthority.trySetLayout(config.layout.version, target);
@@ -1115,7 +1115,7 @@ int runOverlay(const Options& options) {
                 }
                 break;
             case SettingsAction::ProfileReset:  // saved profiles stay as they are until Save
-                ok = setLive(fph::defaultLayout(), config.activeProfile);
+                ok = setLive(frame_perf_overlay::defaultLayout(), config.activeProfile);
                 profileStatus = ok ? "Layout reset to the default" : "Couldn't reset: " + error;
                 break;
             default: break;
@@ -1128,7 +1128,7 @@ int runOverlay(const Options& options) {
         return ok;
     };
     std::fprintf(stderr, "[layout] version %u, %zu widget(s) in %zu column(s), panel %dx%d\n", config.layout.version,
-                 fph::enabledWidgets(config.layout).size(), config.layout.columns.size(),
+                 frame_perf_overlay::enabledWidgets(config.layout).size(), config.layout.columns.size(),
                  renderer.geometry().textureWidth, renderer.geometry().textureHeight);
 
     // Wait for SteamVR
@@ -1204,7 +1204,7 @@ int runOverlay(const Options& options) {
                 if (renderer.setLayout(config.layout)) {
                     applyLayout(config.layout, scheduler);
                     std::fprintf(stderr, "[layout] reloaded: version %u, %zu widget(s), panel %dx%d\n",
-                                 config.layout.version, fph::enabledWidgets(config.layout).size(),
+                                 config.layout.version, frame_perf_overlay::enabledWidgets(config.layout).size(),
                                  renderer.geometry().textureWidth, renderer.geometry().textureHeight);
                 }
                 settingsDirty = true;
@@ -1297,7 +1297,7 @@ int runOverlay(const Options& options) {
             }
             // An editor drop / palette / settings change goes through the compare-and-set
             uint32_t base = 0;
-            fph::Layout edited;
+            frame_perf_overlay::Layout edited;
             if (settings.takeLayoutCommit(base, edited)) {
                 const LayoutAuthority::Result r = layoutAuthority.trySetLayout(base, edited);
                 settings.layoutCommitResult(r.applied() ? LayoutEditor::CommitOutcome::Applied
@@ -1342,7 +1342,7 @@ int runOverlay(const Options& options) {
             // Shown = what the overlay really shows: off when hidden, and also while the wrist fade or lost tracking
             // hides it (placement keeps running, so it shows again by itself)
             const bool panelShown = vr.panelShown();
-            fph::DemandInputs demand;
+            frame_perf_overlay::DemandInputs demand;
             demand.hudShown = panelShown;
             demand.hmdInUse = hmdInUse(level);
             // Redraws start again (shown again, or the headset back from standby): fresh pixels now, not at the old
@@ -1407,7 +1407,7 @@ int runOverlay(const Options& options) {
                     // cairo's pixels go up as they are (premultiplied BGRA) unless FRAME_PERF_RGBA_UPLOAD is set
                     const uint8_t* pixels =
                         vr.panelTakesCairoPixels() ? renderer.pixels() : renderer.toRgba().data();
-                    const fph::GridGeometry& g = renderer.geometry();
+                    const frame_perf_overlay::GridGeometry& g = renderer.geometry();
                     sent = vr.submitPanel(pixels, g.textureWidth, g.textureHeight, g.columns);
                 }
                 const double c5 = cpuSeconds();

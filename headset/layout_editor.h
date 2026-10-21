@@ -42,13 +42,13 @@ public:
      * version moved (then it's cancelled).
      * @return true if the layout differed (redraw the tab)
      */
-    bool sync(const fph::Layout& layout);
+    bool sync(const frame_perf_overlay::Layout& layout);
 
     /** Draws both cards. */
     void render(const Pen& pen, const UiText& text) const;
 
     /** Sets the language of the widget titles on the cards and chips. */
-    void setLanguage(fph::WidgetLanguage language) { language_ = language; }
+    void setLanguage(frame_perf_overlay::WidgetLanguage language) { language_ = language; }
 
     /** @return true if a redraw is needed */
     bool pointerMove(double x, double y);
@@ -71,7 +71,7 @@ public:
      * @param layout the edited layout
      * @return false if nothing is queued
      */
-    bool takeCommit(uint32_t& baseVersion, fph::Layout& layout);
+    bool takeCommit(uint32_t& baseVersion, frame_perf_overlay::Layout& layout);
 
     /** Reports how the last commit went (the status line in the layout card). */
     void commitResult(CommitOutcome outcome);
@@ -83,7 +83,7 @@ public:
 
     /** One card in the lanes, in dashboard px (scroll applied). */
     struct CardBox {
-        fph::WidgetRef ref;
+        frame_perf_overlay::WidgetRef ref;
         EditorRect rect;
     };
     /** @return the lanes (one per column, plus the "new column" lane when there's room for one) */
@@ -91,11 +91,11 @@ public:
     /** @return every card */
     const std::vector<CardBox>& cards() const { return cards_; }
     /** @return the palette chips, in WidgetType order from Frame (1) */
-    const std::vector<std::pair<fph::WidgetType, EditorRect>>& chips() const { return chips_; }
+    const std::vector<std::pair<frame_perf_overlay::WidgetType, EditorRect>>& chips() const { return chips_; }
     /** @return where the drop marker is (column, slot), or column −1 when there's none */
     std::pair<int, int> dropTarget() const { return {dropColumn_, dropSlot_}; }
     /** @return the selected widget (invalid ref = none) */
-    fph::WidgetRef selected() const { return selected_; }
+    frame_perf_overlay::WidgetRef selected() const { return selected_; }
     /** @return the scroll offset (px) */
     double scrollY() const { return scrollY_; }
     /** @return the settings buttons for the selected widget, by id (see Setting) */
@@ -112,18 +112,18 @@ private:
     EditorRect paletteCard_;
     EditorRect viewport_;  ///< the lanes' visible area inside layoutCard_
 
-    fph::Layout layout_;  ///< the layout the boxes below were made from
-    fph::WidgetLanguage language_ = fph::WidgetLanguage::En;
+    frame_perf_overlay::Layout layout_;  ///< the layout the boxes below were made from
+    frame_perf_overlay::WidgetLanguage language_ = frame_perf_overlay::WidgetLanguage::En;
     std::vector<EditorRect> lanes_;
     std::vector<CardBox> cards_;
-    std::vector<std::pair<fph::WidgetType, EditorRect>> chips_;
+    std::vector<std::pair<frame_perf_overlay::WidgetType, EditorRect>> chips_;
     std::vector<std::pair<Setting, EditorRect>> settings_;
     double contentH_ = 0.0;  ///< tallest lane (px, unscrolled)
     double scrollY_ = 0.0;
 
     Press press_ = Press::None;
-    fph::WidgetRef pressedCard_;
-    fph::WidgetType pressedChip_ = fph::WidgetType::None;
+    frame_perf_overlay::WidgetRef pressedCard_;
+    frame_perf_overlay::WidgetType pressedChip_ = frame_perf_overlay::WidgetType::None;
     Setting pressedSetting_ = Setting::Remove;
     uint32_t pressVersion_ = 0;  ///< layout version when the press started (the commit's base)
     double pressX_ = 0, pressY_ = 0;
@@ -133,22 +133,23 @@ private:
     int dropSlot_ = 0;
     bool overPalette_ = false;  ///< dragging a card over the palette = remove on release
 
-    fph::WidgetRef selected_;
-    fph::WidgetType selectedType_ = fph::WidgetType::None;  ///< to notice the selection pointing elsewhere after a sync
+    frame_perf_overlay::WidgetRef selected_;
+    /** To notice the selection pointing elsewhere after a sync. */
+    frame_perf_overlay::WidgetType selectedType_ = frame_perf_overlay::WidgetType::None;
 
     bool commitQueued_ = false;
     uint32_t commitBase_ = 0;
-    fph::Layout commitLayout_;
-    fph::WidgetRef selectAfterCommit_;
+    frame_perf_overlay::Layout commitLayout_;
+    frame_perf_overlay::WidgetRef selectAfterCommit_;
     int status_ = -1;  ///< -1 none, else a CommitOutcome
 
     void relayout();
     void clampScroll();
     void updateDrop(double x, double y);
-    void queueCommit(const fph::Layout& edited, fph::WidgetRef selectAfter);
+    void queueCommit(const frame_perf_overlay::Layout& edited, frame_perf_overlay::WidgetRef selectAfter);
     void applySetting(Setting setting);
     void cancelPress();
-    fph::WidgetRef cardAt(double x, double y) const;
+    frame_perf_overlay::WidgetRef cardAt(double x, double y) const;
     int chipAt(double x, double y) const;
     int settingAt(double x, double y) const;
     /** @return palette rows in use (the selected widget's settings go below them) */

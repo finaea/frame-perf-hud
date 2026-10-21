@@ -33,16 +33,17 @@ constexpr double kRowH = 44;          // settings rows
 constexpr double kRowGap = 8;
 
 /** Card height in the lanes. */
-double boxHeight(const fph::WidgetInstance& w) {
-    return std::clamp(std::round(fph::widgetHeight(w) * kBoxScale), kBoxMinH, kBoxMaxH);
+double boxHeight(const frame_perf_overlay::WidgetInstance& w) {
+    return std::clamp(std::round(frame_perf_overlay::widgetHeight(w) * kBoxScale), kBoxMinH, kBoxMaxH);
 }
 
 /** Palette label of a type. */
-std::string chipLabel(fph::WidgetType type, const UiText& text, fph::WidgetLanguage language) {
-    if (type == fph::WidgetType::Network) return text.paletteNetwork;
-    fph::WidgetInstance w;
+std::string chipLabel(frame_perf_overlay::WidgetType type, const UiText& text,
+                      frame_perf_overlay::WidgetLanguage language) {
+    if (type == frame_perf_overlay::WidgetType::Network) return text.paletteNetwork;
+    frame_perf_overlay::WidgetInstance w;
     w.type = type;
-    return fph::widgetTitle(w, language);
+    return frame_perf_overlay::widgetTitle(w, language);
 }
 
 }  // namespace
@@ -54,13 +55,13 @@ LayoutEditor::LayoutEditor(EditorRect layoutCard, EditorRect paletteCard)
     relayout();
 }
 
-bool LayoutEditor::sync(const fph::Layout& layout) {
+bool LayoutEditor::sync(const frame_perf_overlay::Layout& layout) {
     if (layout.version == layout_.version && layout.sameWidgets(layout_)) return false;
     const bool versionMoved = layout.version != layout_.version;
     layout_ = layout;
     // A press made on another version would apply its indices to the wrong layout: drop it
     if (versionMoved && press_ != Press::None && press_ != Press::Setting) cancelPress();
-    const fph::WidgetInstance* w = fph::widgetAt(layout_, selected_);
+    const frame_perf_overlay::WidgetInstance* w = frame_perf_overlay::widgetAt(layout_, selected_);
     if (w == nullptr || w->type != selectedType_) selected_ = {};
     relayout();
     return true;
@@ -70,14 +71,14 @@ void LayoutEditor::relayout() {
     lanes_.clear();
     cards_.clear();
     const int columns = static_cast<int>(layout_.columns.size());
-    const int n = std::max(1, columns + (layout_.columns.size() < fph::kMaxColumns ? 1 : 0));
+    const int n = std::max(1, columns + (layout_.columns.size() < frame_perf_overlay::kMaxColumns ? 1 : 0));
     const double laneW = std::min(kMaxLaneW, (viewport_.w - (n - 1) * kLaneGap) / n);
     // Measure → clamp → place: a layout that got shorter (fewer rows, a card moved out) must not keep a scroll
     // offset that only the old height allowed, or its cards would sit clipped above the view
     contentH_ = 0.0;
-    for (const fph::LayoutColumn& column : layout_.columns) {
+    for (const frame_perf_overlay::LayoutColumn& column : layout_.columns) {
         double y = kLaneInset;
-        for (const fph::WidgetInstance& w : column.widgets) y += boxHeight(w) + kBoxGap;
+        for (const frame_perf_overlay::WidgetInstance& w : column.widgets) y += boxHeight(w) + kBoxGap;
         contentH_ = std::max(contentH_, y);
     }
     clampScroll();
@@ -86,7 +87,8 @@ void LayoutEditor::relayout() {
         lanes_.push_back(lane);
         if (i >= columns) continue;
         double y = kLaneInset;
-        const std::vector<fph::WidgetInstance>& widgets = layout_.columns[static_cast<size_t>(i)].widgets;
+        const std::vector<frame_perf_overlay::WidgetInstance>& widgets =
+            layout_.columns[static_cast<size_t>(i)].widgets;
         for (size_t k = 0; k < widgets.size(); ++k) {
             const double h = boxHeight(widgets[k]);
             cards_.push_back({{i, static_cast<int>(k)},
@@ -100,17 +102,17 @@ void LayoutEditor::relayout() {
     const double chipX = paletteCard_.x + kCardPad;
     const double chipW = (paletteCard_.w - 2 * kCardPad - (kChipColumns - 1) * kChipGap) / kChipColumns;
     const double chipY = paletteCard_.y + kHeaderH;
-    for (int t = 1; t < static_cast<int>(fph::kWidgetTypeCount); ++t) {
-        if (!fph::isOfferedInPalette(static_cast<fph::WidgetType>(t))) continue;
+    for (int t = 1; t < static_cast<int>(frame_perf_overlay::kWidgetTypeCount); ++t) {
+        if (!frame_perf_overlay::isOfferedInPalette(static_cast<frame_perf_overlay::WidgetType>(t))) continue;
         const int i = static_cast<int>(chips_.size());
-        chips_.push_back({static_cast<fph::WidgetType>(t),
+        chips_.push_back({static_cast<frame_perf_overlay::WidgetType>(t),
                           {chipX + (i % kChipColumns) * (chipW + kChipGap), chipY + (i / kChipColumns) * (kChipH + kChipGap),
                            chipW, kChipH}});
     }
 
     // The selected widget's settings: [title ......... Remove] / row A / row B
     settings_.clear();
-    const fph::WidgetInstance* w = fph::widgetAt(layout_, selected_);
+    const frame_perf_overlay::WidgetInstance* w = frame_perf_overlay::widgetAt(layout_, selected_);
     if (w == nullptr) return;
     const double sx = paletteCard_.x + kCardPad;
     const double sw = paletteCard_.w - 2 * kCardPad;
@@ -120,7 +122,7 @@ void LayoutEditor::relayout() {
     const double rowA = sy + kRowH + kRowGap;
     const double controlW = 270;
     const double controlX = sx + sw - controlW;
-    if (fph::hasCompactView(w->type)) {
+    if (frame_perf_overlay::hasCompactView(w->type)) {
         settings_.push_back({Setting::CompactOn, {controlX, rowA, controlW / 2, kRowH}});
         settings_.push_back({Setting::CompactOff, {controlX + controlW / 2, rowA, controlW / 2, kRowH}});
     }
@@ -135,7 +137,7 @@ void LayoutEditor::clampScroll() {
     scrollY_ = std::clamp(scrollY_, 0.0, maxScroll);
 }
 
-fph::WidgetRef LayoutEditor::cardAt(double x, double y) const {
+frame_perf_overlay::WidgetRef LayoutEditor::cardAt(double x, double y) const {
     if (!viewport_.contains(x, y)) return {};
     for (const CardBox& c : cards_) {
         if (c.rect.contains(x, y)) return c.ref;
@@ -185,12 +187,13 @@ void LayoutEditor::updateDrop(double x, double y) {
             if (c.ref.column == static_cast<int>(i)) centers.push_back(c.rect.y + c.rect.h / 2);
         }
         const int column = static_cast<int>(i);
-        const int slot = fph::dropSlot(centers, y);
+        const int slot = frame_perf_overlay::dropSlot(centers, y);
         // Only show a marker where the drop would change something
-        fph::Layout trial = layout_;
+        frame_perf_overlay::Layout trial = layout_;
         const bool changes = press_ == Press::Card
-                                 ? fph::moveWidget(trial, pressedCard_, column, slot)
-                                 : fph::insertWidget(trial, fph::newInstance(pressedChip_, layout_), column, slot);
+                                 ? frame_perf_overlay::moveWidget(trial, pressedCard_, column, slot)
+                                 : frame_perf_overlay::insertWidget(
+                                       trial, frame_perf_overlay::newInstance(pressedChip_, layout_), column, slot);
         if (changes) {
             dropColumn_ = column;
             dropSlot_ = slot;
@@ -199,14 +202,14 @@ void LayoutEditor::updateDrop(double x, double y) {
     }
 }
 
-void LayoutEditor::queueCommit(const fph::Layout& edited, fph::WidgetRef selectAfter) {
+void LayoutEditor::queueCommit(const frame_perf_overlay::Layout& edited, frame_perf_overlay::WidgetRef selectAfter) {
     commitQueued_ = true;
     commitBase_ = pressVersion_;
     commitLayout_ = edited;
     selectAfterCommit_ = selectAfter;
 }
 
-bool LayoutEditor::takeCommit(uint32_t& baseVersion, fph::Layout& layout) {
+bool LayoutEditor::takeCommit(uint32_t& baseVersion, frame_perf_overlay::Layout& layout) {
     if (!commitQueued_) return false;
     commitQueued_ = false;
     baseVersion = commitBase_;
@@ -221,8 +224,8 @@ void LayoutEditor::commitResult(CommitOutcome outcome) {
         layout_ = commitLayout_;
         layout_.version = commitBase_ + 1;
         selected_ = selectAfterCommit_;
-        const fph::WidgetInstance* w = fph::widgetAt(layout_, selected_);
-        selectedType_ = w != nullptr ? w->type : fph::WidgetType::None;
+        const frame_perf_overlay::WidgetInstance* w = frame_perf_overlay::widgetAt(layout_, selected_);
+        selectedType_ = w != nullptr ? w->type : frame_perf_overlay::WidgetType::None;
         if (w == nullptr) selected_ = {};
         clampScroll();
         relayout();
@@ -230,15 +233,16 @@ void LayoutEditor::commitResult(CommitOutcome outcome) {
 }
 
 void LayoutEditor::applySetting(Setting setting) {
-    const fph::WidgetInstance* w = fph::widgetAt(layout_, selected_);
+    const frame_perf_overlay::WidgetInstance* w = frame_perf_overlay::widgetAt(layout_, selected_);
     if (w == nullptr) return;
-    fph::Layout edited = layout_;
+    frame_perf_overlay::Layout edited = layout_;
     if (setting == Setting::Remove) {
-        fph::removeWidget(edited, selected_);
+        frame_perf_overlay::removeWidget(edited, selected_);
         queueCommit(edited, {});
         return;
     }
-    fph::WidgetInstance& e = edited.columns[static_cast<size_t>(selected_.column)].widgets[static_cast<size_t>(selected_.index)];
+    frame_perf_overlay::WidgetInstance& e =
+        edited.columns[static_cast<size_t>(selected_.column)].widgets[static_cast<size_t>(selected_.index)];
     switch (setting) {
         case Setting::CompactOn: e.compact = true; break;
         case Setting::CompactOff: e.compact = false; break;
@@ -253,7 +257,7 @@ bool LayoutEditor::pointerMove(double x, double y) {
     if (press_ != Press::Card && press_ != Press::Chip) return false;
     if (!dragging_) {
         if (std::hypot(x - pressX_, y - pressY_) < kDragStartPx) return false;
-        if (press_ == Press::Chip && !fph::canAdd(layout_, pressedChip_)) return false;
+        if (press_ == Press::Chip && !frame_perf_overlay::canAdd(layout_, pressedChip_)) return false;
         dragging_ = true;
     }
     updateDrop(x, y);
@@ -275,13 +279,13 @@ bool LayoutEditor::pointerDown(double x, double y) {
     }
     const int c = chipAt(x, y);
     if (c >= 0) {
-        const fph::WidgetType type = chips_[static_cast<size_t>(c)].first;
-        if (!fph::isOfferedInPalette(type)) return false;
+        const frame_perf_overlay::WidgetType type = chips_[static_cast<size_t>(c)].first;
+        if (!frame_perf_overlay::isOfferedInPalette(type)) return false;
         press_ = Press::Chip;
         pressedChip_ = type;
         return true;
     }
-    const fph::WidgetRef card = cardAt(x, y);
+    const frame_perf_overlay::WidgetRef card = cardAt(x, y);
     if (card.valid()) {
         press_ = Press::Card;
         pressedCard_ = card;
@@ -306,7 +310,7 @@ bool LayoutEditor::pointerUp(double x, double y) {
     if (press == Press::Card) {
         if (!dragged) {
             // Tap: select (again = deselect)
-            const fph::WidgetInstance* tapped = fph::widgetAt(layout_, pressedCard_);
+            const frame_perf_overlay::WidgetInstance* tapped = frame_perf_overlay::widgetAt(layout_, pressedCard_);
             if (selected_ == pressedCard_ || tapped == nullptr) {  // the card may be gone (the layout changed meanwhile)
                 selected_ = {};
             } else {
@@ -316,17 +320,17 @@ bool LayoutEditor::pointerUp(double x, double y) {
             relayout();
             return true;
         }
-        fph::Layout edited = layout_;
+        frame_perf_overlay::Layout edited = layout_;
         if (toPalette) {
-            if (fph::removeWidget(edited, pressedCard_)) queueCommit(edited, {});
+            if (frame_perf_overlay::removeWidget(edited, pressedCard_)) queueCommit(edited, {});
             return true;
         }
-        if (column < 0 || !fph::moveWidget(edited, pressedCard_, column, slot)) return true;
+        if (column < 0 || !frame_perf_overlay::moveWidget(edited, pressedCard_, column, slot)) return true;
         // Where it landed: its source column may have been removed (it was alone there) before the target
         const int columns = static_cast<int>(layout_.columns.size());
         const bool sourceGone =
             layout_.columns[static_cast<size_t>(pressedCard_.column)].widgets.size() == 1 && column != pressedCard_.column;
-        fph::WidgetRef landed {column, slot};
+        frame_perf_overlay::WidgetRef landed {column, slot};
         if (column == pressedCard_.column && slot > pressedCard_.index) landed.index = slot - 1;
         if (column == columns) landed.index = 0;
         if (sourceGone && pressedCard_.column < column) landed.column -= 1;
@@ -334,18 +338,19 @@ bool LayoutEditor::pointerUp(double x, double y) {
         return true;
     }
     if (press == Press::Chip) {
-        fph::Layout edited = layout_;
-        const fph::WidgetInstance widget = fph::newInstance(pressedChip_, layout_);
+        frame_perf_overlay::Layout edited = layout_;
+        const frame_perf_overlay::WidgetInstance widget = frame_perf_overlay::newInstance(pressedChip_, layout_);
         if (dragged) {
-            if (column >= 0 && fph::insertWidget(edited, widget, column, slot)) {
+            if (column >= 0 && frame_perf_overlay::insertWidget(edited, widget, column, slot)) {
                 queueCommit(edited, {column, std::min(slot, static_cast<int>(edited.columns[static_cast<size_t>(column)].widgets.size()) - 1)});
             }
             return true;
         }
         // Tap on a type that's there and can't repeat: select it
-        if (!fph::isRepeatable(pressedChip_) && fph::countType(layout_, pressedChip_) > 0) {
+        if (!frame_perf_overlay::isRepeatable(pressedChip_) &&
+            frame_perf_overlay::countType(layout_, pressedChip_) > 0) {
             for (const CardBox& c : cards_) {
-                if (fph::widgetAt(layout_, c.ref)->type == pressedChip_) {
+                if (frame_perf_overlay::widgetAt(layout_, c.ref)->type == pressedChip_) {
                     selected_ = c.ref;
                     selectedType_ = pressedChip_;
                     break;
@@ -354,21 +359,26 @@ bool LayoutEditor::pointerUp(double x, double y) {
             relayout();
             return true;
         }
-        if (!fph::canAdd(layout_, pressedChip_)) return true;
+        if (!frame_perf_overlay::canAdd(layout_, pressedChip_)) return true;
         // Tap to add: below the selected widget if its column has room, else at the end of the shortest column
         int target = -1;
         int at = 0;
         if (selected_.valid() &&
-            layout_.columns[static_cast<size_t>(selected_.column)].widgets.size() < fph::kMaxWidgetsPerColumn) {
+            layout_.columns[static_cast<size_t>(selected_.column)].widgets.size() <
+                frame_perf_overlay::kMaxWidgetsPerColumn) {
             target = selected_.column;
             at = selected_.index + 1;
         } else {
-            target = fph::shortestColumn(layout_, [](const fph::WidgetInstance& w) { return fph::widgetHeight(w); });
+            target = frame_perf_overlay::shortestColumn(layout_, [](const frame_perf_overlay::WidgetInstance& w) {
+                return frame_perf_overlay::widgetHeight(w);
+            });
             at = target >= 0 && target < static_cast<int>(layout_.columns.size())
                      ? static_cast<int>(layout_.columns[static_cast<size_t>(target)].widgets.size())
                      : 0;
         }
-        if (target >= 0 && fph::insertWidget(edited, widget, target, at)) queueCommit(edited, {target, at});
+        if (target >= 0 && frame_perf_overlay::insertWidget(edited, widget, target, at)) {
+            queueCommit(edited, {target, at});
+        }
         return true;
     }
     if (press == Press::Lanes && !dragged && selected_.valid()) {
@@ -448,7 +458,7 @@ void LayoutEditor::drawLanes(const Pen& pen, const UiText& text) const {
         }
     }
     for (const CardBox& c : cards_) {
-        const fph::WidgetInstance* w = fph::widgetAt(layout_, c.ref);
+        const frame_perf_overlay::WidgetInstance* w = frame_perf_overlay::widgetAt(layout_, c.ref);
         if (w == nullptr) continue;
         const bool lifted = dragging_ && press_ == Press::Card && c.ref == pressedCard_;
         const bool selected = c.ref == selected_;
@@ -456,7 +466,7 @@ void LayoutEditor::drawLanes(const Pen& pen, const UiText& text) const {
         pen.roundedRect(c.rect.x, c.rect.y, c.rect.w, c.rect.h, 10);
         cairo_fill(cr);
         strokeRounded(pen, c.rect.x, c.rect.y, c.rect.w, c.rect.h, 10, selected ? kAccent : kBorder, selected ? 3 : 1.5);
-        const std::string title = fph::widgetTitle(*w, language_);
+        const std::string title = frame_perf_overlay::widgetTitle(*w, language_);
         const double size = fitSize(pen, title, 20, 13, c.rect.w - 24, true);
         pen.text(c.rect.x + 12, c.rect.y + 32, title, size, lifted ? kTextDisabled : kText, true);
     }
@@ -502,8 +512,9 @@ void LayoutEditor::drawLanes(const Pen& pen, const UiText& text) const {
                     h = std::min(c.rect.h, 120.0);
                 }
             }
-            if (const fph::WidgetInstance* lifted = fph::widgetAt(layout_, pressedCard_)) {
-                title = fph::widgetTitle(*lifted, language_);
+            if (const frame_perf_overlay::WidgetInstance* lifted =
+                    frame_perf_overlay::widgetAt(layout_, pressedCard_)) {
+                title = frame_perf_overlay::widgetTitle(*lifted, language_);
             }
         } else {
             title = chipLabel(pressedChip_, text, language_);
@@ -526,9 +537,9 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
              overPalette_ ? kDanger : kText, true);
 
     for (const auto& [type, r] : chips_) {
-        const bool offered = fph::isOfferedInPalette(type);
-        const int count = fph::countType(layout_, type);
-        const bool present = count > 0 && !fph::isRepeatable(type);
+        const bool offered = frame_perf_overlay::isOfferedInPalette(type);
+        const int count = frame_perf_overlay::countType(layout_, type);
+        const bool present = count > 0 && !frame_perf_overlay::isRepeatable(type);
         const bool pressed = press_ == Press::Chip && pressedChip_ == type;
         if (present) {
             pen.color(pressed ? kAccentPressed : kAccent);
@@ -539,7 +550,7 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
         cairo_fill(cr);
         if (offered && !present) strokeRounded(pen, r.x, r.y, r.w, r.h, r.h / 2, kBorder, 1.5);
         std::string label = chipLabel(type, text, language_);
-        if (fph::isRepeatable(type) && count > 0) label += " ×" + std::to_string(count);
+        if (frame_perf_overlay::isRepeatable(type) && count > 0) label += " ×" + std::to_string(count);
         const double checkW = present ? 20 : 0;
         const double size = fitSize(pen, label, 17, 11, r.w - 20 - checkW, present);
         const double tw = pen.measure(label, size, present) + checkW;
@@ -552,7 +563,7 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
     // The selected widget's settings
     const double sx = card.x + kCardPad;
     const double sy = card.y + kHeaderH + chipRows() * (kChipH + kChipGap) + 4;
-    const fph::WidgetInstance* w = fph::widgetAt(layout_, selected_);
+    const frame_perf_overlay::WidgetInstance* w = frame_perf_overlay::widgetAt(layout_, selected_);
     if (w == nullptr) {
         const double size = fitSize(pen, text.selectedNone, 18, 12, card.w - 2 * kCardPad, false);
         pen.text(sx, centerBaseline(sy, kRowH, size), text.selectedNone, size, kTextMuted);
@@ -586,12 +597,12 @@ void LayoutEditor::drawPalette(const Pen& pen, const UiText& text) const {
         drawSegmentedPill(pen, ra->x, ra->y, rb->x + rb->w - ra->x, ra->h, {part(a, labelA), part(b, labelB)},
                           aSelected ? 0 : 1, true, 20);
     };
-    const std::string title = fph::widgetTitle(*w, language_);
+    const std::string title = frame_perf_overlay::widgetTitle(*w, language_);
     pen.text(sx, centerBaseline(sy, kRowH, 22), title, fitSize(pen, title, 22, 14, card.w - 2 * kCardPad - 150, true), kText,
              true);
     button(Setting::Remove, text.removeWidget, false);
     const double rowA = sy + kRowH + kRowGap;
-    if (fph::hasCompactView(w->type)) {
+    if (frame_perf_overlay::hasCompactView(w->type)) {
         pen.text(sx, centerBaseline(rowA, kRowH, 20), text.rowCompact, 20, kTextMuted);
         pill(Setting::CompactOn, Setting::CompactOff, text.on, text.off, w->compact);
     } else {

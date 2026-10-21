@@ -576,12 +576,12 @@ void panelHeights(const std::string& directory) {
     Config c;
     FontSet fonts;
     fonts.load(c.fontPath, c.boldFontPath);
-    fph::GridRenderer renderer(fonts);
+    frame_perf_overlay::GridRenderer renderer(fonts);
     renderer.setLayout(c.layout);
-    fph::MetricStore store;
+    frame_perf_overlay::MetricStore store;
     int withClock = 0;
     for (const int format : {24, 12, 0}) {
-        fph::WidgetContext ctx;
+        frame_perf_overlay::WidgetContext ctx;
         ctx.store = &store;
         ctx.now = 1.0;
         ctx.clockFormat = format;

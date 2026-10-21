@@ -23,7 +23,7 @@ int failures = 0;
         }                                                                        \
     } while (false)
 
-using namespace fph;
+using namespace frame_perf_overlay;
 using W = WidgetType;
 using Pixels = std::vector<uint8_t>;
 
@@ -210,6 +210,19 @@ void testCompactHeights() {
     CHECK(!sameGridGeometry(layoutGrid(layout, &lowCtx), layoutGrid(toggled, &lowCtx)));
     CHECK(layoutGrid(toggled, &lowCtx).slots[1].h == 102);
     CHECK(layoutGrid(layout, &lowCtx).slots[1].h == 154);
+
+    // Compact Temp keeps the graph: its graph bed (the panel's background colour, sunk into the card) is where the
+    // full card's is. The card sits at (8, 8); the bed starts 202 px in and 10 px down, 84 px tall
+    MetricStore none;
+    const Pixels compact = renderPx(oneWidget(inst(W::Temp, true)), none, "temp-compact.png");
+    const Pixels full = renderPx(oneWidget(inst(W::Temp)), none);
+    const auto rgbAt = [](const Pixels& px, int width, int x, int y) {
+        const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+        return (unsigned(px[i]) << 16) | (unsigned(px[i + 1]) << 8) | px[i + 2];
+    };
+    const int bedX = 8 + 202 + 20, bedY = 8 + 10 + 76;  // low in the bed, clear of the guides and the label
+    CHECK(rgbAt(compact, 512, bedX, bedY) == rgbAt(full, 512, bedX, bedY));
+    CHECK(rgbAt(compact, 512, bedX, bedY) != rgbAt(compact, 512, 8 + 190, bedY));  // the card, left of the bed
 }
 
 void testTitles() {

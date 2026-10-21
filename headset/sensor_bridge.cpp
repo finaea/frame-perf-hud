@@ -3,15 +3,15 @@
 #include "system_metrics.h"
 #include "vr_overlay.h"
 
-using fph::Reason;
-using fph::SourceId;
-using fph::WidgetType;
-namespace metric = fph::metric;
+using frame_perf_overlay::Reason;
+using frame_perf_overlay::SourceId;
+using frame_perf_overlay::WidgetType;
+namespace metric = frame_perf_overlay::metric;
 
 namespace {
 
 std::string batteryStatusString(int64_t code) {
-    using fph::BatteryStatus;
+    using frame_perf_overlay::BatteryStatus;
     switch (static_cast<BatteryStatus>(code)) {
         case BatteryStatus::Charging: return "Charging";
         case BatteryStatus::Discharging: return "Discharging";
@@ -24,7 +24,7 @@ std::string batteryStatusString(int64_t code) {
 
 }  // namespace
 
-SensorBridge::SensorBridge(Sensors& sensors, VrOverlay* vr, fph::MetricStore& store)
+SensorBridge::SensorBridge(Sensors& sensors, VrOverlay* vr, frame_perf_overlay::MetricStore& store)
     : sensors_(sensors), vr_(vr), store_(store) {}
 
 std::vector<WidgetType> SensorBridge::allWidgets() {
@@ -32,7 +32,7 @@ std::vector<WidgetType> SensorBridge::allWidgets() {
             WidgetType::Battery, WidgetType::Temp, WidgetType::Network, WidgetType::General};
 }
 
-void SensorBridge::registerSources(fph::Scheduler& scheduler) {
+void SensorBridge::registerSources(frame_perf_overlay::Scheduler& scheduler) {
     registerSystemSources(scheduler, sensors_, store_);
     scheduler.addSource(SourceId::FrameTiming, [this](double now, bool) { readFrameTiming(now); });
     scheduler.addSource(SourceId::Controllers, [this](double now, bool) { readControllers(now); });
@@ -82,14 +82,13 @@ void SensorBridge::readControllers(double now) {
 }
 
 SensorSample SensorBridge::sample() const {
-    const fph::MetricStore& st = store_;
+    const frame_perf_overlay::MetricStore& st = store_;
     const auto f = [&st](uint16_t id) { return st.f32Or(id, kNoValue); };
     const auto flag = [&st](uint16_t id) { return st.intOr(id, 0) != 0; };
     SensorSample s;
     s.cpuUsagePct = f(metric::kCpuUsagePct);
     s.cpuMaxCorePct = f(metric::kCpuMaxCorePct);
     s.cpuFreqMHz = f(metric::kCpuFastestClockMhz);
-    s.cpuBigFreqMHz = f(metric::kCpuBigCoreClockMhz);
     s.gpuFreqMHz = f(metric::kGpuClockMhz);
     s.gpuMaxFreqMHz = f(metric::kGpuMaxClockMhz);
     s.cpuTempC = f(metric::kTempCpuC);

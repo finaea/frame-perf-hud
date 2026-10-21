@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /**
  * Widget types. Stable: they go into saved layouts. Numbers without a widget yet (7, 8, 10, 12, 13) are
@@ -105,7 +105,7 @@ constexpr uint16_t kFrameCount = 109;      ///< frames aggregated since the last
 constexpr uint16_t kCpuUsagePct = 200;
 constexpr uint16_t kCpuMaxCorePct = 201;
 constexpr uint16_t kCpuFastestClockMhz = 202;
-constexpr uint16_t kCpuBigCoreClockMhz = 203;
+// 203 is retired (the big core's clock; the CPU card shows the fastest cluster). Never reuse it.
 // GPU & RAM (widget 3)
 constexpr uint16_t kGpuBusyPct = 300;  ///< GPU load (frame GPU ms × app fps), see core/gpu_load.h
 constexpr uint16_t kGpuClockMhz = 301;
@@ -186,4 +186,4 @@ const char* widgetName(WidgetType type);
  */
 const char* sourceName(SourceId source);
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

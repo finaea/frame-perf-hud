@@ -13,8 +13,8 @@ enum class Language { Ja, En };
  * @param language the UI language
  * @return the same language for the widgets' strings (core/render/widget_text.h)
  */
-inline fph::WidgetLanguage widgetLanguage(Language language) {
-    return language == Language::Ja ? fph::WidgetLanguage::Ja : fph::WidgetLanguage::En;
+inline frame_perf_overlay::WidgetLanguage widgetLanguage(Language language) {
+    return language == Language::Ja ? frame_perf_overlay::WidgetLanguage::Ja : frame_perf_overlay::WidgetLanguage::En;
 }
 
 /**

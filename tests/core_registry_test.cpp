@@ -19,7 +19,7 @@ int failures = 0;
         }                                                                        \
     } while (false)
 
-using namespace fph;
+using namespace frame_perf_overlay;
 
 bool hasProblem(const std::vector<std::string>& problems, const std::string& needle) {
     for (const std::string& p : problems) {

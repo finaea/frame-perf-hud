@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /** One metric's latest value. */
 struct MetricValue {
@@ -72,4 +72,4 @@ private:
     MetricValue* slot(uint16_t id, WireType expected);
 };
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

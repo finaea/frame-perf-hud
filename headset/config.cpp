@@ -294,7 +294,7 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
     // without one (from before the grid) gets the default too: one column, the fixed panel's rows
     if (const JsonValue* layout = root.get("layout")) {
         std::string layoutError;
-        if (fph::layoutFromJson(*layout, config.layout, warnings, layoutError)) {
+        if (frame_perf_overlay::layoutFromJson(*layout, config.layout, warnings, layoutError)) {
             config.layoutInFile = true;
         } else {
             warnings.push_back(layoutError + ": using the default layout");
@@ -369,7 +369,7 @@ bool saveConfig(const std::string& path, const Config& config, std::string& erro
         std::fprintf(file, "    \"%s\": %.4g%s\n", field.key, config.thresholds.*field.member, &field == last ? "" : ",");
     }
     std::fprintf(file, "  },\n  \"active_profile\": %s,\n  \"layout\": %s\n}\n", jsonString(config.activeProfile).c_str(),
-                 fph::layoutToJson(config.layout, 2).c_str());
+                 frame_perf_overlay::layoutToJson(config.layout, 2).c_str());
     // The data must be on disk before the rename makes it the config (a power cut right after could leave an
     // empty file otherwise)
     const bool writeFailed = std::ferror(file) != 0 || std::fflush(file) != 0 || ::fsync(::fileno(file)) != 0;

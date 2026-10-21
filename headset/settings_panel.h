@@ -135,7 +135,7 @@ public:
      * layout the user sees (a file reload may have changed it since the last draw).
      * @return true if it differed from what the tab shows (redraw it)
      */
-    bool syncLayout(const fph::Layout& layout) { return editor_.sync(layout); }
+    bool syncLayout(const frame_perf_overlay::Layout& layout) { return editor_.sync(layout); }
 
     /**
      * ポインターが動いた。
@@ -153,7 +153,9 @@ public:
     bool scroll(double dy);
 
     /** Takes the editor's queued edit (base version + edited layout). @return false if none */
-    bool takeLayoutCommit(uint32_t& baseVersion, fph::Layout& layout) { return editor_.takeCommit(baseVersion, layout); }
+    bool takeLayoutCommit(uint32_t& baseVersion, frame_perf_overlay::Layout& layout) {
+        return editor_.takeCommit(baseVersion, layout);
+    }
 
     /** How the edit taken last went (shown in the editor). */
     void layoutCommitResult(LayoutEditor::CommitOutcome outcome) { editor_.commitResult(outcome); }

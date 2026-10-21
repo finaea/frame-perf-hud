@@ -9,7 +9,7 @@
 #include <functional>
 #include <vector>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /** Where one widget instance is: column, then position from the top. */
 struct WidgetRef {
@@ -83,4 +83,4 @@ int shortestColumn(const Layout& layout, const std::function<int(const WidgetIns
  */
 int dropSlot(const std::vector<double>& centers, double y);
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

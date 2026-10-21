@@ -18,21 +18,21 @@ public:
      * @param vr the overlay for frame timings and controllers, or nullptr when running without OpenVR
      * @param store where values go
      */
-    SensorBridge(Sensors& sensors, VrOverlay* vr, fph::MetricStore& store);
+    SensorBridge(Sensors& sensors, VrOverlay* vr, frame_perf_overlay::MetricStore& store);
 
     /** Registers one reader per source with the scheduler. */
-    void registerSources(fph::Scheduler& scheduler);
+    void registerSources(frame_perf_overlay::Scheduler& scheduler);
 
     /** @return the sensor sample, rebuilt from the store (N/A → NaN / false / empty), for --print */
     SensorSample sample() const;
 
     /** @return every widget type, for --print (reads every system source) */
-    static std::vector<fph::WidgetType> allWidgets();
+    static std::vector<frame_perf_overlay::WidgetType> allWidgets();
 
 private:
     Sensors& sensors_;
     VrOverlay* vr_;
-    fph::MetricStore& store_;
+    frame_perf_overlay::MetricStore& store_;
 
     void readFrameTiming(double now);
     void readControllers(double now);

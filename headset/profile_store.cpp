@@ -47,8 +47,8 @@ std::string ProfileStore::cleanName(const std::string& name) {
 }
 
 std::string ProfileStore::toJson(const Profile& profile) {
-    return "{\n  \"name\": " + jsonString(profile.name) + ",\n  \"layout\": " + fph::layoutToJson(profile.layout, 2) +
-           "\n}\n";
+    return "{\n  \"name\": " + jsonString(profile.name) +
+           ",\n  \"layout\": " + frame_perf_overlay::layoutToJson(profile.layout, 2) + "\n}\n";
 }
 
 bool ProfileStore::fromJson(const std::string& text, Profile& out, std::vector<std::string>& warnings,
@@ -62,7 +62,7 @@ bool ProfileStore::fromJson(const std::string& text, Profile& out, std::vector<s
         return false;
     }
     Profile p;
-    if (!fph::layoutFromJson(*layout, p.layout, warnings, error)) return false;
+    if (!frame_perf_overlay::layoutFromJson(*layout, p.layout, warnings, error)) return false;
     p.name = name != nullptr && name->isString() ? cleanName(name->text) : "";
     out.name = p.name;
     out.layout = p.layout;
@@ -98,7 +98,7 @@ const Profile* ProfileStore::find(const std::string& id) const {
     return nullptr;
 }
 
-bool ProfileStore::unsaved(const fph::Layout& live, const std::string& activeId) const {
+bool ProfileStore::unsaved(const frame_perf_overlay::Layout& live, const std::string& activeId) const {
     if (const Profile* active = find(activeId)) return !live.sameWidgets(active->layout);
     return std::none_of(profiles_.begin(), profiles_.end(), [&](const Profile& p) { return live.sameWidgets(p.layout); });
 }
@@ -111,10 +111,10 @@ Profile* ProfileStore::findMutable(const std::string& id) {
 }
 
 bool ProfileStore::write(const Profile& profile, std::string& error) {
-    return fph::atomicWriteFile(pathOf(profile.id), toJson(profile), error);
+    return frame_perf_overlay::atomicWriteFile(pathOf(profile.id), toJson(profile), error);
 }
 
-bool ProfileStore::create(const fph::Layout& layout, std::string& id, std::string& error) {
+bool ProfileStore::create(const frame_perf_overlay::Layout& layout, std::string& id, std::string& error) {
     if (!canCreate()) {
         error = "all " + std::to_string(kMaxProfiles) + " profiles are used";
         return false;
@@ -134,7 +134,7 @@ bool ProfileStore::create(const fph::Layout& layout, std::string& id, std::strin
     return true;
 }
 
-bool ProfileStore::save(const std::string& id, const fph::Layout& layout, std::string& error) {
+bool ProfileStore::save(const std::string& id, const frame_perf_overlay::Layout& layout, std::string& error) {
     Profile* p = findMutable(id);
     if (p == nullptr) {
         error = "no profile " + id;

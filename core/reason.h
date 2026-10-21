@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /**
  * Reason code carried by every metric value whose status is N/A.
@@ -28,4 +28,4 @@ enum class Reason : uint16_t {
  */
 const char* reasonText(Reason reason);
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

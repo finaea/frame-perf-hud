@@ -28,12 +28,12 @@ int failures = 0;
         }                                                                        \
     } while (false)
 
-using fph::Layout;
-using fph::WidgetInstance;
-using W = fph::WidgetType;
+using frame_perf_overlay::Layout;
+using frame_perf_overlay::WidgetInstance;
+using W = frame_perf_overlay::WidgetType;
 
 std::string makeTempDir() {
-    char tmpl[] = "/tmp/fph-profiles-XXXXXX";
+    char tmpl[] = "/tmp/frame-perf-overlay-profiles-XXXXXX";
     const char* dir = mkdtemp(tmpl);
     return dir != nullptr ? dir : "";
 }
@@ -87,7 +87,7 @@ WidgetInstance inst(W type) {
 Layout make(const std::vector<std::vector<W>>& columns) {
     Layout layout;
     for (const std::vector<W>& types : columns) {
-        fph::LayoutColumn column;
+        frame_perf_overlay::LayoutColumn column;
         for (const W t : types) column.widgets.push_back(inst(t));
         layout.columns.push_back(column);
     }
@@ -105,13 +105,13 @@ Layout variant(size_t n) {
 Layout fullLayout() {
     Layout layout;
     layout.version = 7;
-    fph::LayoutColumn a;
+    frame_perf_overlay::LayoutColumn a;
     for (const W t : {W::Cpu, W::GpuRam, W::Network}) a.widgets.push_back(inst(t));
     layout.columns.push_back(a);
-    fph::LayoutColumn b;
+    frame_perf_overlay::LayoutColumn b;
     for (const W t : {W::Frame, W::Power, W::Battery, W::Temp, W::General}) {
         WidgetInstance w = inst(t);
-        w.compact = fph::hasCompactView(t);
+        w.compact = frame_perf_overlay::hasCompactView(t);
         b.widgets.push_back(w);
     }
     layout.columns.push_back(b);
@@ -137,7 +137,7 @@ void roundTrip(const Layout& layout, const char* what) {
 }
 
 void testRoundTrip() {
-    roundTrip(fph::defaultLayout(), "default");
+    roundTrip(frame_perf_overlay::defaultLayout(), "default");
     const Layout full = fullLayout();
     roundTrip(full, "full");
     // The full layout really carries the settings (so a round trip that dropped them would fail above)
@@ -397,9 +397,9 @@ void testResetLeavesProfiles() {
     CHECK(!a.empty() && !b.empty());
     CHECK(!store.unsaved(auth.layout(), id));
 
-    const auto r = auth.trySetLayout(auth.version(), fph::defaultLayout());
+    const auto r = auth.trySetLayout(auth.version(), frame_perf_overlay::defaultLayout());
     CHECK(r.applied());
-    CHECK(auth.layout().sameWidgets(fph::defaultLayout()));
+    CHECK(auth.layout().sameWidgets(frame_perf_overlay::defaultLayout()));
     CHECK(slurp(store.pathOf("profile-1")) == a);
     CHECK(slurp(store.pathOf("profile-2")) == b);
     CHECK(store.unsaved(auth.layout(), id));
@@ -407,7 +407,7 @@ void testResetLeavesProfiles() {
     CHECK(config.activeProfile == id);  // Reset doesn't deselect it
     // a stale base is refused and leaves the live layout (Use / Reset sent a stale version)
     CHECK(auth.trySetLayout(auth.version() - 1, fullLayout()).outcome == LayoutAuthority::Outcome::Stale);
-    CHECK(auth.layout().sameWidgets(fph::defaultLayout()));
+    CHECK(auth.layout().sameWidgets(frame_perf_overlay::defaultLayout()));
     rmTree(dir);
 }
 

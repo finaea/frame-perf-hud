@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /** Most columns a layout may hold (8 × 512 px is already twice the 2048 cap). */
 constexpr size_t kMaxColumns = 8;
@@ -99,4 +99,4 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
  */
 bool parseLayoutText(const std::string& text, Layout& out, std::vector<std::string>& warnings, std::string& error);
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

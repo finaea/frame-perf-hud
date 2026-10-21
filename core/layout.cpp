@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 namespace {
 
@@ -179,4 +179,4 @@ bool parseLayoutText(const std::string& text, Layout& out, std::vector<std::stri
     return layoutFromJson(root, out, warnings, error);
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

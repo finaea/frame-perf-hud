@@ -14,4 +14,5 @@
  * @param sensors discover() already called; must outlive the scheduler
  * @param store where values go; must outlive the scheduler
  */
-void registerSystemSources(fph::Scheduler& scheduler, Sensors& sensors, fph::MetricStore& store);
+void registerSystemSources(frame_perf_overlay::Scheduler& scheduler, Sensors& sensors,
+                           frame_perf_overlay::MetricStore& store);

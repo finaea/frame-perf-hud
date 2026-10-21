@@ -16,7 +16,7 @@ public:
     /** Saves the whole config (ConfigWatcher::save). @return false + error if it failed */
     using SaveFn = std::function<bool(const Config& config, std::string& error)>;
     /** Applies a layout live: renderer + scheduler. */
-    using ApplyFn = std::function<void(const fph::Layout& layout)>;
+    using ApplyFn = std::function<void(const frame_perf_overlay::Layout& layout)>;
 
     enum class Outcome : uint8_t {
         Applied = 0,     ///< saved, version bumped, applied live
@@ -46,12 +46,12 @@ public:
      * @param layout the edited layout
      * @return Applied + new version, or Stale / SaveFailed + the current version (the layout is unchanged)
      */
-    Result trySetLayout(uint32_t baseVersion, const fph::Layout& layout);
+    Result trySetLayout(uint32_t baseVersion, const frame_perf_overlay::Layout& layout);
 
     /** @return the current layout version */
     uint32_t version() const { return config_.layout.version; }
     /** @return the current layout */
-    const fph::Layout& layout() const { return config_.layout; }
+    const frame_perf_overlay::Layout& layout() const { return config_.layout; }
 
 private:
     Config& config_;

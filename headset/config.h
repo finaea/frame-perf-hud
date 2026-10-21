@@ -68,7 +68,7 @@ struct Config {
     std::string fontPath = "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc";
     std::string boldFontPath = "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc";
     Thresholds thresholds;
-    fph::Layout layout = fph::defaultLayout();  ///< the widget grid ("layout" key)
+    frame_perf_overlay::Layout layout = frame_perf_overlay::defaultLayout();  ///< the widget grid ("layout" key)
     bool layoutInFile = false;  ///< the file had a usable "layout" (false: first run, from before the grid, unreadable)
     std::string activeProfile;  ///< the profile last used / saved ("active_profile", e.g. "profile-2"); "" = none
 };

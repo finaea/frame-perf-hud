@@ -29,10 +29,10 @@ int failures = 0;
         }                                                                        \
     } while (false)
 
-using fph::Layout;
-using fph::WidgetInstance;
-using fph::WidgetRef;
-using W = fph::WidgetType;
+using frame_perf_overlay::Layout;
+using frame_perf_overlay::WidgetInstance;
+using frame_perf_overlay::WidgetRef;
+using W = frame_perf_overlay::WidgetType;
 using Setting = LayoutEditor::Setting;
 using Outcome = LayoutEditor::CommitOutcome;
 
@@ -50,7 +50,7 @@ Layout make(const std::vector<std::vector<W>>& columns, uint32_t version = 1) {
     Layout layout;
     layout.version = version;
     for (const std::vector<W>& types : columns) {
-        fph::LayoutColumn column;
+        frame_perf_overlay::LayoutColumn column;
         for (const W t : types) column.widgets.push_back(inst(t));
         layout.columns.push_back(column);
     }
@@ -341,7 +341,7 @@ void testNewColumnAndColumnRemoval() {
     rig.ed.commitResult(Outcome::Applied);
     rig.ed.sync(rig.layout);
     CHECK(rig.ed.selected() == WidgetRef({0, 2}));
-    CHECK(fph::widgetAt(rig.layout, rig.ed.selected())->type == W::Frame);
+    CHECK(frame_perf_overlay::widgetAt(rig.layout, rig.ed.selected())->type == W::Frame);
 
     // Same, but the emptied column is the RIGHT one (the target column's index doesn't shift)
     rig.set(make({{W::Power, W::Battery}, {W::Frame}}, 11));
@@ -550,9 +550,9 @@ void testPaletteTapAdds() {
 
     // Nothing selected: the end of the shortest column
     Rig rig2(make({{W::Frame, W::Cpu, W::GpuRam}, {W::Battery}}));
-    const auto heightOf = [](const fph::LayoutColumn& column) {
+    const auto heightOf = [](const frame_perf_overlay::LayoutColumn& column) {
         int total = 0;
-        for (const WidgetInstance& w : column.widgets) total += fph::widgetHeight(w);
+        for (const WidgetInstance& w : column.widgets) total += frame_perf_overlay::widgetHeight(w);
         return total;
     };
     const int h0 = heightOf(rig2.layout.columns[0]), h1 = heightOf(rig2.layout.columns[1]);
@@ -562,11 +562,11 @@ void testPaletteTapAdds() {
     CHECK(rig2.take(base, edited));
     CHECK(edited.columns[shortest].widgets.back().type == W::Temp);
     CHECK(edited.columns[1 - shortest].widgets.size() == rig2.layout.columns[1 - shortest].widgets.size());
-    CHECK(fph::countType(edited, W::Temp) == 1);
+    CHECK(frame_perf_overlay::countType(edited, W::Temp) == 1);
 
     // The selected card's column is full: it falls back to the shortest column
     Layout fullCol = make({{}, {W::Battery}});
-    fullCol.columns[0].widgets.assign(fph::kMaxWidgetsPerColumn, inst(W::Network));
+    fullCol.columns[0].widgets.assign(frame_perf_overlay::kMaxWidgetsPerColumn, inst(W::Network));
     fullCol.columns[0].widgets[0] = inst(W::Frame);
     Rig rig3(fullCol);
     rig3.ed.sync(fullCol);
@@ -575,7 +575,7 @@ void testPaletteTapAdds() {
     CHECK(rig3.ed.selected() == WidgetRef({0, 0}));
     rig3.tap(rig3.chip(W::Power));
     CHECK(rig3.take(base, edited));
-    CHECK(edited.columns[0].widgets.size() == fph::kMaxWidgetsPerColumn);
+    CHECK(edited.columns[0].widgets.size() == frame_perf_overlay::kMaxWidgetsPerColumn);
     CHECK(columnIs(edited, 1, {W::Battery, W::Power}));
 }
 
@@ -588,7 +588,7 @@ void testTickedChipSelectsExisting() {
     rig.tap(rig.chip(W::Frame));
     CHECK(rig.nothingQueued());
     CHECK(rig.ed.selected() == WidgetRef({0, 0}));
-    CHECK(fph::countType(rig.layout, W::Frame) == 1);  // never a second one
+    CHECK(frame_perf_overlay::countType(rig.layout, W::Frame) == 1);  // never a second one
     // Dragging a ticked chip does not add a second one either (a tap-like release)
     const Pt c = rig.chip(W::Frame);
     const Pt to = rig.above({1, 0});
@@ -604,21 +604,21 @@ void testChipAddsOnce() {
     Rig rig(make({{W::Frame}, {W::Cpu}}));
     rig.tap(rig.chip(W::Network));
     CHECK(rig.apply());
-    CHECK(fph::countType(rig.layout, W::Network) == 1);
+    CHECK(frame_perf_overlay::countType(rig.layout, W::Network) == 1);
     CHECK(rig.layout.version == 2);
     rig.tap(rig.chip(W::Network));
     CHECK(rig.nothingQueued());
-    CHECK(fph::countType(rig.layout, W::Network) == 1);
+    CHECK(frame_perf_overlay::countType(rig.layout, W::Network) == 1);
     const WidgetRef at = rig.ed.selected();
-    CHECK(at.valid() && fph::widgetAt(rig.layout, at)->type == W::Network);
+    CHECK(at.valid() && frame_perf_overlay::widgetAt(rig.layout, at)->type == W::Network);
 }
 
 void testUnofferedChips() {
     // Only the widgets this version has get a chip; None and the reserved numbers don't
-    CHECK(!fph::isOfferedInPalette(W::None));
-    for (const int reserved : {7, 8, 10}) CHECK(!fph::isOfferedInPalette(static_cast<W>(reserved)));
+    CHECK(!frame_perf_overlay::isOfferedInPalette(W::None));
+    for (const int reserved : {7, 8, 10}) CHECK(!frame_perf_overlay::isOfferedInPalette(static_cast<W>(reserved)));
     Rig rig(baseLayout(2));
-    for (const auto& chip : rig.ed.chips()) CHECK(fph::isOfferedInPalette(chip.first));
+    for (const auto& chip : rig.ed.chips()) CHECK(frame_perf_overlay::isOfferedInPalette(chip.first));
     for (const W type : {W::Frame, W::Cpu, W::GpuRam, W::Power, W::Battery, W::Temp, W::Network, W::General}) {
         bool found = false;
         for (const auto& chip : rig.ed.chips()) found = found || chip.first == type;
@@ -642,7 +642,7 @@ void testChipDrag() {
     }
     CHECK(rig.take(base, edited) && base == 8);
     CHECK(columnIs(edited, 1, {W::Battery, W::Power, W::Temp}));
-    CHECK(fph::countType(edited, W::Power) == 1);
+    CHECK(frame_perf_overlay::countType(edited, W::Power) == 1);
     // Into the new column
     rig.set(make({{W::Frame, W::Cpu}, {W::Battery, W::Temp}}, 8));
     rig.drag(rig.chip(W::Power), rig.newLane());
@@ -657,13 +657,13 @@ void testChipDrag() {
 void testLimitsInEditor() {
     // Every column full and 8 columns: nothing is addable, chips do nothing
     Layout packed = make({}, 3);
-    for (size_t c = 0; c < fph::kMaxColumns; ++c) {
-        fph::LayoutColumn column;
-        column.widgets.assign(fph::kMaxWidgetsPerColumn, inst(W::Network));
+    for (size_t c = 0; c < frame_perf_overlay::kMaxColumns; ++c) {
+        frame_perf_overlay::LayoutColumn column;
+        column.widgets.assign(frame_perf_overlay::kMaxWidgetsPerColumn, inst(W::Network));
         packed.columns.push_back(column);
     }
     Rig rig(packed);
-    CHECK(rig.ed.lanes().size() == fph::kMaxColumns);
+    CHECK(rig.ed.lanes().size() == frame_perf_overlay::kMaxColumns);
     rig.tap(rig.chip(W::Frame));
     CHECK(rig.nothingQueued());
     rig.tap(rig.chip(W::Network));
@@ -683,8 +683,8 @@ void testLimitsInEditor() {
     uint32_t base = 0;
     Layout edited;
     CHECK(rig.take(base, edited));
-    CHECK(edited.columns[7].widgets.size() == fph::kMaxWidgetsPerColumn);
-    CHECK(fph::countType(edited, W::Frame) == 1);
+    CHECK(edited.columns[7].widgets.size() == frame_perf_overlay::kMaxWidgetsPerColumn);
+    CHECK(frame_perf_overlay::countType(edited, W::Frame) == 1);
 }
 
 // ---- The selected widget's settings ----
@@ -697,7 +697,7 @@ bool pressSetting(Rig& rig, Setting s, WidgetRef ref, WidgetInstance& out) {
     uint32_t base = 0;
     Layout edited;
     if (!rig.take(base, edited)) return false;
-    out = *fph::widgetAt(edited, ref);
+    out = *frame_perf_overlay::widgetAt(edited, ref);
     return true;
 }
 
@@ -706,7 +706,7 @@ void testSettingsButtons() {
     for (const W type : {W::Frame, W::Cpu, W::GpuRam, W::Power, W::Battery, W::Temp, W::Network, W::General}) {
         Rig rig(make({{type}}));
         rig.tap(rig.centre({0, 0}));
-        const bool compact = fph::hasCompactView(type);
+        const bool compact = frame_perf_overlay::hasCompactView(type);
         CHECK(rig.hasSetting(Setting::Remove));
         CHECK(rig.hasSetting(Setting::CompactOn) == compact && rig.hasSetting(Setting::CompactOff) == compact);
         CHECK(rig.ed.settingButtons().size() == (compact ? 3u : 1u));
@@ -859,7 +859,7 @@ void testPanelLeaveCancelsDrag() {
         std::printf("  (panel commit: got=%d base=%u busy=%d)\n", got, base, panel.editorBusy());
     }
     CHECK(got && base == 9);
-    CHECK(fph::countType(edited, W::Frame) == 1 && edited.columns[0].widgets.size() == 3);
+    CHECK(frame_perf_overlay::countType(edited, W::Frame) == 1 && edited.columns[0].widgets.size() == 3);
 
     // Switching to the placement page also drops a press
     panel.pointerDown(start.x, start.y, 3);
@@ -1188,7 +1188,7 @@ void testChipLabelSizes() {
         } else {
             WidgetInstance w;
             w.type = type;
-            label = fph::widgetTitle(w, fph::WidgetLanguage::En);
+            label = frame_perf_overlay::widgetTitle(w, frame_perf_overlay::WidgetLanguage::En);
         }
         // a present chip: check mark + bold
         CHECK(fitSize(pen, label, 17, 11, chip.second.w - 20 - 20, true) > 11);

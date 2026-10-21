@@ -5,7 +5,7 @@
 
 #include <string>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /**
  * Replaces a file atomically: `<path>.tmp` is written, fsync'd (FlushFileBuffers on Windows) and renamed
@@ -24,4 +24,4 @@ bool atomicWriteFile(const std::string& path, const std::string& content, std::s
  */
 bool makeDirectories(const std::string& dir);
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

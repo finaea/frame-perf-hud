@@ -3,7 +3,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 MetricStore::MetricStore() : MetricStore(registry()) {}
 
@@ -127,4 +127,4 @@ std::string MetricStore::dump(double now) const {
     return out;
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

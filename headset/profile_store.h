@@ -13,7 +13,7 @@
 struct Profile {
     std::string id;      ///< "profile-3": the file name without .json; stays the same through renames
     std::string name;    ///< shown on the tab ("Profile 3" until renamed)
-    fph::Layout layout;  ///< its version field is meaningless (Use gives the live layout a new version)
+    frame_perf_overlay::Layout layout;  ///< its version field is meaningless (Use gives the live layout a new version)
 };
 
 /** The profiles folder. Single-threaded (the main loop). */
@@ -45,16 +45,16 @@ public:
      * @param live the live layout
      * @param activeId config.activeProfile ("" or an id that's gone = no active profile)
      */
-    bool unsaved(const fph::Layout& live, const std::string& activeId) const;
+    bool unsaved(const frame_perf_overlay::Layout& live, const std::string& activeId) const;
 
     /**
      * Saves layout as a new profile, "Profile N" with N the lowest free number.
      * @param id the new profile's id
      * @return false with error if all 8 are used or the file can't be written
      */
-    bool create(const fph::Layout& layout, std::string& id, std::string& error);
+    bool create(const frame_perf_overlay::Layout& layout, std::string& id, std::string& error);
     /** Overwrites a profile's layout. @return false with error if it doesn't exist or can't be written */
-    bool save(const std::string& id, const fph::Layout& layout, std::string& error);
+    bool save(const std::string& id, const frame_perf_overlay::Layout& layout, std::string& error);
     /** Renames a profile (trimmed, cut to kMaxNameBytes; empty = unchanged). @return false with error as above */
     bool rename(const std::string& id, const std::string& name, std::string& error);
     /** Deletes a profile's file. @return false with error if it doesn't exist or can't be deleted */

@@ -3,7 +3,7 @@
 #include <map>
 #include <set>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 namespace {
 
@@ -39,7 +39,6 @@ const std::vector<MetricDef> kRegistry = {
     {metric::kCpuUsagePct, "cpu.usage_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
     {metric::kCpuMaxCorePct, "cpu.max_core_pct", "%", W::Cpu, S::CpuLoad, kCpuMs, T::F32},
     {metric::kCpuFastestClockMhz, "cpu.fastest_clock_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
-    {metric::kCpuBigCoreClockMhz, "cpu.big_core_clock_mhz", "MHz", W::Cpu, S::CpuClock, kCpuMs, T::F32},
     // GPU & RAM
     // GPU load = frame GPU ms × app fps, written by the FrameTiming reader (core/gpu_load.h). Its source is
     // FrameTiming, so a GPU & RAM widget alone keeps frame timing read
@@ -173,4 +172,4 @@ const char* sourceName(SourceId source) {
     return "unknown";
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

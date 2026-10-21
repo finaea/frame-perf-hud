@@ -1,6 +1,6 @@
 #include "reason.h"
 
-namespace fph {
+namespace frame_perf_overlay {
 
 const char* reasonText(Reason reason) {
     switch (reason) {
@@ -17,4 +17,4 @@ const char* reasonText(Reason reason) {
     return "unknown";
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

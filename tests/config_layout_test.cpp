@@ -31,7 +31,7 @@ int failures = 0;
         }                                                                        \
     } while (false)
 
-using namespace fph;
+using namespace frame_perf_overlay;
 using W = WidgetType;
 
 std::string tempDir;
@@ -374,8 +374,8 @@ void testUpdateIntervalFromLegacyConfig() {
 }  // namespace
 
 int main() {
-    char pattern[] = "/tmp/fph-config-tests/cfg-XXXXXX";
-    makeDirectories("/tmp/fph-config-tests");
+    char pattern[] = "/tmp/frame-perf-overlay-config-tests/cfg-XXXXXX";
+    makeDirectories("/tmp/frame-perf-overlay-config-tests");
     const char* dir = mkdtemp(pattern);
     if (dir == nullptr) {
         std::printf("mkdtemp failed\n");

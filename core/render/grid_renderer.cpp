@@ -8,7 +8,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 namespace {
 
@@ -220,4 +220,4 @@ bool GridRenderer::writePng(const std::string& path) const {
     return surface_ != nullptr && cairo_surface_write_to_png(surface_, path.c_str()) == CAIRO_STATUS_SUCCESS;
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

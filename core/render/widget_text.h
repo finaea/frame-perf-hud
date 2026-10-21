@@ -5,7 +5,7 @@
 
 #include <string>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /** The widgets' language (the headset maps its Language setting onto this). */
 enum class WidgetLanguage { Ja, En };
@@ -28,8 +28,8 @@ struct WidgetText {
     const char* reproj;     ///< followed by %
     const char* dropped;    ///< followed by a count
     // CPU
-    const char* maxCore;  ///< followed by %
-    const char* bigCore;  ///< followed by the big core's clock (GHz)
+    const char* maxCoreOpen;   ///< before the busiest core's % (" (max core ")
+    const char* maxCoreClose;  ///< after it (")")
     // GPU & RAM
     const char* gpuLoad;  ///< after the big %: frame GPU ms × app fps, not the whole GPU (core/gpu_load.h)
     const char* clock;
@@ -82,4 +82,4 @@ const WidgetText& widgetText(WidgetLanguage language);
  */
 std::string throttleBadgeText(const WidgetText& t, double hz, int throttled);
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

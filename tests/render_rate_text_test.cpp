@@ -10,7 +10,7 @@ namespace {
 int failures = 0;
 
 void expect(double mbps, const char* value, const char* unit) {
-    const fph::RateText t = fph::formatRate(mbps);
+    const frame_perf_overlay::RateText t = frame_perf_overlay::formatRate(mbps);
     if (t.value != value || t.unit != unit) {
         std::printf("FAIL formatRate(%g) = \"%s%s\", want \"%s%s\"\n", mbps, t.value.c_str(), t.unit.c_str(), value, unit);
         ++failures;

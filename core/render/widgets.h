@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /** Width of one grid column (px): the fixed panel's width. */
 constexpr int kColumnWidth = 512;
@@ -103,4 +103,4 @@ void pushWidgetHistory(const WidgetInstance& w, const WidgetContext& ctx, Widget
 void drawWidgetDynamic(const Pen& pen, double x, double y, const WidgetInstance& w, const WidgetContext& ctx,
                        const WidgetHistory& history);
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

@@ -27,13 +27,13 @@ The default layout is one column with what the panel has always shown, top to bo
 | Frame | The app's frame rate and the display refresh rate (e.g. `72 fps / 90Hz`) | GPU and CPU time per frame (ms), reprojection ratio, dropped frames | Frame rate, with the refresh rate as a dotted line. A yellow badge shows when SteamVR is holding the app at half (or a third) of the refresh rate |
 | Power | Power draw of the main supply rail (vph, W) | Sum of the rails measured under it | Main rail power, with the warning thresholds |
 | Temp | CPU temperature (hottest core) | GPU, DDR, fan speed; battery and near the display / exhaust / heat sink | CPU and GPU, with the warning thresholds. A red badge and a red frame around the card appear while heat is throttling the CPU or GPU |
-| CPU | Usage, overall and the busiest core | Fastest cluster clock, big core clock | |
+| CPU | Usage, overall and the busiest core (in brackets) | Fastest cluster clock, on the same line | |
 | GPU & RAM | GPU load of the VR app and SteamVR (%) | GPU clock (and its max), memory used / total | GPU load |
 | Network | Wireless. **Dongle** when a PC is on the Steam Link dongle; otherwise **Wi-Fi** for the access point the headset is joined to (e.g. your home Wi-Fi) | Signal strength (Wi-Fi icon and dBm), data actually flowing (↓ into the headset, ↑ out of it) and link rates. A grey crossed-out icon means neither is connected | |
 | Battery | Headset battery (%) and its state (a bolt while charging) | Power into / out of the battery (W); the full card adds the voltage × current line | |
 | General | Left and right controller batteries (a bolt while charging) | The time on the headset's clock (24-hour by default; 12-hour or off in the settings) | |
 
-Battery and Temp have a **Compact** card: Battery keeps the % and the W line, Temp drops the graph and the extra temperatures.
+Battery and Temp have a **Compact** card: Battery keeps the % and the W line, Temp keeps its graph and drops DDR and the other temperatures.
 
 Numbers over a threshold turn yellow, and red past a second threshold. The thresholds can be changed in the settings file.
 

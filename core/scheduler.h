@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 /** The signals that decide whether anyone is looking. */
 struct DemandInputs {
@@ -128,4 +128,4 @@ private:
     void recompute();
 };
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

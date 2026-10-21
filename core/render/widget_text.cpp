@@ -2,7 +2,7 @@
 
 #include <cstdio>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 namespace {
 
@@ -24,8 +24,8 @@ const WidgetText kJapanese = {
     "再投影 ",
     "落ち ",
     // CPU
-    "最大コア ",
-    "big core ",  // TODO(ja)
+    "（最大コア ",
+    "）",
     // GPU & RAM
     "load",  // TODO(ja)
     "Clock ",  // TODO(ja)
@@ -82,8 +82,8 @@ const WidgetText kEnglish = {
     "Reproj ",
     "Dropped ",
     // CPU
-    "max core ",
-    "big core ",
+    " (max core ",
+    ")",
     // GPU & RAM
     "load",
     "Clock ",
@@ -136,4 +136,4 @@ std::string throttleBadgeText(const WidgetText& t, double hz, int throttled) {
     return std::string(hzText) + "Hz の" + (throttled == 1 ? std::string("半分") : fraction) + "に制限（再投影）";
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

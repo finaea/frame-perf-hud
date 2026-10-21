@@ -6,7 +6,7 @@
 LayoutAuthority::LayoutAuthority(Config& config, SaveFn save, ApplyFn apply)
     : config_(config), save_(std::move(save)), apply_(std::move(apply)) {}
 
-LayoutAuthority::Result LayoutAuthority::trySetLayout(uint32_t baseVersion, const fph::Layout& layout) {
+LayoutAuthority::Result LayoutAuthority::trySetLayout(uint32_t baseVersion, const frame_perf_overlay::Layout& layout) {
     Result result;
     const uint32_t current = config_.layout.version;
     if (baseVersion != current) {

@@ -9,7 +9,7 @@
 #include <cstdlib>
 #include <cctype>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 namespace {
 
@@ -440,29 +440,20 @@ void drawFrame(const Pen& pen, double x, double y, const WidgetContext& ctx, con
 void drawCpu(const Pen& pen, double x, double y, const WidgetContext& ctx) {
     const Thresholds& th = ctx.thresholds;
     const WidgetText& t = texts(ctx);
-    const double cx = x + kInX;
-    const double right = x + kInR;
     const double top = y + kTop;
-    // Header: total, busiest core
-    const double maxCore = f(ctx, kCpuMaxCorePct);
-    double hx = right;
-    hx -= pen.text(hx, top + 17, num(maxCore, 0) + "%", 15,
-                   colorOf(levelOf(maxCore, th.cpuWarnPct, th.cpuCritPct)), false, true);
-    hx -= pen.text(hx, top + 17, std::string("  ") + t.maxCore, 14, kTextMuted, false, true);
-    if (ok(ctx, kCpuUsagePct)) {
-        pen.text(hx, top + 17, num(f(ctx, kCpuUsagePct), 0) + "%", 17, kText, true, true);
-    } else {
-        pen.text(hx, top + 17, naText(ctx, kCpuUsagePct), 14, kTextMuted, false, true);
-    }
-    // Clocks: the fastest cluster now, and the big core
-    double lx = cx + 8;
+    // The fixed panel's CPU line: "5%  (max core 43%)  3.05GHz" (usage, the busiest core, the fastest cluster)
+    double lx = x + kInX + 8;
     const double ly = top + 46;
-    lx += pen.text(lx, ly, num(f(ctx, kCpuFastestClockMhz) / 1000.0, 2), 17, kText, true);
-    lx += pen.text(lx, ly, " GHz", 15, kTextMuted);
-    lx += 16;
-    lx += pen.text(lx, ly, t.bigCore, 15, kTextMuted);
-    lx += pen.text(lx, ly, num(f(ctx, kCpuBigCoreClockMhz) / 1000.0, 2), 15, kText);
-    pen.text(lx, ly, " GHz", 15, kTextMuted);
+    if (ok(ctx, kCpuUsagePct)) {
+        lx += pen.text(lx, ly, num(f(ctx, kCpuUsagePct), 0) + "%", 17, kText, true);
+    } else {
+        lx += pen.text(lx, ly, naText(ctx, kCpuUsagePct), 15, kTextMuted);
+    }
+    const double maxCore = f(ctx, kCpuMaxCorePct);
+    lx += pen.text(lx, ly, t.maxCoreOpen, 15, kTextMuted);
+    lx += pen.text(lx, ly, num(maxCore, 0) + "%", 15, colorOf(levelOf(maxCore, th.cpuWarnPct, th.cpuCritPct)));
+    lx += pen.text(lx, ly, t.maxCoreClose, 15, kTextMuted);
+    pen.text(lx + 4, ly, num(f(ctx, kCpuFastestClockMhz) / 1000.0, 2) + "GHz", 16, kText);
 }
 
 void drawGpuRam(const Pen& pen, double x, double y, const WidgetContext& ctx, const WidgetHistory& h) {
@@ -577,7 +568,7 @@ void drawTemp(const Pen& pen, double x, double y, const WidgetInstance& w, const
     pen.dot(cx + 4, top + 67, kGpu);
     const double gw = pen.text(cx + 14, top + 72, "GPU " + num(gpu, 0) + t.celsius, 15,
                                colorOf(levelOf(gpu, th.tempWarnC, th.tempCritC)));
-    if (!w.compact)  // Compact is CPU / GPU / fan only
+    if (!w.compact)  // Compact is CPU / GPU / fan and the graph: no DDR, no other temperatures
         pen.text(cx + 14 + gw + 10, top + 72, std::string(t.tDdr) + " " + num(f(ctx, kTempDdrC), 0) + t.celsius, 15,
                  kTextMuted);
     pen.text(cx + 14, top + 90, std::string(t.fan) + grouped(f(ctx, kFanRpm)) + " rpm", 15, kTextMuted);
@@ -586,13 +577,6 @@ void drawTemp(const Pen& pen, double x, double y, const WidgetInstance& w, const
     const bool gpuThrottle = i(ctx, kThrottleGpu) != 0;
     const std::string throttleText =
         std::string(t.thermalLimit) + (cpuThrottle && gpuThrottle ? t.cpuAndGpu : (cpuThrottle ? "CPU" : "GPU"));
-    if (w.compact) {  // CPU / GPU °C and the fan only; the badge sits where the graph would be
-        if (cpuThrottle || gpuThrottle) {
-            strokeRounded(pen, x, y, kCardW, widgetHeight(w), 12, kDanger, 3.0);
-            drawBadge(pen, x + kInR, top + 4, throttleText, kDanger);
-        }
-        return;
-    }
 
     const double dataMin = std::fmin(h.a.minValue(), h.b.minValue());
     const double dataMax = std::fmax(h.a.maxValue(), h.b.maxValue());
@@ -605,7 +589,7 @@ void drawTemp(const Pen& pen, double x, double y, const WidgetInstance& w, const
     drawSeries(pen, area, h.b, kGpu);
     drawSeries(pen, area, h.a, kAccent);
 
-    // The other temperatures, three per row
+    // The other temperatures, three per row (full card only)
     const struct {
         const char* label;
         uint16_t id;
@@ -614,7 +598,7 @@ void drawTemp(const Pen& pen, double x, double y, const WidgetInstance& w, const
         {t.tHeatsink, kTempHeatsinkC},
     };
     const double colW = (kInR - kInX) / 3;
-    for (int k = 0; k < kTempSpots; ++k) {
+    for (int k = 0; k < (w.compact ? 0 : kTempSpots); ++k) {
         const double sx = cx + (k % 3) * colW;
         const double sy = top + 114 + (k / 3) * kLineH;
         const double v = f(ctx, kSpots[k].id);
@@ -768,7 +752,7 @@ const char* widgetTitle(const WidgetInstance& w, WidgetLanguage language) {
 void drawWidgetStatic(const Pen& pen, double x, double y, const WidgetInstance& w, WidgetLanguage language,
                       int heightOverride) {
     staticCard(pen, x, y, heightOverride > 0 ? heightOverride : widgetHeight(w));
-    if (hasGraph(w.type) && !(w.type == WidgetType::Temp && w.compact)) staticGraphBed(pen, x, y);
+    if (hasGraph(w.type)) staticGraphBed(pen, x, y);
     staticTitle(pen, x, y, titleOf(w, widgetText(language)));
 }
 
@@ -801,4 +785,4 @@ void drawWidgetDynamic(const Pen& pen, double x, double y, const WidgetInstance&
     }
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

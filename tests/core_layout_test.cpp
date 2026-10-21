@@ -18,7 +18,7 @@ int failures = 0;
         }                                                                        \
     } while (false)
 
-using namespace fph;
+using namespace frame_perf_overlay;
 using W = WidgetType;
 
 WidgetInstance inst(W type, bool compact = false) {

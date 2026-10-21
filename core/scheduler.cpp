@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <limits>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 namespace {
 
@@ -159,4 +159,4 @@ std::string Scheduler::dump(double now) const {
     return out;
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

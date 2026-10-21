@@ -3,14 +3,14 @@
 #include <cmath>
 #include <ctime>
 
-using fph::Reason;
-using fph::SourceId;
-namespace metric = fph::metric;
+using frame_perf_overlay::Reason;
+using frame_perf_overlay::SourceId;
+namespace metric = frame_perf_overlay::metric;
 
 namespace {
 
 uint32_t batteryStatusCode(const std::string& status) {
-    using fph::BatteryStatus;
+    using frame_perf_overlay::BatteryStatus;
     if (status == "Charging") return static_cast<uint32_t>(BatteryStatus::Charging);
     if (status == "Discharging") return static_cast<uint32_t>(BatteryStatus::Discharging);
     if (status == "Full") return static_cast<uint32_t>(BatteryStatus::Full);
@@ -18,7 +18,7 @@ uint32_t batteryStatusCode(const std::string& status) {
     return static_cast<uint32_t>(BatteryStatus::Unknown);
 }
 
-void storePower(fph::MetricStore& st, const SensorSample& s, double now) {
+void storePower(frame_perf_overlay::MetricStore& st, const SensorSample& s, double now) {
     bool haveVph = false;
     for (const PowerChannel& ch : s.powerChannels) haveVph = haveVph || ch.label == "vph";
     st.setF32(metric::kPowerVphW, s.powerMainW, now, haveVph ? Reason::ReadFailed : Reason::SensorMissing);
@@ -27,7 +27,7 @@ void storePower(fph::MetricStore& st, const SensorSample& s, double now) {
     st.setF32(metric::kPowerRailsW, s.powerRailsW, now, haveRails ? Reason::ReadFailed : Reason::SensorMissing);
 }
 
-void storeBattery(fph::MetricStore& st, const SensorSample& s, double now) {
+void storeBattery(frame_perf_overlay::MetricStore& st, const SensorSample& s, double now) {
     const Reason bat = s.haveBattery ? Reason::ReadFailed : Reason::SensorMissing;
     st.setF32(metric::kBatteryPct, s.batteryPct, now, bat);
     st.setF32(metric::kBatteryVoltageV, s.batteryVoltageV, now, bat);
@@ -47,7 +47,7 @@ void storeBattery(fph::MetricStore& st, const SensorSample& s, double now) {
     st.setF32(metric::kBatteryPowerW, s.batteryVoltageV * s.batteryCurrentMa / 1000.0, now, bat);
 }
 
-void storeWifi(fph::MetricStore& st, const WifiInfo& w, bool resumed, double now) {
+void storeWifi(frame_perf_overlay::MetricStore& st, const WifiInfo& w, bool resumed, double now) {
     st.setEnum(metric::kNetInterfaceUp, w.interfaceUp ? 1 : 0, now);
     st.setEnum(metric::kNetConnected, w.connected ? 1 : 0, now);
     st.setEnum(metric::kNetHomeWifi, w.homeWifi ? 1 : 0, now);
@@ -63,8 +63,9 @@ void storeWifi(fph::MetricStore& st, const WifiInfo& w, bool resumed, double now
 
 }  // namespace
 
-void registerSystemSources(fph::Scheduler& scheduler, Sensors& sensors, fph::MetricStore& store) {
-    fph::MetricStore& st = store;
+void registerSystemSources(frame_perf_overlay::Scheduler& scheduler, Sensors& sensors,
+                           frame_perf_overlay::MetricStore& store) {
+    frame_perf_overlay::MetricStore& st = store;
     Sensors& se = sensors;
 
     scheduler.addSource(SourceId::CpuLoad, [&st, &se](double now, bool resumed) {
@@ -80,7 +81,6 @@ void registerSystemSources(fph::Scheduler& scheduler, Sensors& sensors, fph::Met
         SensorSample s;
         se.readCpuClocks(s);
         st.setF32(metric::kCpuFastestClockMhz, s.cpuFreqMHz, now);
-        st.setF32(metric::kCpuBigCoreClockMhz, s.cpuBigFreqMHz, now);
     });
     scheduler.addSource(SourceId::GpuClock, [&st, &se](double now, bool) {
         SensorSample s;

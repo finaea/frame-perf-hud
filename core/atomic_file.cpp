@@ -15,7 +15,7 @@
 #include <unistd.h>
 #endif
 
-namespace fph {
+namespace frame_perf_overlay {
 
 namespace {
 
@@ -130,4 +130,4 @@ bool atomicWriteFile(const std::string& path, const std::string& content, std::s
 #endif
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay

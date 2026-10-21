@@ -3,7 +3,7 @@
 
 #include <algorithm>
 
-namespace fph {
+namespace frame_perf_overlay {
 
 bool isRepeatable(WidgetType /*type*/) {
     return false;  // every widget shows one thing, so a second copy would only repeat it
@@ -147,4 +147,4 @@ int dropSlot(const std::vector<double>& centers, double y) {
     return slot;
 }
 
-}  // namespace fph
+}  // namespace frame_perf_overlay
