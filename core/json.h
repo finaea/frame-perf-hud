@@ -51,3 +51,18 @@ bool parseJson(const std::string& source, JsonValue& out, std::string& error);
  * @return エスケープ済みの "..."
  */
 std::string jsonString(const std::string& text);
+
+/**
+ * 正しい UTF-8 か（RFC 3629: 最短の形、サロゲートなし、U+10FFFF まで）。
+ * @param text 文字列
+ * @param size バイト数
+ * @return 正しければ true
+ */
+bool isValidUtf8(const char* text, size_t size);
+
+/**
+ * 壊れた UTF-8（はぐれたバイト・途中で切れた文字・長すぎる形・サロゲート）を、1 バイトずつ U+FFFD に置き換える。
+ * 正しい文字列は何もせずに返す（確かめるだけ）。
+ * @param text 書き換える文字列
+ */
+void makeValidUtf8(std::string& text);

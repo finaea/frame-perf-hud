@@ -250,17 +250,18 @@ void testUpdateInterval() {
         r.look();
         r.sched.setEnabledWidgets({W::Cpu});
         r.sched.setUpdateInterval(5.0);
-        r.sched.runDue(0.0);
-        CHECK(r.sched.readCount(S::CpuLoad) == 1);
+        r.sched.runDue(0.0);  // the baseline read, then the quick refill read
+        r.sched.runDue(0.25);
+        CHECK(r.sched.readCount(S::CpuLoad) == 2);
         r.sched.runDue(1.0);
-        CHECK(r.sched.readCount(S::CpuLoad) == 1);  // 5 s: not due
+        CHECK(r.sched.readCount(S::CpuLoad) == 2);  // 5 s: not due
         r.sched.setUpdateInterval(0.1);
         r.sched.runDue(1.05);
-        CHECK(r.sched.readCount(S::CpuLoad) == 2);  // lastRead (0) + 0.1 has long passed
+        CHECK(r.sched.readCount(S::CpuLoad) == 3);  // lastRead (0.25) + 0.1 has long passed
         r.sched.runDue(1.06);  // just read at 1.05: the next one is a tick away
-        CHECK(r.sched.readCount(S::CpuLoad) == 2);
-        r.sched.runDue(1.20);
         CHECK(r.sched.readCount(S::CpuLoad) == 3);
+        r.sched.runDue(1.20);
+        CHECK(r.sched.readCount(S::CpuLoad) == 4);
     }
 
     // Zero and negative are ignored
@@ -292,6 +293,70 @@ void testUpdateInterval() {
     }
 }
 
+// A delta source (CPU %) shows nothing on its first read after a pause, so the second one comes within 0.25 s
+// instead of a whole interval later; the other sources keep the full interval
+void testResumeRefill() {
+    Rig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Cpu, W::GpuRam});
+    r.sched.setUpdateInterval(2.0);  // CpuLoad: 2 s; GpuClock stays a fixed 2 s
+    double now = 0.0;
+    for (int i = 0; i < 4; ++i, now += 0.05) r.sched.runDue(now);  // polled every 50 ms
+    CHECK(r.c.cpu == 1 && r.c.gpu == 1);                           // the first reads, both "resumed"
+    CHECK(r.c.cpuResumed.size() == 1 && r.c.cpuResumed[0]);
+    for (int i = 0; i < 4; ++i, now += 0.05) r.sched.runDue(now);  // now = 0.4: past 0.25
+    CHECK(r.c.cpu == 2 && !r.c.lastCpuResumed);                    // the refill read, a real delta
+    CHECK(r.c.gpu == 1);                                           // GpuClock waits for its 2 s
+    for (; now < 1.9; now += 0.05) r.sched.runDue(now);
+    CHECK(r.c.cpu == 2 && r.c.gpu == 1);                           // back to the normal interval
+    for (; now < 2.4; now += 0.05) r.sched.runDue(now);
+    CHECK(r.c.cpu == 3 && r.c.gpu == 2);
+
+    // A pause and a resume does it again; an interval below 0.25 s is simply the interval
+    r.sched.setDemand(DemandInputs {});
+    r.look();
+    r.c.cpuResumed.clear();
+    const int before = r.c.cpu;
+    const double start = now;
+    for (; now < start + 0.4; now += 0.05) r.sched.runDue(now);
+    CHECK(r.c.cpu == before + 2);
+    CHECK(r.c.cpuResumed.size() == 2 && r.c.cpuResumed[0] && !r.c.cpuResumed[1]);
+    r.sched.setUpdateInterval(0.1);
+    r.sched.setDemand(DemandInputs {});
+    r.look();
+    r.c.cpuResumed.clear();
+    const int before2 = r.c.cpu;
+    const double start2 = now;
+    for (; now < start2 + 0.12; now += 0.05) r.sched.runDue(now);
+    CHECK(r.c.cpu - before2 >= 2);  // second read within one 0.1 s interval, not 0.25
+}
+
+// The quick refill read doesn't move the cadence: the reads after it stay on the grid of the first one
+void testResumeRefillKeepsGrid() {
+    Rig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Cpu});
+    r.sched.setUpdateInterval(1.0);
+    std::vector<double> times;  // when CpuLoad was read, to the polling step (50 ms)
+    int seen = 0;
+    for (int i = 0; i <= 84; ++i) {  // 0 .. 4.2 s, polled every 50 ms
+        const double t = i * 0.05;
+        r.sched.runDue(t);
+        if (r.c.cpu != seen) {
+            seen = r.c.cpu;
+            times.push_back(t);
+        }
+    }
+    const double expected[] = {0.0, 0.25, 1.0, 2.0, 3.0, 4.0};  // first read, refill, then the 1 s grid
+    CHECK(times.size() == 6);
+    for (size_t k = 0; k < times.size() && k < 6; ++k) {
+        if (std::fabs(times[k] - expected[k]) > 0.06) {
+            std::printf("read %zu at %.2f, expected about %.2f\n", k, times[k], expected[k]);
+            CHECK(false);
+        }
+    }
+}
+
 void testRecomputeCount() {
     Rig r;
     const uint64_t start = r.sched.recomputeCount();
@@ -319,6 +384,8 @@ int main() {
     testResumed();
     testIntervals();
     testUpdateInterval();
+    testResumeRefill();
+    testResumeRefillKeepsGrid();
     testRecomputeCount();
     if (failures) std::printf("%d check(s) failed\n", failures);
     return failures ? 1 : 0;

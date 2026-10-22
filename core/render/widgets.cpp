@@ -628,11 +628,14 @@ void drawNetwork(const Pen& pen, double x, double y, const WidgetContext& ctx) {
     // Which link, after the title: the dongle if it has a peer, otherwise home Wi-Fi
     const bool dongle = connected && i(ctx, kNetHomeWifi) == 0;
     pen.text(cx + pen.measure(t.network, 16) + 8, top + 17, dongle ? t.linkDongle : t.linkHome, 13, kTextMuted);
-    if (!up) {
+    if (!ok(ctx, kNetInterfaceUp)) {  // not read (yet), or the read failed
         drawWifiIcon(pen, right - 26, top + 18, 0, kTextMuted, true);
-        const std::string why = ok(ctx, kNetInterfaceUp) ? std::string(t.naPrefix) + reasonText(Reason::SensorMissing)
-                                                         : naText(ctx, kNetInterfaceUp);
-        pen.text(cx + 8, top + 44, why, 15, kTextMuted);
+        pen.text(cx + 8, top + 44, naText(ctx, kNetInterfaceUp), 15, kTextMuted);
+        return;
+    }
+    if (!up) {  // no dongle AP and no home Wi-Fi station: like the fixed panel, "Not connected"
+        drawWifiIcon(pen, right - 26, top + 18, 0, kTextMuted, true);
+        pen.text(cx + 8, top + 44, t.notConnected, 16, kTextMuted);
         return;
     }
     const double dbm = f(ctx, kNetSignalDbm);

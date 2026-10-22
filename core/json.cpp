@@ -186,7 +186,10 @@ private:
         out.clear();
         while (pos_ < src_.size()) {
             const char c = src_[pos_++];
-            if (c == '"') return true;
+            if (c == '"') {
+                makeValidUtf8(out);  // 生のバイトの壊れた UTF-8 も U+FFFD に
+                return true;
+            }
             if (c != '\\') {
                 out += c;
                 continue;
@@ -205,13 +208,23 @@ private:
                 case 'u': {
                     unsigned code = 0;
                     if (!parseHex4(code)) return false;
-                    // サロゲートペア
-                    if (code >= 0xD800 && code <= 0xDBFF && pos_ + 6 <= src_.size() && src_[pos_] == '\\' &&
-                        src_[pos_ + 1] == 'u') {
-                        pos_ += 2;
+                    // サロゲートペア。対になっていないサロゲートは U+FFFD にする（UTF-8 にできないので）。
+                    // 後ろの \uXXXX が下位サロゲートでなければ読み戻し、普通の文字として次に読む
+                    if (code >= 0xD800 && code <= 0xDBFF) {
+                        const size_t mark = pos_;
                         unsigned low = 0;
-                        if (!parseHex4(low)) return false;
-                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        if (pos_ + 6 <= src_.size() && src_[pos_] == '\\' && src_[pos_ + 1] == 'u') {
+                            pos_ += 2;
+                            if (!parseHex4(low)) return false;
+                        }
+                        if (low >= 0xDC00 && low <= 0xDFFF) {
+                            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        } else {
+                            pos_ = mark;
+                            code = kReplacement;
+                        }
+                    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+                        code = kReplacement;
                     }
                     appendUtf8(code, out);
                     break;
@@ -221,6 +234,9 @@ private:
         }
         return fail("文字列が閉じていません");
     }
+
+    /** 置き換え文字（U+FFFD）。壊れた文字はこれにする（1 文字のために設定ファイル全体を捨てない）。 */
+    static constexpr unsigned kReplacement = 0xFFFD;
 
     /**
      * 配列を解析する（先頭の [ から）。
@@ -313,4 +329,69 @@ std::string jsonString(const std::string& text) {
         }
     }
     return out + "\"";
+}
+
+namespace {
+
+/**
+ * text[i] から始まる 1 文字の UTF-8 の長さ。
+ * @return 1〜4。壊れていれば 0
+ */
+size_t utf8Length(const unsigned char* p, size_t left) {
+    const unsigned char c = p[0];
+    if (c < 0x80) return 1;
+    size_t n = 0;
+    unsigned char lo = 0x80, hi = 0xBF;  // 2 バイト目の範囲（長すぎる形とサロゲートを除く）
+    if (c >= 0xC2 && c <= 0xDF) {
+        n = 2;
+    } else if (c >= 0xE0 && c <= 0xEF) {
+        n = 3;
+        if (c == 0xE0) lo = 0xA0;
+        if (c == 0xED) hi = 0x9F;
+    } else if (c >= 0xF0 && c <= 0xF4) {
+        n = 4;
+        if (c == 0xF0) lo = 0x90;
+        if (c == 0xF4) hi = 0x8F;
+    } else {
+        return 0;
+    }
+    if (left < n || p[1] < lo || p[1] > hi) return 0;
+    for (size_t k = 2; k < n; ++k) {
+        if (p[k] < 0x80 || p[k] > 0xBF) return 0;
+    }
+    return n;
+}
+
+}  // namespace
+
+bool isValidUtf8(const char* text, size_t size) {
+    const auto* p = reinterpret_cast<const unsigned char*>(text);
+    for (size_t i = 0; i < size;) {
+        if (p[i] < 0x80) {  // ASCII はそのまま進む（ほとんどの文字列はここだけ）
+            ++i;
+            continue;
+        }
+        const size_t n = utf8Length(p + i, size - i);
+        if (n == 0) return false;
+        i += n;
+    }
+    return true;
+}
+
+void makeValidUtf8(std::string& text) {
+    if (isValidUtf8(text.data(), text.size())) return;
+    const auto* p = reinterpret_cast<const unsigned char*>(text.data());
+    std::string out;
+    out.reserve(text.size() + 8);
+    for (size_t i = 0; i < text.size();) {
+        const size_t n = utf8Length(p + i, text.size() - i);
+        if (n == 0) {
+            out += "\xEF\xBF\xBD";  // U+FFFD
+            ++i;
+        } else {
+            out.append(text, i, n);
+            i += n;
+        }
+    }
+    text.swap(out);
 }

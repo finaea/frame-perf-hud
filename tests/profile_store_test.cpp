@@ -4,6 +4,7 @@
 #include "config.h"
 #include "layout.h"
 #include "layout_authority.h"
+#include "layout_edit.h"
 #include "profile_store.h"
 
 #include <dirent.h>
@@ -96,8 +97,10 @@ Layout make(const std::vector<std::vector<W>>& columns) {
 
 /** A layout that is different from every other `make({{...}})` below by its column count. */
 Layout variant(size_t n) {
+    // one column each, every widget at most once (a layout file repeats none)
+    const W types[] = {W::Frame, W::Cpu, W::GpuRam, W::Power, W::Battery, W::Temp, W::Network, W::General};
     Layout layout;
-    for (size_t i = 0; i < n; ++i) layout.columns.push_back({{inst(W::Frame)}});
+    for (size_t i = 0; i < n; ++i) layout.columns.push_back({{inst(types[i % 8])}});
     return layout;
 }
 
@@ -379,6 +382,37 @@ void testUnsaved() {
     rmTree(dir);
 }
 
+// A profile saved with every widget removed comes back empty (through the editor's path: LayoutAuthority)
+void testEmptyProfile() {
+    const std::string dir = makeTempDir();
+    std::vector<std::string> warnings;
+    std::string id, error;
+    ProfileStore store(dir);
+    store.load(warnings);
+    Config config;
+    config.layout = make({{W::Frame, W::Cpu}, {W::Power}});
+    LayoutAuthority auth(config, [](const Config&, std::string&) { return true; }, [](const Layout&) {});
+    CHECK(store.create(auth.layout(), id, error));
+
+    Layout emptied = auth.layout();
+    while (!emptied.columns.empty()) CHECK(frame_perf_overlay::removeWidget(emptied, {0, 0}));
+    CHECK(auth.trySetLayout(auth.version(), emptied).applied());
+    CHECK(auth.layout().columns.empty());
+    CHECK(store.save(id, auth.layout(), error));
+    CHECK(!store.unsaved(auth.layout(), id));
+    std::string id2;
+    CHECK(store.create(auth.layout(), id2, error));  // a new profile from the empty layout too
+
+    ProfileStore fresh(dir);
+    warnings.clear();
+    fresh.load(warnings);
+    CHECK(fresh.profiles().size() == 2);
+    CHECK(fresh.find(id) != nullptr && fresh.find(id)->layout.columns.empty());
+    CHECK(fresh.find(id2) != nullptr && fresh.find(id2)->layout.columns.empty());
+    CHECK(warnings.empty());
+    rmTree(dir);
+}
+
 // 6. Reset leaves the profile files alone
 void testResetLeavesProfiles() {
     const std::string dir = makeTempDir();
@@ -419,6 +453,7 @@ int main() {
     testRenameDelete();
     testFilesInDir();
     testUnsaved();
+    testEmptyProfile();
     testResetLeavesProfiles();
     if (failures == 0) std::printf("profile-store-test: all passed\n");
     return failures == 0 ? 0 : 1;

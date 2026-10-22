@@ -1,5 +1,7 @@
 #include "layout.h"
 
+#include "layout_edit.h"  // isRepeatable
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -127,6 +129,8 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
             warnings.push_back("unknown key: layout." + member.first);
         }
     }
+    std::vector<WidgetType> seen;  // a widget that can't repeat is kept the first time only, like the editor
+    bool listed = false;           // the file named at least one widget (an emptied layout names none)
     for (size_t c = 0; c < columns->items.size(); ++c) {
         const JsonValue& column = columns->items[c];
         const std::string where = "layout.columns[" + std::to_string(c) + "]";
@@ -139,6 +143,7 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
             continue;
         }
         LayoutColumn out1;
+        if (!column.items.empty()) listed = true;
         for (size_t i = 0; i < column.items.size(); ++i) {
             const JsonValue& item = column.items[i];
             const std::string at = where + "[" + std::to_string(i) + "]";
@@ -154,6 +159,11 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
                                    (type != nullptr && type->isString() ? " \"" + type->text + "\"" : "") + ", skipped");
                 continue;
             }
+            if (!isRepeatable(w.type) && std::find(seen.begin(), seen.end(), w.type) != seen.end()) {
+                warnings.push_back(at + ": a second \"" + type->text + "\", skipped");
+                continue;
+            }
+            seen.push_back(w.type);
             for (const auto& member : item.members) {
                 const std::string& k = member.first;
                 const bool known = k == "type" || (k == "compact" && hasCompactView(w.type));
@@ -167,7 +177,19 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
             }
             out1.widgets.push_back(w);
         }
+        if (out1.widgets.empty()) {  // it would be a blank column on the panel
+            warnings.push_back(where + " has no widgets, dropped");
+            continue;
+        }
         layout.columns.push_back(std::move(out1));
+    }
+    // Every listed widget was unusable: a blank panel would look broken. Removing every card in the editor saves
+    // no widgets at all, and that stays empty
+    if (layout.columns.empty() && listed) {
+        warnings.push_back("layout has no usable widgets: using the default layout");
+        const uint32_t version = layout.version;
+        layout = defaultLayout();
+        layout.version = version;
     }
     out = std::move(layout);
     return true;

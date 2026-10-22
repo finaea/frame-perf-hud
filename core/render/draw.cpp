@@ -1,6 +1,7 @@
 // 描画の共通部品の実装。
 #include "draw.h"
 
+#include "json.h"   // isValidUtf8 / makeValidUtf8
 #include "theme.h"  // the segmented pill's colours
 
 #include <cairo-ft.h>
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -67,7 +69,27 @@ void FontSet::load(const std::string& regularPath, const std::string& boldPath) 
     boldPath_ = boldPath;
 }
 
+namespace {
+
+/**
+ * 壊れた UTF-8 を描かない: cairo は一度 CAIRO_STATUS_INVALID_STRING になるとその cairo_t で二度と描けないので、
+ * 渡す前に U+FFFD に置き換える。正しい文字列（ほとんど全部）は確かめるだけで、そのまま返す。
+ * @param text 文字列
+ * @param storage 置き換えたときの置き場所
+ * @return 正しい UTF-8 の文字列
+ */
+const char* validUtf8(const char* text, std::string& storage) {
+    if (isValidUtf8(text, std::strlen(text))) return text;
+    storage = text;
+    makeValidUtf8(storage);
+    return storage.c_str();
+}
+
+}  // namespace
+
 double Pen::measure(const char* text, double size, bool isBold) const {
+    std::string fixed;
+    text = validUtf8(text, fixed);
     cairo_set_font_face(cr, isBold ? fonts->bold() : fonts->regular());
     cairo_set_font_size(cr, size);
     cairo_text_extents_t extents;
@@ -77,6 +99,8 @@ double Pen::measure(const char* text, double size, bool isBold) const {
 
 double Pen::text(double x, double y, const char* text, double size, Color c, bool isBold,
                  bool alignRight) const {
+    std::string fixed;
+    text = validUtf8(text, fixed);
     color(c);
     if (alignRight) {
         const double width = measure(text, size, isBold);

@@ -3,6 +3,7 @@
 #include "atomic_file.h"
 #include "config.h"
 #include "json.h"
+#include "layout_edit.h"
 #include "metric_registry.h"
 #include "scheduler.h"
 
@@ -192,6 +193,87 @@ void testBrokenConfigKeptAsBad() {
     config.alpha = 0.7;
     CHECK(watcher.save(config, error));
     CHECK(readFile(path + ".bad") == original);
+}
+
+// A "layout" the loader had to reject is kept as .bad on the next save, like an unreadable file; a file from
+// before the grid (no "layout"), or a layout that only needed tidying, is not
+void testRejectedLayoutKeptAsBad() {
+    makeDirectories(tempDir + "/rejected");
+    const std::string path = tempDir + "/rejected/config.json";
+    const std::string original = R"({ "alpha": 0.4, "layout": { "columns": 5 } })";
+    writeFile(path, original);
+
+    Config loaded;
+    std::vector<std::string> warnings;
+    std::string error;
+    CHECK(loadConfig(path, loaded, warnings, error));
+    CHECK(loaded.layoutRejected && !loaded.layoutInFile);
+    CHECK(loaded.alpha == 0.4 && loaded.layout.sameWidgets(defaultLayout()));
+
+    ConfigWatcher watcher(path);
+    Config config = watcher.loadInitial();
+    CHECK(!watcher.lastLoadFailed());
+    CHECK(config.layoutRejected);
+    CHECK(readFile(path) == original);  // loading alone never touches it
+    config.visible = false;
+    CHECK(watcher.save(config, error));
+    CHECK(readFile(path + ".bad") == original);  // the user's text, byte-identical
+    Config reloaded;
+    warnings.clear();
+    CHECK(loadConfig(path, reloaded, warnings, error));
+    CHECK(!reloaded.visible && reloaded.layoutInFile && !reloaded.layoutRejected && warnings.empty());
+
+    // the next save just saves; the .bad copy stays as it was
+    config.alpha = 0.7;
+    CHECK(watcher.save(config, error));
+    CHECK(readFile(path + ".bad") == original);
+
+    // a config from before the grid: saved over, nothing kept
+    const std::string old = tempDir + "/rejected/old.json";
+    writeFile(old, R"({ "alpha": 0.4 })");
+    ConfigWatcher oldWatcher(old);
+    Config oldConfig = oldWatcher.loadInitial();
+    CHECK(!oldConfig.layoutRejected && !oldConfig.layoutInFile);
+    CHECK(oldWatcher.save(oldConfig, error));
+    CHECK(access((old + ".bad").c_str(), F_OK) != 0);
+
+    // a layout that was only tidied (all columns blank -> default) is usable, so it isn't kept either
+    const std::string blank = tempDir + "/rejected/blank.json";
+    writeFile(blank, R"({ "layout": { "columns": [[]] } })");
+    ConfigWatcher blankWatcher(blank);
+    Config blankConfig = blankWatcher.loadInitial();
+    CHECK(!blankConfig.layoutRejected && blankConfig.layoutInFile);
+    CHECK(blankWatcher.save(blankConfig, error));
+    CHECK(access((blank + ".bad").c_str(), F_OK) != 0);
+}
+
+// The user removes every widget in the editor: the empty layout is saved, comes back empty, and is not mistaken
+// for a broken file
+void testEmptiedLayoutRoundTrip() {
+    makeDirectories(tempDir + "/emptied");
+    const std::string path = tempDir + "/emptied/config.json";
+    Config config;
+    config.layout.version = 4;
+    while (!config.layout.columns.empty()) CHECK(removeWidget(config.layout, {0, 0}));  // what the editor's Remove does
+    CHECK(config.layout.columns.empty());
+    ConfigWatcher watcher(path);
+    std::string error;
+    CHECK(watcher.save(config, error));
+
+    Config loaded;
+    std::vector<std::string> warnings;
+    CHECK(loadConfig(path, loaded, warnings, error));
+    CHECK(loaded.layout.columns.empty() && loaded.layout.version == 4);
+    CHECK(loaded.layoutInFile && !loaded.layoutRejected && warnings.empty());
+
+    // and the running app's watcher: same, and a later save doesn't set the file aside
+    ConfigWatcher reopened(path);
+    Config again = reopened.loadInitial();
+    CHECK(!reopened.lastLoadFailed() && !again.layoutRejected && again.layout.columns.empty());
+    again.alpha = 0.6;
+    CHECK(reopened.save(again, error));
+    CHECK(access((path + ".bad").c_str(), F_OK) != 0);
+    CHECK(loadConfig(path, loaded, warnings, error) && loaded.layout.columns.empty() && loaded.alpha == 0.6);
 }
 
 // control chars / quotes in the font paths survive save -> load
@@ -385,6 +467,8 @@ int main() {
     testLoad();
     testKillDuringSave();
     testBrokenConfigKeptAsBad();
+    testRejectedLayoutKeptAsBad();
+    testEmptiedLayoutRoundTrip();
     testFontPathEscaping();
     testOldConfigUpgrade();
     testUpdateIntervalFromLegacyConfig();

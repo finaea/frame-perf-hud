@@ -11,8 +11,16 @@ namespace {
 /** A source counts as due this much early, so sources that share the 2 Hz tick run together. */
 constexpr double kDueSlackSec = 0.05;
 
+/** After a resumed (baseline) read of a delta source, the next read comes this soon (or after the interval). */
+constexpr double kResumeRefillSec = 0.25;
+
 size_t indexOf(SourceId source) {
     return static_cast<size_t>(source);
+}
+
+/** @return true if the source's values are deltas between two reads, so its first read after a pause shows nothing */
+bool readsDeltas(size_t index) {
+    return index == indexOf(SourceId::CpuLoad) || index == indexOf(SourceId::Network);
 }
 
 bool validSource(SourceId source) {
@@ -84,7 +92,8 @@ void Scheduler::recompute() {
 int Scheduler::runDue(double now) {
     now_ = now;
     int ran = 0;
-    for (SourceState& s : sources_) {
+    for (size_t i = 0; i < kSourceCount; ++i) {
+        SourceState& s = sources_[i];
         if (s.refs == 0 || !s.read) continue;
         // At most a quarter of the interval early, so a fast caller (the 50 ms dashboard poll) can't read a 100 ms
         // source twice as often
@@ -94,8 +103,19 @@ int Scheduler::runDue(double now) {
         s.read(now, resumed);
         ++s.reads;
         s.lastRead = now;
-        // From the due time when read a little early (keeps the cadence), from now when late (no catching up)
-        s.nextDue = std::max(now, s.nextDue) + s.interval;
+        if (resumed && readsDeltas(i) && s.interval > kResumeRefillSec) {
+            // The first read after a pause only rebuilds a delta's baseline (CPU %, network rates), so one extra
+            // read comes soon; the one after it is back on this read's grid, in step with the other sources
+            s.nextDue = now + kResumeRefillSec;
+            s.afterRefill = now + s.interval;
+        } else if (s.afterRefill >= 0.0 && !resumed) {
+            s.nextDue = s.afterRefill > now ? s.afterRefill : now + s.interval;  // a late refill doesn't catch up
+            s.afterRefill = -1.0;
+        } else {
+            // From the due time when read a little early (keeps the cadence), from now when late (no catching up)
+            s.nextDue = std::max(now, s.nextDue) + s.interval;
+            s.afterRefill = -1.0;
+        }
         ++ran;
     }
     return ran;

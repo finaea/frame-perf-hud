@@ -70,6 +70,7 @@ struct Config {
     Thresholds thresholds;
     frame_perf_overlay::Layout layout = frame_perf_overlay::defaultLayout();  ///< the widget grid ("layout" key)
     bool layoutInFile = false;  ///< the file had a usable "layout" (false: first run, from before the grid, unreadable)
+    bool layoutRejected = false;  ///< the file had an unusable "layout" (the next save keeps the file as .bad)
     std::string activeProfile;  ///< the profile last used / saved ("active_profile", e.g. "profile-2"); "" = none
 };
 
@@ -200,8 +201,9 @@ public:
     bool lastLoadFailed() const { return loadFailed_; }
 
     /**
-     * Saves the config (saveConfig) and notes it (noteSaved). If the file on disk couldn't be parsed, it's first
-     * renamed to `<path>.bad` (replacing an older one), so the user's text survives and the save still persists.
+     * Saves the config (saveConfig) and notes it (noteSaved). If the file on disk couldn't be parsed, or its "layout"
+     * was rejected (the default layout replaced it), it's first renamed to `<path>.bad` (replacing an older one), so
+     * the user's text survives and the save still persists.
      * Every save of the running app goes through here.
      * @param config what to save
      * @param error why it failed
@@ -215,6 +217,7 @@ private:
     struct timespec mtime_ {};
     off_t size_ = 0;
     mutable bool loadFailed_ = false;
+    mutable bool layoutRejected_ = false;  ///< the last load had a "layout" key that couldn't be used
 
     /**
      * 今のファイルの状態（有無・更新時刻・サイズ）を取る。

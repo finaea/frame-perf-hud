@@ -61,21 +61,19 @@ void testRoundTrip() {
         CHECK(warnings.empty());
     }
 
-    // custom: several columns, an empty column, the version kept
+    // custom: several columns, the version kept
     Layout custom;
     custom.version = 42;
-    custom.columns.resize(3);
+    custom.columns.resize(2);
     custom.columns[0].widgets = {inst(W::Cpu), inst(W::GpuRam), inst(W::Frame)};
-    custom.columns[1].widgets = {};
-    custom.columns[2].widgets = {inst(W::Network), inst(W::Temp, true), inst(W::General)};
+    custom.columns[1].widgets = {inst(W::Network), inst(W::Temp, true), inst(W::General)};
     Layout back;
     std::vector<std::string> warnings;
     std::string error;
     CHECK(parseLayoutText(layoutToJson(custom, 0), back, warnings, error));
     CHECK(back.version == 42);
-    CHECK(back.columns.size() == 3);
+    CHECK(back.columns.size() == 2);
     CHECK(back.sameWidgets(custom));
-    CHECK(back.columns[1].widgets.empty());
     CHECK(warnings.empty());
 }
 
@@ -121,6 +119,51 @@ void testBadInput() {
     CHECK(parseLayoutText(R"({"columns":[{"type":"frame"},[{"type":"temp"}]]})", out, warnings, error));
     CHECK(out.columns.size() == 1 && sameTypes(out.columns[0], {W::Temp}));
     CHECK(!warnings.empty());
+}
+
+// A file that says more than the editor could make: blank columns go, a second copy of a widget is skipped
+void testCleanedUpOnLoad() {
+    Layout out;
+    std::vector<std::string> warnings;
+    std::string error;
+
+    // an empty column
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"frame"}],[],[{"type":"cpu"}]]})", out, warnings, error));
+    CHECK(out.columns.size() == 2 && sameTypes(out.columns[0], {W::Frame}) && sameTypes(out.columns[1], {W::Cpu}));
+    CHECK(warnings.size() == 1);
+
+    // a column that only held an unknown widget: one warning for the widget, one for the column
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"bogus"}],[{"type":"frame"}]]})", out, warnings, error));
+    CHECK(out.columns.size() == 1 && sameTypes(out.columns[0], {W::Frame}));
+    CHECK(warnings.size() == 2);
+
+    // a second copy: the first is kept, even across columns
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"frame"},{"type":"cpu"},{"type":"frame"}],)"
+                          R"([{"type":"frame"},{"type":"temp"}]]})", out, warnings, error));
+    CHECK(out.columns.size() == 2 && sameTypes(out.columns[0], {W::Frame, W::Cpu}) && sameTypes(out.columns[1], {W::Temp}));
+    CHECK(warnings.size() == 2);
+
+    // a column of only copies goes too
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"frame"}],[{"type":"frame"}]]})", out, warnings, error));
+    CHECK(out.columns.size() == 1 && warnings.size() == 2);
+
+    // a file that lists no widgets at all is an empty layout (the user removed them all), not the default
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"version":7,"columns":[[],[]]})", out, warnings, error));
+    CHECK(out.columns.empty() && out.version == 7);
+    CHECK(warnings.size() == 2);  // one per dropped column
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[]})", out, warnings, error));
+    CHECK(out.columns.empty() && out.version == 1);
+    CHECK(warnings.empty());
+
+    // nothing usable left of what the file listed: the default layout, the file's version kept
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"version":3,"columns":[[{"type":"bogus"}]]})", out, warnings, error));
+    CHECK(out.sameWidgets(defaultLayout()) && out.version == 3 && warnings.size() == 3);
 }
 
 /** Reference counts the way the headset sets them: enabledWidgets(layout) + someone looking. */
@@ -218,6 +261,7 @@ int main() {
     testDefaultLayout();
     testRoundTrip();
     testBadInput();
+    testCleanedUpOnLoad();
     testWidgetOffDropsRefs();
     testCompact();
     if (failures == 0) std::printf("core-layout-test: all passed\n");

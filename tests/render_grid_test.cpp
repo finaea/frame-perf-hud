@@ -469,6 +469,63 @@ void testCompactToggleKeepsGraphHistory() {
     CHECK(slotPixels(unseen, 0) != slotPixels(steady, 0));
 }
 
+// ---- Network: the interface being down is "Not connected", not an N/A ----
+
+void testNetworkInterfaceDown() {
+    const Layout layout = oneWidget(inst(W::Network));
+    MetricStore unread;  // interface state never read: the N/A text
+    MetricStore down;    // read, and down (no dongle AP and no home Wi-Fi)
+    down.setEnum(metric::kNetInterfaceUp, 0, 1.0);
+    MetricStore upNotConnected;
+    upNotConnected.setEnum(metric::kNetInterfaceUp, 1, 1.0);
+    upNotConnected.setEnum(metric::kNetConnected, 0, 1.0);
+    MetricStore failed;  // the read failed: N/A with its reason
+    failed.setNa(metric::kNetInterfaceUp, Reason::ReadFailed, 1.0);
+
+    CHECK(renderPx(layout, down, "network_down.png") != renderPx(layout, unread));
+    CHECK(renderPx(layout, down) != renderPx(layout, failed));
+    CHECK(renderPx(layout, down) != renderPx(layout, upNotConnected));  // the link row differs
+    // the same for the collapsed height
+    WidgetContext ctx;
+    ctx.store = &down;
+    ctx.now = kNow;
+    CHECK(widgetHeight(inst(W::Network), &ctx) == 64);
+
+    // "Not connected" is in the card's language
+    const auto render = [&](WidgetLanguage language) {
+        GridRenderer renderer(fonts());
+        renderer.setLayout(layout);
+        WidgetContext c;
+        c.store = &down;
+        c.now = kNow;
+        c.language = language;
+        renderer.render(c);
+        return renderer.toRgba();
+    };
+    CHECK(render(WidgetLanguage::En) != render(WidgetLanguage::Ja));
+}
+
+// ---- Text with broken UTF-8 doesn't upset cairo ----
+
+void testInvalidUtf8Text() {
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 200, 40);
+    cairo_t* cr = cairo_create(surface);
+    const Pen pen {cr, &fonts()};
+    const Color white {1, 1, 1};
+    const char* broken[] = {"a\xFF" "b", "\xC0\xAF", "end\xE3\x81", "\xED\xA0\x80", "\x80\x80"};
+    for (const char* text : broken) {
+        pen.text(10, 25, text, 16, white);
+        CHECK(pen.measure(text, 16) > 0);
+        CHECK(cairo_status(cr) == CAIRO_STATUS_SUCCESS);
+    }
+    // measured as the replacement character, so layout and drawing agree
+    CHECK(pen.measure("a\xFF" "b", 16) == pen.measure("a\xEF\xBF\xBD" "b", 16));
+    CHECK(pen.measure(std::string("x\xE3\x81"), 16) == pen.measure(std::string("x\xEF\xBF\xBD\xEF\xBF\xBD"), 16));
+    CHECK(cairo_status(cr) == CAIRO_STATUS_SUCCESS);
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}
+
 // ---- The segmented pill ----
 
 /** @return the pixel as 0xRRGGBB (cairo ARGB32 is B, G, R, A bytes on little-endian) */
@@ -523,6 +580,8 @@ int main() {
     testEmptyStoreAllTypes();
     testDefaultFilled();
     testClockOffHidesTime();
+    testNetworkInterfaceDown();
+    testInvalidUtf8Text();
     testLanguageChangesTitles();
     testChangeDetection();
     testPartialRedraw();

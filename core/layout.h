@@ -84,7 +84,9 @@ std::string layoutToJson(const Layout& layout, int indent = 0);
 
 /**
  * Reads a layout from the JSON object layoutToJson writes. Unknown widget types and keys are skipped with a
- * warning (a newer version may know more types).
+ * warning (a newer version may know more types), and so is a second copy of a widget that can't repeat
+ * (isRepeatable). A column left with no widgets is dropped. A layout that listed widgets but kept none
+ * gets defaultLayout(); one that listed none (every card removed in the editor) stays empty.
  * @param value the object
  * @param out the layout (unchanged on failure)
  * @param warnings things noticed but tolerated

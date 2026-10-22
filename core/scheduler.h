@@ -113,6 +113,7 @@ private:
         double lastRead = -1.0;
         double nextDue = 0.0;
         bool pendingResume = true;  ///< next read is the first since (re)activation
+        double afterRefill = -1.0;  ///< >= 0: the next read is the resume refill, and the one after is due then
         bool perUpdate = false;     ///< a metric of it is read every update (kPerUpdateMs): setUpdateInterval moves it
         ReadFn read;
         /** Widgets owning at least one metric from this source (bit per WidgetType). */

@@ -297,6 +297,7 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
         if (frame_perf_overlay::layoutFromJson(*layout, config.layout, warnings, layoutError)) {
             config.layoutInFile = true;
         } else {
+            config.layoutRejected = true;
             warnings.push_back(layoutError + ": using the default layout");
         }
     }
@@ -470,16 +471,17 @@ bool isFacingHead(const Config& config) {
 }
 
 bool ConfigWatcher::save(const Config& config, std::string& error) {
-    if (loadFailed_) {
+    if (loadFailed_ || layoutRejected_) {
         const std::string bad = path_ + ".bad";
         if (std::rename(path_.c_str(), bad.c_str()) == 0) {
-            std::fprintf(stderr, "[設定] %s を読めなかったので %s として残し、新しく保存します\n", path_.c_str(),
-                         bad.c_str());
+            std::fprintf(stderr, "[設定] %s %s %s として残し、新しく保存します\n", path_.c_str(),
+                         loadFailed_ ? "を読めなかったので" : "の layout を使えなかったので", bad.c_str());
         } else if (errno != ENOENT) {
             error = "読めなかった設定を " + bad + " として残せません: " + std::strerror(errno);
             return false;
         }
         loadFailed_ = false;
+        layoutRejected_ = false;
     }
     if (!saveConfig(path_, config, error)) return false;
     noteSaved();
@@ -510,6 +512,7 @@ bool ConfigWatcher::loadAndLog(Config& config) const {
         return false;
     }
     for (const auto& warning : warnings) std::fprintf(stderr, "[設定] %s\n", warning.c_str());
+    layoutRejected_ = loaded.layoutRejected;
     config = loaded;
     return true;
 }
