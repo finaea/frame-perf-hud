@@ -3,6 +3,7 @@
 #include "draw.h"
 
 #include "theme.h"  // R3: the segmented pill's colours
+#include "utf8.h"
 
 #include <cairo-ft.h>
 #include <ft2build.h>
@@ -23,6 +24,19 @@ void destroyFtFace(void* face) {
 }
 
 const cairo_user_data_key_t kFtFaceKey {};
+
+/**
+ * cairo needs valid UTF-8: one bad string (a /proc name cut mid-character) would put the long-lived context into a
+ * permanent error. A no-op for valid text.
+ * @param fixed holds the repaired copy when one is needed
+ * @return the text to hand to cairo
+ */
+const char* validUtf8(const std::string& text, std::string& fixed) {
+    if (fph::isValidUtf8(text)) return text.c_str();
+    fixed = text;
+    fph::makeValidUtf8(fixed);
+    return fixed.c_str();
+}
 
 }  // namespace
 
@@ -96,27 +110,30 @@ void FontSet::load(const std::string& regularPath, const std::string& boldPath) 
 }
 
 double Pen::measure(const std::string& text, double size, bool isBold) const {
+    std::string fixed;
     cairo_set_font_face(cr, isBold ? fonts->bold() : fonts->regular());
     cairo_set_font_size(cr, size);
     cairo_text_extents_t extents;
-    cairo_text_extents(cr, text.c_str(), &extents);
+    cairo_text_extents(cr, validUtf8(text, fixed), &extents);
     return extents.x_advance;
 }
 
 double Pen::text(double x, double y, const std::string& text, double size, Color c, bool isBold,
                  bool alignRight) const {
+    std::string fixed;
+    const char* valid = validUtf8(text, fixed);
     color(c);
     if (alignRight) {
         const double width = measure(text, size, isBold);
         cairo_move_to(cr, x - width, y);
-        cairo_show_text(cr, text.c_str());
+        cairo_show_text(cr, valid);
         return width;
     }
     // 左揃えは先に幅を測らず、描いたあとの現在位置から幅を出す（文字の組み立てを 1 回で済ませる）
     cairo_set_font_face(cr, isBold ? fonts->bold() : fonts->regular());
     cairo_set_font_size(cr, size);
     cairo_move_to(cr, x, y);
-    cairo_show_text(cr, text.c_str());
+    cairo_show_text(cr, valid);
     double endX = x;
     double endY = y;
     cairo_get_current_point(cr, &endX, &endY);

@@ -1,6 +1,8 @@
 // 設定ファイル用の小さな JSON パーサの実装。再帰下降で、深さは制限つき。
 #include "json.h"
 
+#include "utf8.h"
+
 #include <cstdlib>
 
 namespace {
@@ -186,7 +188,11 @@ private:
         out.clear();
         while (pos_ < src_.size()) {
             const char c = src_[pos_++];
-            if (c == '"') return true;
+            if (c == '"') {
+                // Broken raw UTF-8 becomes U+FFFD: the rest of the file still loads, and the text can be drawn
+                fph::makeValidUtf8(out);
+                return true;
+            }
             if (c != '\\') {
                 out += c;
                 continue;
@@ -208,11 +214,18 @@ private:
                     // サロゲートペア
                     if (code >= 0xD800 && code <= 0xDBFF && pos_ + 6 <= src_.size() && src_[pos_] == '\\' &&
                         src_[pos_ + 1] == 'u') {
+                        const size_t next = pos_;
                         pos_ += 2;
                         unsigned low = 0;
                         if (!parseHex4(low)) return false;
-                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        if (low >= 0xDC00 && low <= 0xDFFF) {
+                            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        } else {
+                            pos_ = next;  // not a pair: the next \u is read on its own
+                        }
                     }
+                    // A lone surrogate isn't a character (as UTF-8 it's invalid): U+FFFD instead
+                    if (code >= 0xD800 && code <= 0xDFFF) code = 0xFFFD;
                     appendUtf8(code, out);
                     break;
                 }

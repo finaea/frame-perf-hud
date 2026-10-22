@@ -944,14 +944,13 @@ void drawNetwork(const Pen& pen, double x, double y, const WidgetInstance& w, co
     const std::string ifname = text(ctx, base + kNetAdapterIfName);
     pen.text(cx + pen.measure(w.adapter == NetAdapter::Home ? t.networkHome : t.networkDongle, 16) + 8, top + 17,
              ifname.empty() ? std::string(w.adapter == NetAdapter::Home ? "wlan0" : "wlanap") : ifname, 13, kTextMuted);
-    if (!ok(ctx, base + kNetAdapterPresent) || i(ctx, base + kNetAdapterPresent) == 0) {
+    if (!ok(ctx, base + kNetAdapterPresent)) {
         drawWifiIcon(pen, right - 26, top + 18, 0, kTextMuted, true);
-        const std::string why = ok(ctx, base + kNetAdapterPresent) ? std::string(t.naPrefix) + reasonText(Reason::SensorMissing)
-                                                                    : naText(ctx, base + kNetAdapterPresent);
-        pen.text(cx + 8, top + 44, why, 15, kTextMuted);
+        pen.text(cx + 8, top + 44, naText(ctx, base + kNetAdapterPresent), 15, kTextMuted);
         return;
     }
-    const bool connected = i(ctx, base + kNetAdapterConnected) != 0;
+    // A missing adapter (dongle unplugged, Wi-Fi off) is a state, not a fault: it reads the same as not connected
+    const bool connected = i(ctx, base + kNetAdapterPresent) != 0 && i(ctx, base + kNetAdapterConnected) != 0;
     const double dbm = f(ctx, base + kNetAdapterSignalDbm);
     const Level signalLevel = levelOf(dbm, th.wifiWarnDbm, th.wifiCritDbm, true);
     // Signal: icon + dBm at the right of the title row

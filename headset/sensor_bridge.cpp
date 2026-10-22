@@ -54,13 +54,15 @@ void SensorBridge::registerSources(fph::Scheduler& scheduler) {
     // T02: CPU, GPU & RAM, Power, Battery, Temp, uptime / clock / own cost (headset/system_metrics.cpp)
     registerSystemSources(scheduler, sensors_, store_);
     // T03: both adapters from the bridge's own WifiLink (Sensors::readWifi is no longer used)
-    scheduler.addSource(SourceId::Network, [this](double now, bool resumed) { readNetwork(now, resumed); });
+    // The delta sources (rates, CPU shares) refill 0.25 s after a resume instead of one interval later
+    scheduler.addSource(SourceId::Network, [this](double now, bool resumed) { readNetwork(now, resumed); }, true);
     scheduler.addSource(SourceId::FrameTiming, [this](double now, bool) { readFrameTiming(now); });
     scheduler.addSource(SourceId::Controllers, [this](double now, bool) { readControllers(now); });
     // T03
-    scheduler.addSource(SourceId::Processes, [this](double now, bool resumed) { readProcesses(now, resumed); });
+    scheduler.addSource(SourceId::Processes, [this](double now, bool resumed) { readProcesses(now, resumed); }, true);
     scheduler.addSource(SourceId::SceneApp, [this](double now, bool) { refreshSceneApp(now); });
-    scheduler.addSource(SourceId::StreamLink, [this](double now, bool resumed) { readStreamLink(now, resumed); });
+    scheduler.addSource(SourceId::StreamLink, [this](double now, bool resumed) { readStreamLink(now, resumed); },
+                        true);
     scheduler.addSource(SourceId::StreamEvents, [this](double now, bool) { readStreamEvents(now); });
 }
 

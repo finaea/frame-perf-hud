@@ -1163,6 +1163,106 @@ void testHttpCameraExtra() {
     CHECK(!px.empty());
 }
 
+// A missing adapter (present = 0) reads as "Not connected", the same card as a present-but-disconnected one; only an
+// N/A present metric shows the N/A text
+void testNetworkMissingAdapterIsNotConnected() {
+    for (const NetAdapter adapter : {NetAdapter::Dongle, NetAdapter::Home}) {
+        const uint16_t base = adapter == NetAdapter::Home ? metric::kNetHomeBase : metric::kNetDongleBase;
+        const WidgetInstance net = inst(W::Network, 15, adapter);
+
+        MetricStore missing;
+        missing.setEnum(base + metric::kNetAdapterPresent, 0, kNow);
+        MetricStore disconnected;
+        disconnected.setEnum(base + metric::kNetAdapterPresent, 1, kNow);
+        disconnected.setEnum(base + metric::kNetAdapterConnected, 0, kNow);
+        MetricStore unknown;  // present metric N/A
+        unknown.setNa(static_cast<uint16_t>(base + metric::kNetAdapterPresent), Reason::NotSampledYet, kNow);
+        MetricStore missingStaleConnected;  // present = 0 wins over a leftover connected = 1
+        missingStaleConnected.setEnum(base + metric::kNetAdapterPresent, 0, kNow);
+        missingStaleConnected.setEnum(base + metric::kNetAdapterConnected, 1, kNow);
+
+        WidgetContext ctx;
+        ctx.now = kNow;
+        ctx.store = &missing;
+        CHECK(widgetHeight(net, &ctx) == 64);
+        ctx.store = &missingStaleConnected;
+        CHECK(widgetHeight(net, &ctx) == 64);
+
+        const Pixels missingPx = renderPx(oneWidget(net), missing);
+        CHECK(!missingPx.empty());
+        CHECK(missingPx == renderPx(oneWidget(net), disconnected));
+        CHECK(missingPx == renderPx(oneWidget(net), missingStaleConnected));
+        CHECK(missingPx != renderPx(oneWidget(net), unknown));  // "N/A" text, not "Not connected"
+    }
+}
+
+/** Draws text through a Pen on one long-lived context; the context must stay healthy. */
+void testInvalidUtf8Text() {
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 400, 100);
+    cairo_t* cr = cairo_create(surface);
+    const Pen pen {cr, &fonts()};
+    const std::string japanese = "日本語のプロセス名";
+    // 3 bytes per character: 15 bytes is 5 whole characters, 16 and 14 end mid-character
+    const std::string whole = japanese.substr(0, 15);
+    const std::string cutMid = japanese.substr(0, 16);  // one byte into the 6th character
+    CHECK(whole == "日本語のプ");
+    const std::string bad[] = {cutMid, japanese.substr(0, 14), "ab\xFF" "cd", std::string("\xC0\xAF"),
+                               std::string("\xED\xA0\x80"), std::string("\xF4\x90\x80\x80"), "\xE3\x81"};
+    for (const std::string& text : bad) {
+        const double w = pen.measure(text, 16, false);
+        CHECK(w > 0.0);
+        CHECK(cairo_status(cr) == CAIRO_STATUS_SUCCESS);
+        const double drawn = pen.text(10, 30, text, 16, Color {1, 1, 1}, true);
+        CHECK(drawn > 0.0);
+        const double right = pen.text(390, 60, text, 16, Color {1, 1, 1}, false, true);
+        CHECK(right > 0.0);
+        CHECK(cairo_status(cr) == CAIRO_STATUS_SUCCESS);
+    }
+    // the repaired text is what's drawn: the broken byte and a literal U+FFFD measure the same
+    CHECK(pen.measure("ab\xFF" "cd", 16, false) == pen.measure("ab\xEF\xBF\xBD" "cd", 16, false));
+    CHECK(pen.measure(cutMid, 16, true) == pen.measure(whole + "\xEF\xBF\xBD", 16, true));
+    // a second, normal draw still works
+    const double ok = pen.text(10, 90, "plain text", 16, Color {1, 1, 1});
+    CHECK(ok > 0.0);
+    CHECK(pen.measure("plain text", 16, false) > 0.0);
+    CHECK(cairo_status(cr) == CAIRO_STATUS_SUCCESS);
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}
+
+// A process named with a cut Japanese name goes through the list widgets and the card still draws
+void testProcessListWithCutName() {
+    MetricStore store;
+    store.setI32(metric::kCpuItemsRows, 3, 1.0);
+    store.setI32(metric::kRamItemsRows, 3, 1.0);
+    ProcessListsView view = makeRows(3);
+    const std::string japanese = "日本語のプロセス名";
+    view.byCpu[0].name = japanese.substr(0, 15);
+    view.byCpu[1].name = japanese.substr(0, 16);  // ends mid-character
+    view.byRam[0].name = japanese.substr(0, 14);
+    view.byRam[1].name = "\xFF\xFE";
+    for (const W type : {W::CpuItems, W::RamItems}) {
+        GridRenderer renderer(fonts());
+        renderer.setLayout(oneWidget(inst(type, 5)));
+        WidgetContext ctx;
+        ctx.store = &store;
+        ctx.processes = &view;
+        ctx.now = kNow;
+        renderer.render(ctx);
+        const Pixels bad = renderer.toRgba();
+        renderer.render(ctx);  // a second frame on the same renderer still draws
+        CHECK(renderer.toRgba() == bad);
+        // the same card with the broken names replaced by U+FFFD by hand is pixel-identical
+        ProcessListsView fixed = view;
+        fixed.byCpu[1].name = japanese.substr(0, 15) + "\xEF\xBF\xBD";
+        fixed.byCpu[0].name = japanese.substr(0, 15);
+        fixed.byRam[0].name = japanese.substr(0, 12) + "\xEF\xBF\xBD";
+        fixed.byRam[1].name = "\xEF\xBF\xBD\xEF\xBF\xBD";
+        CHECK(renderPx(oneWidget(inst(type, 5)), store, &view) == renderPx(oneWidget(inst(type, 5)), store, &fixed));
+        CHECK(!bad.empty());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1180,6 +1280,9 @@ int main() {
     testStreamingHealthChipsFixedWidthRegardlessOfCount();
     testGeneralClockOffShrinks();
     testNetworkShrinksWhenNotExpanded();
+    testNetworkMissingAdapterIsNotConnected();
+    testInvalidUtf8Text();
+    testProcessListWithCutName();
     testListAndCameraHeightsIgnoreContext();
     testCpuClusterRowsShrinkWhenSensorsMissing();
     testPlaceholders();

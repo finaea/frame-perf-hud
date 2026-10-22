@@ -202,7 +202,7 @@ void registerSystemSources(fph::Scheduler& scheduler, Sensors& sensors, fph::Met
                 st.setNa(id, s.corePct.empty() ? nan : Reason::SensorMissing, now);
             }
         }
-    });
+    }, true);  // quick refill: a value 0.25 s after the resume, not one interval later
     scheduler.addSource(SourceId::CpuClock, [&st, &se](double now, bool) {
         SensorSample s;
         se.readCpuClocks(s);
@@ -299,5 +299,5 @@ void registerSystemSources(fph::Scheduler& scheduler, Sensors& sensors, fph::Met
         st.setF32(metric::kSelfCpuPct, s.selfCpuPct, now, nan);
         st.setF32(metric::kSelfRssMib, s.selfRssMiB, now);
         st.setF32(metric::kSelfPowerW, s.selfPowerW, now, nan);
-    });
+    }, true);
 }

@@ -372,6 +372,53 @@ void testPinRecomputeAndUnusedSource() {
 
 }  // namespace
 
+// quickRefill: one extra read 0.25 s after a resumed one, then back on the resumed read's own grid (it doesn't drift
+// to .25 / .75, which would wake the main loop at 4 Hz); others are unchanged
+void testQuickRefill() {
+    Scheduler sched {kDefs};
+    std::vector<double> ramAt, gpuAt;
+    std::vector<bool> ramResumed;
+    sched.addSource(S::Ram, [&](double now, bool resumed) { ramAt.push_back(now); ramResumed.push_back(resumed); }, true);
+    sched.addSource(S::GpuClock, [&](double now, bool) { gpuAt.push_back(now); });  // interval 2 s, no quick refill
+    DemandInputs look;
+    look.editorOpen = true;
+    sched.setDemand(look);
+    sched.setEnabledWidgets({W::GpuRam});  // Ram interval 1 s, GpuClock 2 s
+
+    sched.runDue(10.0);
+    sched.runDue(10.1);   // nothing due yet
+    CHECK(sched.nextDue(10.0) == 10.25);
+    sched.runDue(10.25);  // the refill read
+    CHECK(sched.nextDue(10.25) == 11.0);  // back on the resumed read's grid, not 10.25 + 1 s
+    sched.runDue(10.5);   // not due
+    sched.runDue(11.0);
+    CHECK(ramAt.size() == 3 && ramAt[0] == 10.0 && ramAt[1] == 10.25 && ramAt[2] == 11.0);
+    CHECK(ramResumed.size() == 3 && ramResumed[0] && !ramResumed[1] && !ramResumed[2]);
+    // the source without the flag: resume at 10, then the full 2 s
+    CHECK(gpuAt.size() == 1 && gpuAt[0] == 10.0);
+    sched.runDue(11.25);  // .25 isn't a deadline any more
+    CHECK(ramAt.size() == 3 && gpuAt.size() == 1);
+    sched.runDue(12.0);
+    CHECK(gpuAt.size() == 2 && gpuAt[1] == 12.0);
+    CHECK(ramAt.size() == 4 && ramAt[3] == 12.0);  // still on the .0 grid
+    sched.runDue(13.0);
+    CHECK(ramAt.size() == 5 && ramAt[4] == 13.0);
+
+    // pause (nobody looking), then resume: the refill happens again, and again goes back to the resume's grid
+    sched.setDemand(DemandInputs {});
+    sched.runDue(20.0);
+    CHECK(ramAt.size() == 5);
+    sched.setDemand(look);
+    sched.runDue(30.0);
+    sched.runDue(30.25);
+    sched.runDue(30.5);
+    sched.runDue(31.0);
+    sched.runDue(31.25);
+    CHECK(ramAt.size() == 8 && ramAt[5] == 30.0 && ramAt[6] == 30.25 && ramAt[7] == 31.0);
+    CHECK(ramResumed.size() == 8 && ramResumed[5] && !ramResumed[6] && !ramResumed[7]);
+    CHECK(gpuAt.size() == 3 && gpuAt[2] == 30.0);
+}
+
 int main() {
     testNothingWithoutWidgets();
     testEnableDisable();
@@ -382,6 +429,7 @@ int main() {
     testResumed();
     testIntervals();
     testRecomputeCount();
+    testQuickRefill();
     testStreamingAloneEnablesNetwork();
     testStreamingNetworkResumeSemanticsUnchanged();
     testStreamingRemovalStopsNetworkReads();

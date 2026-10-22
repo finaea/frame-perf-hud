@@ -97,7 +97,7 @@ Layout make(const std::vector<std::vector<W>>& columns) {
 /** A layout that is different from every other `make({{...}})` below by its column count. */
 Layout variant(size_t n) {
     Layout layout;
-    for (size_t i = 0; i < n; ++i) layout.columns.push_back({{inst(W::Frame)}});
+    for (size_t i = 0; i < n; ++i) layout.columns.push_back({{inst(W::Network)}});
     return layout;
 }
 
@@ -221,6 +221,21 @@ void testRoundTrip() {
     Profile r;
     CHECK(ProfileStore::fromJson(ProfileStore::toJson(q), r, warnings, error));
     CHECK(r.name == q.name);
+}
+
+// 1b. a profile file goes through the same loader: a duplicate single-instance widget and an empty column are cleaned
+void testProfileLoaderCleans() {
+    Profile p;
+    std::vector<std::string> warnings;
+    std::string error;
+    const std::string text =
+        "{ \"layout\": { \"version\": 2, \"columns\": [ [ {\"type\":\"cpu\"}, {\"type\":\"cpu\"} ], [], "
+        "[ {\"type\":\"temp\"} ] ] } }";
+    CHECK(ProfileStore::fromJson(text, p, warnings, error));
+    CHECK(p.layout.columns.size() == 2);
+    CHECK(p.layout.columns[0].widgets.size() == 1 && p.layout.columns[0].widgets[0].type == W::Cpu);
+    CHECK(p.layout.columns[1].widgets.size() == 1 && p.layout.columns[1].widgets[0].type == W::Temp);
+    CHECK(!warnings.empty());
 }
 
 // 2. the 8 cap
@@ -468,6 +483,7 @@ void testResetLeavesProfiles() {
 
 int main() {
     testRoundTrip();
+    testProfileLoaderCleans();
     testCap();
     testRenameDelete();
     testFilesInDir();

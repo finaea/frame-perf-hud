@@ -956,6 +956,22 @@ void testLease() {
 
 // ---- layout compare-and-set ----
 
+// A LAYOUT_SET goes through the same loader as the config: a duplicate single-instance widget is dropped, the edit still applies
+void testLayoutSetCleansDuplicates() {
+    const LinkEndpoint pc = ep(ip(192, 168, 1, 45), 40000);
+    Rig r;
+    r.allowInConfig(1);
+    r.hello(1, pc, 0.0);
+    const std::string json = R"({"version":1,"columns":[[{"type":"cpu"},{"type":"cpu"}],[],[{"type":"temp"}]]})";
+    r.layoutSet(1, pc, 10, 1, json, 1, 1.0);
+    const std::vector<Answer> a = answersIn(r.take());
+    CHECK(a.size() == 1 && a[0].ack);
+    CHECK(r.applies == 1);
+    CHECK(r.config.layout.columns.size() == 2);
+    CHECK(r.config.layout.columns[0].widgets.size() == 1 && r.config.layout.columns[0].widgets[0].type == fph::WidgetType::Cpu);
+    CHECK(r.config.layout.columns[1].widgets.size() == 1 && r.config.layout.columns[1].widgets[0].type == fph::WidgetType::Temp);
+}
+
 void testLayoutSet() {
     const uint32_t pcIp = ip(192, 168, 1, 45);
     const LinkEndpoint pc = ep(pcIp, 40000);
@@ -1625,6 +1641,7 @@ int main() {
     testReadVrlink();
     testLease();
     testLayoutSet();
+    testLayoutSetCleansDuplicates();
     testLayoutAuthority();
     testConfigLink();
     testControl();

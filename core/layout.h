@@ -158,7 +158,11 @@ std::string layoutToJson(const Layout& layout, int indent = 0);
 
 /**
  * Reads a layout from the JSON object layoutToJson writes. Unknown widget types and keys are skipped with a
- * warning (a newer PC app may know more types); settings out of range are clamped with a warning.
+ * warning (a newer PC app may know more types); settings out of range are clamped with a warning. The result is
+ * cleaned the way the editor keeps it: empty columns are dropped, and a second copy of a non-repeatable widget
+ * (isRepeatable) is skipped with a warning. If widgets were given but none is left, it's the default layout's
+ * columns (with a warning); `"columns": []` stays empty. Every loader goes through here: config.json, profiles,
+ * LAYOUT_SET, the PC app's cache.
  * @param value the object
  * @param out the layout (unchanged on failure)
  * @param warnings things noticed but tolerated

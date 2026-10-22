@@ -62,7 +62,8 @@ void testRoundTrip() {
         CHECK(warnings.empty());
     }
 
-    // custom: lists with settings, both adapters, an empty column, version kept
+    // custom: lists with settings, both adapters, version kept. The empty middle column doesn't survive: the loader
+    // drops empty columns like the editor does.
     Layout custom;
     custom.version = 42;
     custom.columns.resize(3);
@@ -75,12 +76,12 @@ void testRoundTrip() {
     std::string error;
     CHECK(parseLayoutText(layoutToJson(custom, 0), back, warnings, error));
     CHECK(back.version == 42);
-    CHECK(back.columns.size() == 3);
+    CHECK(back.columns.size() == 2);
+    custom.columns.erase(custom.columns.begin() + 1);
     CHECK(back.sameWidgets(custom));
     CHECK(back.columns[0].widgets[0].maxItems == 7 && back.columns[0].widgets[0].sumSameName);
     CHECK(back.columns[0].widgets[1].maxItems == 50 && !back.columns[0].widgets[1].sumSameName);
-    CHECK(back.columns[1].widgets.empty());
-    CHECK(back.columns[2].widgets[0].adapter == NetAdapter::Home);
+    CHECK(back.columns[1].widgets[0].adapter == NetAdapter::Home);
     CHECK(warnings.empty());
 }
 
@@ -101,11 +102,12 @@ void testBadInput() {
     CHECK(parseLayoutText(R"({"columns":[[{"type":"cpu_items","max_items":0},{"type":"ram_items","max_items":999},)"
                           R"({"type":"cpu_items","max_items":20}]]})",
                           out, warnings, error));
-    CHECK(out.columns[0].widgets.size() == 3);
-    CHECK(out.columns[0].widgets[0].maxItems == 1);
-    CHECK(out.columns[0].widgets[1].maxItems == 50);
-    CHECK(out.columns[0].widgets[2].maxItems == 20);
-    CHECK(warnings.size() == 2);
+    // the second cpu_items is a duplicate of a single-instance widget: skipped with its own warning (the clamp
+    // warnings for the first two stay)
+    CHECK(out.columns[0].widgets.size() == 2);
+    CHECK(out.columns[0].widgets[0].type == W::CpuItems && out.columns[0].widgets[0].maxItems == 1);
+    CHECK(out.columns[0].widgets[1].type == W::RamItems && out.columns[0].widgets[1].maxItems == 50);
+    CHECK(warnings.size() == 3);
     CHECK(out.version == 1);  // missing version = 1
 
     // columns that isn't an array: an error, `out` untouched
@@ -488,12 +490,83 @@ void testParseHttpUrl() {
     CHECK(httpUrlHostPort("not a url") == "not a url");
 }
 
+/** @return the loaded layout's column shapes, e.g. "2,1" */
+std::string shape(const Layout& layout) {
+    std::string s;
+    for (const LayoutColumn& c : layout.columns) s += (s.empty() ? "" : ",") + std::to_string(c.widgets.size());
+    return s;
+}
+
+void testLoaderCleans() {
+    Layout out;
+    std::vector<std::string> warnings;
+    std::string error;
+
+    // a duplicate non-repeatable widget across columns: the first stays, with a warning
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"cpu"}],[{"type":"temp"},{"type":"cpu"}]]})", out, warnings, error));
+    CHECK(shape(out) == "1,1" && sameTypes(out.columns[0], {W::Cpu}) && sameTypes(out.columns[1], {W::Temp}));
+    CHECK(warnings.size() == 1);
+
+    // within one column
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"temp"},{"type":"cpu"},{"type":"temp"},{"type":"temp"}]]})", out,
+                          warnings, error));
+    CHECK(shape(out) == "2" && sameTypes(out.columns[0], {W::Temp, W::Cpu}));
+    CHECK(warnings.size() == 2);
+
+    // repeatable types stay
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"network","adapter":"home"},{"type":"network"}],)"
+                          R"([{"type":"eye_camera"},{"type":"eye_camera"},{"type":"headset_camera"},)"
+                          R"({"type":"headset_camera"}]]})",
+                          out, warnings, error));
+    CHECK(shape(out) == "2,4");
+    CHECK(warnings.empty());
+
+    // http_camera does not repeat
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"http_camera"}],[{"type":"http_camera"},{"type":"temp"}]]})", out,
+                          warnings, error));
+    CHECK(shape(out) == "1,1" && out.columns[0].widgets[0].type == W::HttpCamera && sameTypes(out.columns[1], {W::Temp}));
+    CHECK(warnings.size() == 1);
+
+    // a column of only unknown widgets is dropped (along with an empty one)
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"bogus"},{"type":"nope"}],[],[{"type":"frame"}]]})", out, warnings,
+                          error));
+    CHECK(shape(out) == "1" && sameTypes(out.columns[0], {W::Frame}));
+    CHECK(!warnings.empty());
+
+    // a column emptied by the duplicate rule is dropped too
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[{"type":"cpu"}],[{"type":"cpu"}],[{"type":"temp"}]]})", out, warnings, error));
+    CHECK(shape(out) == "1,1" && sameTypes(out.columns[1], {W::Temp}));
+
+    // widgets given but none usable: the default columns, a warning, the version kept
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"version":7,"columns":[[{"type":"bogus"}],[{"type":"nope"}]]})", out, warnings, error));
+    CHECK(out.version == 7);
+    CHECK(out.columns.size() == defaultLayout().columns.size());
+    CHECK(out.sameWidgets(defaultLayout()));
+    CHECK(!warnings.empty());
+
+    // "columns": [] is what the editor saves when everything is removed: it stays empty, no warning
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"version":4,"columns":[]})", out, warnings, error));
+    CHECK(out.version == 4 && out.columns.empty());
+    CHECK(warnings.empty());
+    warnings.clear();
+    CHECK(parseLayoutText(R"({"columns":[[],[]]})", out, warnings, error));  // only empty columns: also nothing given
+    CHECK(out.columns.empty() && warnings.empty());
+}
+
 }  // namespace
 
 int main() {
     testDefaultLayout();
     testRoundTrip();
     testBadInput();
+    testLoaderCleans();
     testWidgetOffDropsRefs();
     testCompactAndHideSystem();
     testHttpCameraJson();

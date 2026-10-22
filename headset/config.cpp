@@ -308,6 +308,7 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
         if (fph::layoutFromJson(*layout, config.layout, warnings, layoutError)) {
             config.layoutInFile = true;
         } else {
+            config.layoutRejected = true;
             warnings.push_back(layoutError + ": using the default layout");
         }
     }
@@ -547,16 +548,18 @@ bool isFacingHead(const Config& config) {
 }
 
 bool ConfigWatcher::save(const Config& config, std::string& error) {
-    if (loadFailed_) {
+    // A file that couldn't be read, or whose "layout" was rejected, is kept as .bad before this save replaces it
+    if (loadFailed_ || layoutRejected_) {
         const std::string bad = path_ + ".bad";
         if (std::rename(path_.c_str(), bad.c_str()) == 0) {
-            std::fprintf(stderr, "[config] %s couldn't be read; kept it as %s and saving a fresh one\n", path_.c_str(),
-                         bad.c_str());
+            std::fprintf(stderr, "[config] %s %s; kept it as %s and saving a fresh one\n", path_.c_str(),
+                         loadFailed_ ? "couldn't be read" : "had a layout that couldn't be read", bad.c_str());
         } else if (errno != ENOENT) {
             error = "can't keep the unreadable config as " + bad + ": " + std::strerror(errno);
             return false;
         }
         loadFailed_ = false;
+        layoutRejected_ = false;
     }
     if (!saveConfig(path_, config, error)) return false;
     noteSaved();
@@ -587,6 +590,7 @@ bool ConfigWatcher::loadAndLog(Config& config) const {
         return false;
     }
     for (const auto& warning : warnings) std::fprintf(stderr, "[config] %s\n", warning.c_str());
+    layoutRejected_ = loaded.layoutRejected;
     config = loaded;
     return true;
 }

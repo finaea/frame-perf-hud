@@ -1,5 +1,7 @@
 #include "layout.h"
 
+#include "layout_edit.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -250,6 +252,7 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
             warnings.push_back("unknown key: layout." + member.first);
         }
     }
+    bool hadWidgets = false;
     for (size_t c = 0; c < columns->items.size(); ++c) {
         const JsonValue& column = columns->items[c];
         const std::string where = "layout.columns[" + std::to_string(c) + "]";
@@ -383,9 +386,24 @@ bool layoutFromJson(const JsonValue& value, Layout& out, std::vector<std::string
                     }
                 }
             }
+            // Clean what the editor never makes: a second copy of a single-instance widget (the first one stays)
+            if (!isRepeatable(w.type) &&
+                (countType(layout, w.type) > 0 ||
+                 std::any_of(out1.widgets.begin(), out1.widgets.end(),
+                             [&w](const WidgetInstance& x) { return x.type == w.type; }))) {
+                warnings.push_back(at + ": a second " + type->text + " widget, skipped (only one is allowed)");
+                continue;
+            }
             out1.widgets.push_back(w);
         }
-        layout.columns.push_back(std::move(out1));
+        hadWidgets = hadWidgets || !column.items.empty();
+        // An empty column (or one left empty by the skips above) is dropped, like the editor does
+        if (!out1.widgets.empty()) layout.columns.push_back(std::move(out1));
+    }
+    if (layout.columns.empty() && hadWidgets) {
+        // Widgets were there but none could be used: an empty HUD would look broken. A layout saved empty stays empty
+        warnings.push_back("layout: no usable widgets left, using the default layout");
+        layout.columns = defaultLayout().columns;
     }
     out = std::move(layout);
     return true;

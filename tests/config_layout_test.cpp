@@ -193,6 +193,53 @@ void testBrokenConfigKeptAsBad() {
     CHECK(readFile(path + ".bad") == original);
 }
 
+// ---- A rejected "layout" keeps the file as .bad on save; a file with no "layout" key doesn't ----
+
+void testRejectedLayoutKeptAsBad() {
+    const char* badLayouts[] = {R"({ "alpha": 0.4, "layout": 5 })", R"({ "alpha": 0.4, "layout": {"version":1} })"};
+    int n = 0;
+    for (const char* original : badLayouts) {
+        const std::string dir = tempDir + "/rejected" + std::to_string(n++);
+        const std::string path = dir + "/config.json";
+        makeDirectories(dir);
+        writeFile(path, original);
+
+        ConfigWatcher watcher(path);
+        Config config = watcher.loadInitial();
+        CHECK(!config.layoutInFile);
+        CHECK(!watcher.lastLoadFailed());
+        CHECK(readFile(path) == original);  // loading alone never touches it
+
+        std::string error;
+        CHECK(watcher.save(config, error));
+        CHECK(readFile(path + ".bad") == original);
+        std::vector<std::string> warnings;
+        Config reloaded;
+        CHECK(loadConfig(path, reloaded, warnings, error));
+        CHECK(reloaded.layoutInFile && reloaded.layout.sameWidgets(defaultLayout()));
+        CHECK(reloaded.alpha == 0.4);
+
+        // the next save just saves: the .bad copy stays as it was
+        writeFile(path + ".bad", "kept");
+        CHECK(watcher.save(config, error));
+        CHECK(readFile(path + ".bad") == "kept");
+    }
+
+    // a pre-grid config (no "layout" key at all) isn't a rejected layout: saving it makes no .bad
+    const std::string dir = tempDir + "/pregrid";
+    const std::string path = dir + "/config.json";
+    makeDirectories(dir);
+    writeFile(path, R"({ "alpha": 0.4 })");
+    ConfigWatcher watcher(path);
+    Config config = watcher.loadInitial();
+    CHECK(!config.layoutInFile && !config.layoutRejected);
+    CHECK(!watcher.lastLoadFailed());
+    std::string error;
+    CHECK(watcher.save(config, error));
+    CHECK(readFile(path + ".bad").empty());
+    CHECK(access((path + ".bad").c_str(), F_OK) != 0);
+}
+
 // ---- 4. control chars / quotes in the font paths survive save -> load ----
 
 void testFontPathEscaping() {
@@ -221,6 +268,7 @@ int main() {
     testLoad();
     testKillDuringSave();
     testBrokenConfigKeptAsBad();
+    testRejectedLayoutKeptAsBad();
     testFontPathEscaping();
     const std::string cleanup = "rm -rf '" + tempDir + "'";
     if (std::system(cleanup.c_str()) != 0) std::printf("(could not remove %s)\n", tempDir.c_str());

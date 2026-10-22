@@ -468,6 +468,25 @@ void testUnplugged() {
     removeTree(root);
 }
 
+// Quick refill: after the resumed read (baseline only) the CPU share is read again 0.25 s later and has a value
+void testCpuQuickRefill() {
+    const std::string root = makeTempRoot();
+    buildTree(root, TreeOptions());
+    {
+        Rig rig(root);
+        rig.start({WidgetType::Cpu});
+        const MetricStore& st = rig.store;
+        CHECK(rig.sched.runDue(10.0) > 0);
+        NA_IS(st, metric::kCpuUsagePct, Reason::NotSampledYet);
+
+        put(root, "proc/stat", kStatB);
+        CHECK(rig.sched.runDue(10.25) > 0);  // not a full interval (0.5 s) later
+        F32_IS(st, metric::kCpuUsagePct, 25.0);
+        F32_IS(st, metric::kCpuCore0Pct + 0, 50.0);
+    }
+    removeTree(root);
+}
+
 void testPlugged() {
     const std::string root = makeTempRoot();
     TreeOptions o;
@@ -705,6 +724,7 @@ void testDemand() {
 
 int main() {
     testUnplugged();
+    testCpuQuickRefill();
     testPlugged();
     testThrottle();
     testMissingFiles();

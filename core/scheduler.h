@@ -59,8 +59,10 @@ public:
      * Registers the reader for a source. A source with metrics but no reader is counted, never read.
      * @param source the source
      * @param read the reader
+     * @param quickRefill a delta source (its resumed read only takes a baseline): the read after a resumed one
+     *                    comes 0.25 s later instead of a full interval, then the interval again
      */
-    void addSource(SourceId source, ReadFn read);
+    void addSource(SourceId source, ReadFn read, bool quickRefill = false);
 
     /**
      * Sets the enabled widget instances (a type may appear more than once, e.g. two Network widgets)
@@ -116,6 +118,8 @@ private:
         double lastRead = -1.0;
         double nextDue = 0.0;
         bool pendingResume = true;  ///< next read is the first since (re)activation
+        bool quickRefill = false;   ///< addSource: a delta source, read again kRefillSec after a resumed read
+        double afterRefill = -1.0;  ///< the resumed read's own next deadline, used after the refill read (-1 = none)
         ReadFn read;
         /** Widgets owning at least one metric from this source (bit per WidgetType). */
         uint32_t ownerMask = 0;

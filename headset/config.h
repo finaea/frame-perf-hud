@@ -102,6 +102,7 @@ struct Config {
     Thresholds thresholds;
     fph::Layout layout = fph::defaultLayout();  ///< T04: the widget grid ("layout" key)
     bool layoutInFile = false;  ///< T04: the file had a usable "layout" (false = first run, or it was unreadable)
+    bool layoutRejected = false;  ///< the file had a "layout" that couldn't be read (the default runs instead)
     LinkConfig link;            ///< T06: the PC link ("link" key)
     bool crashRecorder = false;  ///< T11: the 1 Hz crash ring ("crash_recorder"); off by default
     std::string activeProfile;   ///< R2: the profile last used / saved ("active_profile", e.g. "profile-2"); "" = none
@@ -234,9 +235,9 @@ public:
     bool lastLoadFailed() const { return loadFailed_; }
 
     /**
-     * T04: saves the config (saveConfig) and notes it (noteSaved). If the file on disk couldn't be parsed, it's
-     * first renamed to `<path>.bad` (replacing an older one), so the user's text survives and the save still
-     * persists. Every save of the running app goes through here.
+     * T04: saves the config (saveConfig) and notes it (noteSaved). If the file on disk couldn't be parsed, or its
+     * "layout" was rejected, it's first renamed to `<path>.bad` (replacing an older one), so the user's text
+     * survives and the save still persists. Every save of the running app goes through here.
      * @param config what to save
      * @param error why it failed
      * @return true if saved
@@ -249,6 +250,7 @@ private:
     struct timespec mtime_ {};
     off_t size_ = 0;
     mutable bool loadFailed_ = false;  ///< T04
+    mutable bool layoutRejected_ = false;  ///< the last load rejected the file's "layout": keep it as .bad on save
 
     /**
      * 今のファイルの状態（有無・更新時刻・サイズ）を取る。

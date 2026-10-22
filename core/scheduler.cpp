@@ -9,6 +9,8 @@ namespace {
 
 /** A source counts as due this much early, so sources that share the 2 Hz tick run together. */
 constexpr double kDueSlackSec = 0.05;
+/** A delta source's second read after a resume comes this soon, so it has a value without waiting an interval. */
+constexpr double kRefillSec = 0.25;
 
 static_assert(kSourceCount <= 32, "pinnedMask_ has a bit per source");
 
@@ -36,9 +38,10 @@ Scheduler::Scheduler(const std::vector<MetricDef>& defs) {
     sources_[indexOf(SourceId::Network)].ownerMask |= 1u << static_cast<unsigned>(WidgetType::Streaming);
 }
 
-void Scheduler::addSource(SourceId source, ReadFn read) {
+void Scheduler::addSource(SourceId source, ReadFn read, bool quickRefill) {
     if (!validSource(source)) return;
     sources_[indexOf(source)].read = std::move(read);
+    sources_[indexOf(source)].quickRefill = quickRefill;
 }
 
 void Scheduler::setEnabledWidgets(const std::vector<WidgetType>& widgets) {
@@ -97,7 +100,15 @@ int Scheduler::runDue(double now) {
         s.read(now, resumed);
         ++s.reads;
         s.lastRead = now;
-        s.nextDue = now + s.interval;
+        if (resumed && s.quickRefill && kRefillSec < s.interval) {
+            // A resumed delta source only took its baseline: one extra read kRefillSec later gives a value, then
+            // it goes back to its own deadline, so it stays in step with the other sources
+            s.nextDue = now + kRefillSec;
+            s.afterRefill = now + s.interval;
+        } else {
+            s.nextDue = s.afterRefill > now ? s.afterRefill : now + s.interval;
+            s.afterRefill = -1.0;
+        }
         ++ran;
     }
     return ran;
