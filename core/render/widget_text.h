@@ -1,7 +1,8 @@
 // UI strings for the widgets, in Japanese and English. Drawing code never contains UI text; it looks it up here.
-// The words the fixed panel had (headset/i18n.cpp before the widget grid) keep their Japanese; newer ones are
-// English in both tables for now (marked TODO(ja) in widget_text.cpp).
+// The words the fixed panel had (headset/i18n.cpp before the widget grid) keep their Japanese.
 #pragma once
+
+#include "reason.h"
 
 #include <string>
 
@@ -73,6 +74,14 @@ struct WidgetText {
  * @return its strings (static)
  */
 const WidgetText& widgetText(WidgetLanguage language);
+
+/**
+ * Why a reading is missing, in the strings' language (English is reasonText).
+ * @param t the strings
+ * @param reason the code
+ * @return static text
+ */
+const char* reasonLabel(const WidgetText& t, Reason reason);
 
 /**
  * The throttle badge: SteamVR is holding the app to 1/(throttled + 1) of the refresh rate.

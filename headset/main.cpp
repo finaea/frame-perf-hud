@@ -696,7 +696,7 @@ int runDumpSettingsPng(const Options& options) {
         profilesView.items = {{"profile-1", "Standalone"}, {"profile-2", "Racing"}, {"profile-3", "Minimal"}};
         profilesView.activeId = "profile-2";
         profilesView.unsaved = true;
-        profilesView.status = "Saved to Racing";
+        profilesView.status = profileStatusText(config.language, "saved-to", "Racing", "");
         panel.selectProfile("profile-2");
     }
     panel.render(config, autostartView, updateView, profilesView);
@@ -1071,23 +1071,23 @@ int runOverlay(const Options& options) {
                     config.activeProfile = id;
                     if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
                     settings.selectProfile(id);
-                    profileStatus = "Saved as " + profiles.find(id)->name;
+                    profileStatus = profileStatusText(config.language, "saved-as", profiles.find(id)->name, "");
                 } else {
-                    profileStatus = "Couldn't save a new profile: " + error;
+                    profileStatus = profileStatusText(config.language, "new-failed", "", error);
                 }
                 break;
             }
             case SettingsAction::ProfileUse:
                 if (selected == nullptr) break;
                 ok = setLive(selected->layout, selected->id);
-                profileStatus = ok ? "Using " + selectedName : "Couldn't use " + selectedName + ": " + error;
+                profileStatus = profileStatusText(config.language, ok ? "using" : "use-failed", selectedName, error);
                 break;
             case SettingsAction::ProfileSave: {
                 const Profile* active = profiles.find(config.activeProfile);
                 if (active == nullptr) break;
                 const std::string name = active->name;
                 ok = profiles.save(active->id, config.layout, error);
-                profileStatus = ok ? "Saved to " + name : "Couldn't save " + name + ": " + error;
+                profileStatus = profileStatusText(config.language, ok ? "saved-to" : "save-failed", name, error);
                 break;
             }
             case SettingsAction::ProfileRename:
@@ -1098,31 +1098,31 @@ int runOverlay(const Options& options) {
                     profileStatus.clear();
                     ok = true;
                 } else {
-                    profileStatus = "The keyboard didn't open: " + error;
+                    profileStatus = profileStatusText(config.language, "keyboard-failed", "", error);
                 }
                 break;
             case SettingsAction::ProfileDelete:
                 if (selected == nullptr) break;
                 if (profiles.remove(selectedId, error)) {
                     ok = true;
-                    profileStatus = "Deleted " + selectedName;
+                    profileStatus = profileStatusText(config.language, "deleted", selectedName, "");
                     if (config.activeProfile == selectedId) {
                         config.activeProfile.clear();
                         if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
                     }
                 } else {
-                    profileStatus = "Couldn't delete " + selectedName + ": " + error;
+                    profileStatus = profileStatusText(config.language, "delete-failed", selectedName, error);
                 }
                 break;
             case SettingsAction::ProfileReset:  // saved profiles stay as they are until Save
                 ok = setLive(frame_perf_overlay::defaultLayout(), config.activeProfile);
-                profileStatus = ok ? "Layout reset to the default" : "Couldn't reset: " + error;
+                profileStatus = profileStatusText(config.language, ok ? "reset" : "reset-failed", "", error);
                 break;
             default: break;
         }
         if (!ok && selected == nullptr && action != SettingsAction::ProfileNew && action != SettingsAction::ProfileSave &&
             action != SettingsAction::ProfileReset) {
-            profileStatus = "That profile isn't there any more";
+            profileStatus = profileStatusText(config.language, "gone", "", "");
         }
         std::fprintf(stderr, "[profiles] %s\n", profileStatus.c_str());
         return ok;
@@ -1230,8 +1230,9 @@ int runOverlay(const Options& options) {
             std::string error;
             const std::string id = pendingRename;
             pendingRename.clear();
-            profileStatus = profiles.rename(id, events.keyboardText, error) ? "Renamed to " + profiles.find(id)->name
-                                                                            : "Couldn't rename: " + error;
+            profileStatus = profiles.rename(id, events.keyboardText, error)
+                                ? profileStatusText(config.language, "renamed", profiles.find(id)->name, "")
+                                : profileStatusText(config.language, "rename-failed", "", error);
             std::fprintf(stderr, "[profiles] %s\n", profileStatus.c_str());
             settingsDirty |= refreshProfilesUi();
         }

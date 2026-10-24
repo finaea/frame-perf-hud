@@ -8,16 +8,16 @@ namespace {
 
 const WidgetText kJapanese = {
     WidgetLanguage::Ja,
-    "N/A: ",  // TODO(ja)
+    "",  // 日本語は理由の文だけで分かるので前に何も付けない
     // Titles
     "フレーム",
     "CPU",
-    "GPU & RAM",  // TODO(ja)
+    "GPU・メモリ",
     "電力",
     "電池",
     "温度",
-    "Network",  // TODO(ja)
-    "General",  // TODO(ja)
+    "通信",
+    "その他",
     // Frame
     "計測待ち",
     "SteamVR 未接続",
@@ -27,15 +27,15 @@ const WidgetText kJapanese = {
     "（最大コア ",
     "）",
     // GPU & RAM
-    "load",  // TODO(ja)
-    "Clock ",  // TODO(ja)
+    "負荷",
+    "クロック ",
     "メモリ ",
     // Power
-    "Rails ",  // TODO(ja)
+    "各ch計 ",
     // Battery
-    "Real gauge %. Steam shows a higher number",  // TODO(ja)
-    "Into battery",  // TODO(ja)
-    "From battery",  // TODO(ja)
+    "実際の残量の %。Steam の表示はこれより高め",
+    "電池へ",
+    "電池から",
     "充電中",
     "放電中",
     "満充電",
@@ -58,7 +58,7 @@ const WidgetText kJapanese = {
     "未接続",
     "リンク ",
     // General
-    "Controllers",  // TODO(ja)
+    "コントローラー",
     "左手 ",
     "右手 ",
     "現在時刻",
@@ -126,6 +126,22 @@ const WidgetText kEnglish = {
 
 const WidgetText& widgetText(WidgetLanguage language) {
     return language == WidgetLanguage::En ? kEnglish : kJapanese;
+}
+
+const char* reasonLabel(const WidgetText& t, Reason reason) {
+    if (t.language == WidgetLanguage::En) return reasonText(reason);
+    switch (reason) {
+        case Reason::None: return "正常";
+        case Reason::NotSampledYet: return "読み取り待ち";
+        case Reason::SensorMissing: return "センサーなし";
+        case Reason::ReadFailed: return "読み取り失敗";
+        case Reason::NoSteamVr: return "SteamVR 未接続";
+        case Reason::NoFrames: return "フレーム待ち";
+        case Reason::NotConnected: return "未接続";
+        case Reason::Paused: return "一時停止中（だれも見ていない）";
+        case Reason::InvalidReading: return "意味のない値";
+    }
+    return "不明";
 }
 
 std::string throttleBadgeText(const WidgetText& t, double hz, int throttled) {

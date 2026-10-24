@@ -90,39 +90,39 @@ const UiText kJapanese = {
     "傾けると消す", "消える角度", "%.0f〜%.0f°",
     "時計", "12h", "24h", "現在時刻",
     // ダッシュボードのページ・レイアウトの編集
-    "Layout",  // TODO(ja)
-    "Placement",  // TODO(ja)
-    "Layout",  // TODO(ja)
-    "Drag a widget to move it, tap it to change its settings",  // TODO(ja)
-    "New column",  // TODO(ja)
-    "Drop here to remove",  // TODO(ja)
-    "Widgets",  // TODO(ja)
-    "Network",  // TODO(ja)
-    "Tap a widget on the left to change it",  // TODO(ja)
-    "No settings",  // TODO(ja)
-    "Remove",  // TODO(ja)
-    "Saved",  // TODO(ja)
-    "Changed meanwhile, try again",  // TODO(ja)
-    "Couldn't save the layout",  // TODO(ja)
-    "Compact",  // TODO(ja)
+    "レイアウト",
+    "配置",
+    "レイアウト",
+    "ドラッグで移動、タップで設定を変えられます",
+    "新しい列",
+    "ここに落とすと外します",
+    "ウィジェット",
+    "通信",
+    "左のウィジェットをタップすると変えられます",
+    "設定はありません",
+    "外す",
+    "保存しました",
+    "ほかで変わりました。もう一度やってね",
+    "レイアウトを保存できませんでした",
+    "小さく表示",
     // プロファイルのページ
-    "Profiles",  // TODO(ja)
-    "Profiles",  // TODO(ja)
+    "プロファイル",
+    "プロファイル",
     "%zu / %zu",
-    "No profiles yet. New profile saves the layout you have now",  // TODO(ja)
-    "Active",  // TODO(ja)
-    "unsaved changes",  // TODO(ja)
-    "Use",  // TODO(ja)
-    "Save",  // TODO(ja)
-    "Rename",  // TODO(ja)
-    "Delete",  // TODO(ja)
-    "New profile",  // TODO(ja)
-    "Reset to default",  // TODO(ja)
-    "Tap again: the layout's changes are lost",  // TODO(ja)
-    "Tap again to delete",  // TODO(ja)
-    "The layout you have now isn't saved in a profile",  // TODO(ja)
-    "A profile is the layout only: columns, widgets and their settings. Placement and app settings aren't part of it",  // TODO(ja)
-    "Profile name",  // TODO(ja)
+    "まだありません。「新しく作る」で今のレイアウトを保存します",
+    "使用中",
+    "未保存の変更あり",
+    "使う",
+    "上書き保存",
+    "名前を変える",
+    "削除",
+    "新しく作る",
+    "既定に戻す",
+    "もう一度押すと、レイアウトの変更は消えます",
+    "もう一度押すと削除",
+    "今のレイアウトはどのプロファイルにも保存されていません",
+    "プロファイルに入るのはレイアウト（列・ウィジェットとその設定）だけ。位置やアプリの設定は入りません",
+    "プロファイルの名前",
 };
 
 const UiText kEnglish = {
@@ -185,6 +185,25 @@ std::string updateStepText(Language language, const std::string& step) {
     if (step == "extract") return en ? "Unpacking" : "展開中";
     if (step == "install") return en ? "Installing" : "入れ替え中";
     return step;
+}
+
+std::string profileStatusText(Language language, const std::string& what, const std::string& name,
+                              const std::string& error) {
+    const bool en = language == Language::En;
+    if (what == "saved-as") return en ? "Saved as " + name : name + " として保存しました";
+    if (what == "new-failed") return (en ? "Couldn't save a new profile: " : "新しいプロファイルを保存できませんでした: ") + error;
+    if (what == "using") return en ? "Using " + name : name + " を使っています";
+    if (what == "use-failed") return en ? "Couldn't use " + name + ": " + error : name + " を使えませんでした: " + error;
+    if (what == "saved-to") return en ? "Saved to " + name : name + " に上書き保存しました";
+    if (what == "save-failed") return en ? "Couldn't save " + name + ": " + error : name + " を保存できませんでした: " + error;
+    if (what == "keyboard-failed") return (en ? "The keyboard didn't open: " : "キーボードを開けませんでした: ") + error;
+    if (what == "deleted") return en ? "Deleted " + name : name + " を削除しました";
+    if (what == "delete-failed") return en ? "Couldn't delete " + name + ": " + error : name + " を削除できませんでした: " + error;
+    if (what == "reset") return en ? "Layout reset to the default" : "レイアウトを既定に戻しました";
+    if (what == "reset-failed") return (en ? "Couldn't reset: " : "既定に戻せませんでした: ") + error;
+    if (what == "renamed") return en ? "Renamed to " + name : "名前を " + name + " に変えました";
+    if (what == "rename-failed") return (en ? "Couldn't rename: " : "名前を変えられませんでした: ") + error;
+    return en ? "That profile isn't there any more" : "そのプロファイルはもうありません";
 }
 
 std::string updateErrorText(Language language, const std::string& error) {

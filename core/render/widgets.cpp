@@ -131,7 +131,8 @@ const WidgetText& texts(const WidgetContext& ctx) {
 
 /** "N/A: <reason>" */
 std::string naText(const WidgetContext& ctx, uint16_t id) {
-    return std::string(texts(ctx).naPrefix) + reasonText(reasonOf(ctx, id));
+    const WidgetText& t = texts(ctx);
+    return std::string(t.naPrefix) + reasonLabel(t, reasonOf(ctx, id));
 }
 
 // ---- Graphs (the fixed panel's) ----

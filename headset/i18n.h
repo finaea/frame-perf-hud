@@ -176,6 +176,20 @@ std::string updateStepText(Language language, const std::string& step);
 std::string updateErrorText(Language language, const std::string& error);
 
 /**
+ * プロファイルのページの、操作の結果の文言。
+ * @param language 言語
+ * @param what "saved-as" / "new-failed" / "using" / "use-failed" / "saved-to" / "save-failed" / "keyboard-failed" /
+ *             "deleted" / "delete-failed" / "reset" / "reset-failed" / "renamed" / "rename-failed" / "gone"
+ * @param name プロファイルの名前（使わない文言もある）
+ * @param error 失敗の理由（失敗のときだけ使う）
+ * @return 文言
+ * @example
+ * profileStatusText(Language::Ja, "saved-to", "Racing", "") // "Racing に上書き保存しました"
+ */
+std::string profileStatusText(Language language, const std::string& what, const std::string& name,
+                              const std::string& error);
+
+/**
  * 設定ファイルに書く言語の名前。
  * @param language 言語
  * @return "ja" / "en"
