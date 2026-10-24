@@ -39,11 +39,13 @@ bool sameTypes(const LayoutColumn& column, const std::vector<W>& types) {
 void testDefaultLayout() {
     const Layout layout = defaultLayout();
     CHECK(layout.version == 1);
-    CHECK(layout.columns.size() == 1);
-    CHECK(sameTypes(layout.columns[0], {W::Frame, W::Power, W::Temp, W::Cpu, W::GpuRam, W::Network, W::Battery,
-                                        W::General}));
-    // only Battery is the short card
-    for (const WidgetInstance& w : layout.columns[0].widgets) CHECK(w.compact == (w.type == W::Battery));
+    CHECK(layout.columns.size() == 2);
+    CHECK(sameTypes(layout.columns[0], {W::Frame, W::Power, W::Temp, W::Cpu}));
+    CHECK(sameTypes(layout.columns[1], {W::GpuRam, W::Network, W::Battery, W::General}));
+    // Temp and Battery are the short cards
+    for (const LayoutColumn& column : layout.columns) {
+        for (const WidgetInstance& w : column.widgets) CHECK(w.compact == (w.type == W::Battery || w.type == W::Temp));
+    }
     CHECK(hasCompactView(W::Battery) && hasCompactView(W::Temp));
     CHECK(!hasCompactView(W::Frame) && !hasCompactView(W::Network) && !hasCompactView(W::General));
 }
@@ -188,11 +190,13 @@ void testWidgetOffDropsRefs() {
 
     // Network removed: its source loses the reference, the others keep theirs
     Layout noNet = layout;
-    std::vector<WidgetInstance> keep;
-    for (const WidgetInstance& w : noNet.columns[0].widgets) {
-        if (w.type != W::Network) keep.push_back(w);
+    for (LayoutColumn& column : noNet.columns) {
+        std::vector<WidgetInstance> keep;
+        for (const WidgetInstance& w : column.widgets) {
+            if (w.type != W::Network) keep.push_back(w);
+        }
+        column.widgets = keep;
     }
-    noNet.columns[0].widgets = keep;
     {
         Refs r(noNet);
         CHECK(r.sched.refCount(SourceId::Network) == 0);

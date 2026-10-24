@@ -61,7 +61,7 @@ struct Config {
     bool wristFade = true;          ///< 手首のとき、パネルの面が目から外れるほど薄くして消す
     double wristFadeEndDeg = 75.0;  ///< 消えきる角度（度、35〜90）。その 30° 手前から薄くなり始める
     int clockFormat = 24;           ///< 性能パネルの時計（0 = 出さない、12 = 12 時間制、24 = 24 時間制。本体の時刻）
-    double widthM = 0.20;           ///< 1 列（512 px）の幅（m）。パネルの幅は列の数 × これ（既定のレイアウトは 1 列）
+    double widthM = 0.20;           ///< 1 列（512 px）の幅（m）。パネルの幅は列の数 × これ（既定のレイアウトは 2 列）
     double alpha = 0.9;             ///< パネル全体の不透明度（0〜1）
     int updateIntervalMs = 500;     ///< 更新間隔（ms）
     int graphSeconds = 30;          ///< グラフに出す秒数

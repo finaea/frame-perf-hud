@@ -44,12 +44,13 @@ Layout defaultLayout() {
     using W = WidgetType;
     Layout layout;
     layout.version = 1;
-    layout.columns.resize(1);
-    // The fixed panel's rows: frame, power, temperatures; then its text rows (CPU and GPU clocks, Wi-Fi, battery,
-    // controllers, memory) and the clock at the bottom (General's Time row)
-    layout.columns[0].widgets = {instance(W::Frame),   instance(W::Power),   instance(W::Temp),
-                                 instance(W::Cpu),     instance(W::GpuRam),  instance(W::Network),
-                                 instance(W::Battery, true), instance(W::General)};
+    layout.columns.resize(2);
+    // The fixed panel's readings in two columns of about the same height, so the panel is wide and low like the
+    // fixed one instead of one tall column: its graph rows (frame, power, temperatures) and CPU on the left, its text
+    // rows (GPU clock and memory, Wi-Fi, battery, controllers) and the clock (General's Time row) on the right
+    layout.columns[0].widgets = {instance(W::Frame), instance(W::Power), instance(W::Temp, true), instance(W::Cpu)};
+    layout.columns[1].widgets = {instance(W::GpuRam), instance(W::Network), instance(W::Battery, true),
+                                 instance(W::General)};
     return layout;
 }
 

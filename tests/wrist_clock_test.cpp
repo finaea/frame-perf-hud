@@ -577,7 +577,13 @@ void panelHeights(const std::string& directory) {
     FontSet fonts;
     fonts.load(c.fontPath, c.boldFontPath);
     frame_perf_overlay::GridRenderer renderer(fonts);
-    renderer.setLayout(c.layout);
+    // 時計の行の分だけ高さが変わるのを確かめるので、既定のウィジェットを全部 1 列に並べて描く
+    frame_perf_overlay::Layout oneColumn = c.layout;
+    for (size_t i = 1; i < oneColumn.columns.size(); ++i) {
+        for (const auto& w : oneColumn.columns[i].widgets) oneColumn.columns[0].widgets.push_back(w);
+    }
+    oneColumn.columns.resize(1);
+    renderer.setLayout(oneColumn);
     frame_perf_overlay::MetricStore store;
     int withClock = 0;
     for (const int format : {24, 12, 0}) {

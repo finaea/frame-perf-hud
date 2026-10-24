@@ -291,7 +291,7 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
         }
     }
     // The widget grid. A broken layout falls back to the default one; the rest of the file still counts. A file
-    // without one (from before the grid) gets the default too: one column, the fixed panel's rows
+    // without one (from before the grid) gets the default too: two columns, the fixed panel's readings
     if (const JsonValue* layout = root.get("layout")) {
         std::string layoutError;
         if (frame_perf_overlay::layoutFromJson(*layout, config.layout, warnings, layoutError)) {

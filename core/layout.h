@@ -48,9 +48,10 @@ struct Layout {
 };
 
 /**
- * The first-run layout, also used for a config.json from before the grid (no "layout" key): one column that
- * shows what the fixed panel showed (Frame, Power, Temp, then CPU, GPU & RAM, Network, Battery, General), so an
- * updated install keeps its width (width_m is one column) and its readings.
+ * The first-run layout, also used for a config.json from before the grid (no "layout" key): two columns that
+ * show what the fixed panel showed (Frame, Power, compact Temp, CPU | GPU & RAM, Network, compact Battery,
+ * General), so an updated install keeps its readings in a wide, low panel like the fixed one. It is twice as wide
+ * as the fixed panel at the same width_m (width_m is one column), so the text keeps its size.
  * @return the layout, version 1
  */
 Layout defaultLayout();

@@ -976,7 +976,7 @@ int runOverlay(const Options& options) {
     ConfigWatcher watcher(options.configPath);
     Config config = watcher.loadInitial();
     if (!config.layoutInFile && !watcher.lastLoadFailed()) {
-        // First run, or a config.json from before the widget grid: write the default layout (one column, the fixed
+        // First run, or a config.json from before the widget grid: write the default layout (two columns, the fixed
         // panel's readings) so it can be edited. An unparsable file is left alone: the defaults run in memory and
         // the log says why
         std::string error;

@@ -46,8 +46,10 @@ void writeFile(const std::string& path, const std::string& content) {
 Layout layoutFor(int n) {
     Layout layout = defaultLayout();
     layout.version = static_cast<uint32_t>(n);
-    for (WidgetInstance& w : layout.columns[0].widgets) {
-        if (hasCompactView(w.type)) w.compact = (n + (w.type == W::Temp ? 1 : 0)) % 2 == 0;
+    for (LayoutColumn& column : layout.columns) {
+        for (WidgetInstance& w : column.widgets) {
+            if (hasCompactView(w.type)) w.compact = (n + (w.type == W::Temp ? 1 : 0)) % 2 == 0;
+        }
     }
     return layout;
 }
@@ -148,7 +150,7 @@ void testKillDuringSave() {
         std::vector<std::string> warnings;
         std::string loadError;
         const bool ok = loadConfig(path, loaded, warnings, loadError);
-        const bool intact = ok && loaded.layoutInFile && loaded.layout.columns.size() == 1 &&
+        const bool intact = ok && loaded.layoutInFile && loaded.layout.columns.size() == defaultLayout().columns.size() &&
                             loaded.layout.sameWidgets(layoutFor(static_cast<int>(loaded.layout.version))) &&
                             loaded.fontPath.size() == 200 * 1024;
         if (!intact) {
@@ -387,7 +389,7 @@ void testOldConfigUpgrade() {
     checkOldValues(c);
     CHECK(!c.layoutInFile);
     CHECK(c.layout.sameWidgets(defaultLayout()));
-    CHECK(c.layout.columns.size() == 1);
+    CHECK(c.layout.columns.size() == 2);
     CHECK(c.activeProfile.empty());
 
     // save and load again: values and the layout survive, the layout is now in the file

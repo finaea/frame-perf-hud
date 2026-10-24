@@ -77,9 +77,9 @@ Pixels renderPx(const Layout& layout, const MetricStore& store, const char* pngN
 
 void testGeometry() {
     const GridGeometry def = layoutGrid(defaultLayout());
-    CHECK(def.width == 512 && def.columns == 1);  // one column: the fixed panel's width
+    CHECK(def.width == 1024 && def.columns == 2);  // two columns: wide and low like the fixed panel
     CHECK(def.scale == 1.0);
-    CHECK(def.textureWidth == 512);
+    CHECK(def.textureWidth == 1024 && def.height < 512);
     CHECK(def.textureHeight == def.height && def.height <= 2048);
     CHECK(def.slots.size() == 8);
 
@@ -344,7 +344,7 @@ void testChangeDetection() {
 
     // A setting tweak (Compact) is a different widget too
     Layout tweaked = changed;
-    tweaked.columns[0].widgets[2].compact = true;  // Temp
+    tweaked.columns[0].widgets[2].compact = !tweaked.columns[0].widgets[2].compact;  // Temp
     CHECK(renderer.setLayout(tweaked));
     renderer.render(ctx);
     CHECK(renderer.staticBuilds() == 3);

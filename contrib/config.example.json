@@ -42,7 +42,8 @@
   "layout": {
     "version": 1,
     "columns": [
-      [ { "type": "frame" }, { "type": "power" }, { "type": "temp" }, { "type": "cpu" }, { "type": "gpu_ram" }, { "type": "network" }, { "type": "battery", "compact": true }, { "type": "general" } ]
+      [ { "type": "frame" }, { "type": "power" }, { "type": "temp", "compact": true }, { "type": "cpu" } ],
+      [ { "type": "gpu_ram" }, { "type": "network" }, { "type": "battery", "compact": true }, { "type": "general" } ]
     ]
   }
 }

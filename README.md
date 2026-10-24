@@ -20,7 +20,7 @@ These images were written out by the app itself (`--dump-png` / `--dump-settings
 
 ## What it shows
 
-The default layout is one column with what the panel has always shown, top to bottom. Each widget is a card; the ones with a graph show the last 30 s.
+The default layout puts what the panel has always shown in two columns (Frame, Power, Temp and CPU on the left; GPU & RAM, Network, Battery and General on the right), with Temp and Battery as Compact cards, so the panel is wide and low like before. Turn Compact off on Temp to see DDR and the battery, display, exhaust and heat sink temperatures. Each widget is a card; the ones with a graph show the last 30 s.
 
 | Widget | Main number | Details | Graph |
 |---|---|---|---|
@@ -155,12 +155,12 @@ A file with every key at its default value is in [`contrib/config.example.json`]
 | `wrist_fade` | `true` | On a hand, fade the panel out as its face turns away from your head (the headset). `false` keeps it shown at any angle |
 | `wrist_fade_end_deg` | `75` | Angle (degrees, 35 to 90) between the panel's face and the direction to your head (the headset) at which the panel on a hand is gone. It starts fading 30° earlier |
 | `clock_format` | `24` | The clock on the panel's bottom line: `24` (24-hour), `12` (12-hour with AM / PM) or `0` (hidden) |
-| `width_m` | `0.2` | Width of one column of the panel in meters (512 px). The panel is columns × this wide, and its height follows from the widgets in the tallest column. A settings file from before the widget grid had the whole panel's width here; it gets the one-column default layout, so the panel keeps its width |
+| `width_m` | `0.2` | Width of one column of the panel in meters (512 px). The panel is columns × this wide, and its height follows from the widgets in the tallest column. A settings file from before the widget grid had the whole panel's width here; it gets the two-column default layout, so the panel is twice as wide as before with the text at the same size (make it smaller with Size if that's too wide) |
 | `alpha` | `0.9` | Opacity of the whole panel (0 to 1) |
 | `update_interval_ms` | `500` | Update interval (100 to 5000 ms) |
 | `graph_seconds` | `30` | Seconds shown in the graphs (5 to 300) |
 | `font` / `font_bold` | Noto Sans CJK Regular / Bold | Font files. If they can't be read, "Noto Sans CJK JP" is looked up with fontconfig |
-| `layout` | one column: Frame, Power, Temp, CPU, GPU & RAM, Network, Battery (compact), General | The widget grid, written by the **Layout** page: `{"version": N, "columns": [[{"type": "frame"}, ...], ...]}`. Widget types are `frame`, `cpu`, `gpu_ram`, `power`, `battery`, `temp`, `network` and `general`; `battery` and `temp` take `"compact": true`. A file without `layout` (or with a broken one) gets the default, and the next save writes it out |
+| `layout` | two columns: Frame, Power, Temp (compact), CPU / GPU & RAM, Network, Battery (compact), General | The widget grid, written by the **Layout** page: `{"version": N, "columns": [[{"type": "frame"}, ...], ...]}`. Widget types are `frame`, `cpu`, `gpu_ram`, `power`, `battery`, `temp`, `network` and `general`; `battery` and `temp` take `"compact": true`. A file without `layout` (or with a broken one) gets the default, and the next save writes it out |
 | `active_profile` | `""` | The profile last used or saved on the **Profiles** page (`"profile-2"`), `""` for none |
 | `thresholds.fps_warn_ratio` / `fps_crit_ratio` | `0.95` / `0.75` | Yellow / red when the app's frame rate is **below** refresh rate × this ratio |
 | `thresholds.frame_warn_ratio` / `frame_crit_ratio` | `0.9` / `1.0` | Yellow / red when GPU or CPU time is at least the frame budget × this factor |
