@@ -1,5 +1,20 @@
 # 変更履歴
 
+## 未リリース
+
+### Widget layout, layout editor, dashboard pages, profiles (finaea's PR)
+
+- The fixed panel is now a grid of widgets: Frame, Power, Temp, CPU, GPU & RAM, Network, Battery and General, each a card with the same readings and look as before. The default layout is one column with what the panel showed, top to bottom, so it keeps its width. It is taller than before (about 860 px tall instead of 460) because every reading has its own card
+- The dashboard tab has three pages: **Placement** (the cards from before), **Layout** and **Profiles**
+- **Layout** page: drag widgets between columns or onto the palette to remove them, add them from the palette, and switch Battery and Temp to a shorter **Compact** card. Up to 8 columns of 16 widgets; `width_m` is now the width of one column. Every edit is saved at once (a compare-and-set on the layout's version, so an edit made on an older layout is turned down instead of overwriting a newer one)
+- **Profiles** page: save up to 8 layouts as profiles, use, save, rename (SteamVR's keyboard), delete, reset to the default layout. Profiles are files in `~/.config/frame-perf-overlay/profiles/`
+- Reading only what's shown, only while someone looks: every metric has one owner widget and one source in a registry, and a source is read only when a widget on the panel needs it and the panel is shown on a headset in use (or the dashboard tab is open). Nothing is read while the panel is hidden or the headset is off your head. The read intervals are the old ones (power and wireless every 2 s, battery and the iio temperatures every 5 s, the rest every update)
+- Only the widgets whose readings changed are redrawn, and the panel's pixels go to OpenVR as cairo draws them (premultiplied BGRA), without the RGBA conversion. `FRAME_PERF_RGBA_UPLOAD=1` brings the conversion back
+- The settings file keeps every key it had and gets `layout` and `active_profile`. A settings file from before (no `layout`) loads with every setting kept and gets the one-column default layout. A file that can't be read is kept as `config.json.bad` before the next save. The save now waits for the data to reach the disk before it replaces the file
+- Visible changes on the panel: the Power card shows the sum of the rails under vph instead of the sum of all channels (which counted vph twice); the fan speed moved to the Temp card; the GPU load moved from the Frame row's title and the shaded area behind the frame rate graph to its own GPU & RAM card; the red frame for thermal throttling goes around the Temp card instead of the whole panel; the time shows the date too
+- New options: `--layout FILE` and `--bench N` for `--dump-png`, `--preview-page` and `--preview-select` for `--dump-settings-png`, `--debug-dump`, `--dump-metrics`
+- Tests for the registry, the scheduler, the layout and its edits, the widgets and the grid, the layout editor, profiles, the system sources (with a fake `/sys` and `/proc`), and loading a settings file from 0.3.2
+
 ## 0.3.2 — 2026-10-17
 
 - GPU 使用率がいつも 100% になっていたのを直した。SteamOS 0.5.6（カーネル 6.18）の msm では、DRM の fdinfo の `drm-engine-gpu`（GPU が働いた時間）が壊れていて 1 秒で数か月ぶん増え、`drm-cycles-gpu`（働いたサイクル数）も重いゲームの分をほとんど数えない（Half-Life: Alyx で GPU が追いついていないのに 4% ほど）。本体全体の GPU 使用率はこのカーネルでは正しく出せないので、代わりに「GPU 負荷」として、SteamVR が測っている 1 フレームあたりの GPU 時間（`m_flTotalRenderGpuMs`）× アプリの fps を出すようにした。作者の Frame で、Alyx（72Hz、58.6fps、16.5ms）で 97% ほど、SteamVR のホームだけ（90Hz、3ms）で 27% ほど。数えるのは VR のアプリとコンポジタの分だけ（ほかのプログラムが使う GPU は入らない）。設定のキー（`gpu_warn_pct` / `gpu_crit_pct`）はそのまま

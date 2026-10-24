@@ -3,7 +3,7 @@
 #include "clock.h"
 #include "config.h"
 #include "draw.h"
-#include "panel.h"
+#include "grid_renderer.h"
 #include "placement.h"
 #include "settings_panel.h"
 #include "theme.h"
@@ -568,28 +568,31 @@ void configuration(const std::string& file) {
 }
 
 /**
- * 性能パネルの高さ: 時計を出すと 460、出さないと時計の 1 行ぶん詰めた 434（テクスチャは 460 のまま、下は透明）。
+ * 性能パネルの高さ: 時計を出すと General の時計の行ぶん高く、出さない（0）と 1 行（22 px）詰まる。
+ * 既定のレイアウトは 1 列なので、幅は 512 のまま。
  * @param directory PNG を書く一時フォルダ
  */
 void panelHeights(const std::string& directory) {
     Config c;
     FontSet fonts;
     fonts.load(c.fontPath, c.boldFontPath);
-    PanelRenderer renderer(fonts);
-    PanelState state;
-    CHECK(renderer.width() == 512 && renderer.height() == 460);
-    CHECK(PanelRenderer::heightFor(true) == 460 && PanelRenderer::heightFor(false) == 434);
+    frame_perf_overlay::GridRenderer renderer(fonts);
+    renderer.setLayout(c.layout);
+    frame_perf_overlay::MetricStore store;
+    int withClock = 0;
     for (const int format : {24, 12, 0}) {
-        c.clockFormat = format;
-        renderer.render(state, c);
-        const int expected = format != 0 ? 460 : 434;
-        CHECK(renderer.visibleHeight() == expected);
-        const std::vector<uint8_t>& rgba = renderer.toRgba();
-        CHECK(rgba.size() == 512u * 460u * 4u);
-        // 見える部分のいちばん下の近く（角の丸みの内側）は地の色で不透明、その下は透明
-        const auto alphaAt = [&rgba](int x, int y) { return rgba[(static_cast<size_t>(y) * 512 + x) * 4 + 3]; };
-        CHECK(alphaAt(256, expected - 3) == 255);
-        if (expected < 460) CHECK(alphaAt(256, expected + 2) == 0 && alphaAt(256, 458) == 0);
+        frame_perf_overlay::WidgetContext ctx;
+        ctx.store = &store;
+        ctx.now = 1.0;
+        ctx.clockFormat = format;
+        renderer.updateGeometry(ctx);
+        renderer.render(ctx);
+        const int width = renderer.geometry().textureWidth;
+        const int height = renderer.geometry().textureHeight;
+        if (format == 24) withClock = height;
+        const int expected = format != 0 ? withClock : withClock - 22;
+        CHECK(width == 512 && height == expected);
+        CHECK(renderer.toRgba().size() == static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
         // PNG は見える部分の高さで書き出す
         const std::string path = directory + "/panel-" + std::to_string(format) + ".png";
         CHECK(renderer.writePng(path));

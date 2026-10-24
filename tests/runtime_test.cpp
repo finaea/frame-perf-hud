@@ -1,4 +1,5 @@
 // 機器基準の変換を手首の確認のたびではなく設定の反映時に作るようにした変更の回帰テスト。
+#include "placement.h"
 #include "vr_overlay.h"
 
 #include <cmath>
@@ -99,11 +100,45 @@ void gpuBusyFromFrames() {
     check(std::isnan(FrameStats().gpuBusyPct), "GPU load should start unavailable");
 }
 
+// The panel counts as shown only once OpenVR took the "show": hidden, faded out and alpha 0 are all "not shown"
+// (the sensors read only while it is)
+void panelShown() {
+    const auto accept = [](auto) { return true; };
+    {
+        PanelPresentationState state;
+        check(!state.shown(), "a new panel should not count as shown");
+        check(!state.apply(0.9, accept, accept) && state.shown(), "an accepted show should be shown");
+        check(!state.apply(0.0, accept, accept) && !state.shown(), "alpha 0 should hide the panel");
+        check(!state.apply(0.5, accept, accept) && state.shown(), "alpha back up should show it again");
+    }
+    {
+        PanelPresentationState state;  // alpha 0 from the config
+        check(!state.apply(0.0, accept, accept) && !state.shown(), "alpha 0 from the config should not be shown");
+    }
+    {
+        PanelPresentationState state;  // OpenVR refuses the show: not shown, and the show is retried
+        bool allow = false;
+        const auto setVisible = [&allow](bool) { return allow; };
+        check(state.apply(0.9, accept, setVisible) && !state.shown(), "a refused show should not count as shown");
+        allow = true;
+        check(!state.apply(0.9, accept, setVisible) && state.shown(), "the retried show should be shown");
+    }
+    {
+        PanelPresentationState state;  // OpenVR refuses the alpha: the show waits for the next call
+        bool allow = false;
+        const auto setAlpha = [&allow](double) { return allow; };
+        check(state.apply(0.9, setAlpha, accept) && !state.shown(), "a refused alpha should hold the show back");
+        allow = true;
+        check(!state.apply(0.9, setAlpha, accept) && state.shown(), "the retried alpha should show the panel");
+    }
+}
+
 }  // namespace
 
 int main() {
     attachmentTransforms();
     eventReuse();
     gpuBusyFromFrames();
+    panelShown();
     std::puts("runtime transform/event/GPU load tests passed");
 }
