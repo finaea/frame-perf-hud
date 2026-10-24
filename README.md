@@ -205,8 +205,8 @@ The **Autostart** switch in the dashboard runs the same `enable` / `disable` (wi
 - **Update fails or gets stuck**: check `~/.cache/frame-perf-overlay/update.log` (also shown in the bar's error message) and `journalctl --user -u frame-perf-overlay-update`. A failed or interrupted update leaves the current version untouched.
 - **No panel**: check that SteamVR is running (the app waits for it and never starts it by itself), that **Show** is on in the Perf tab, and that the service is running (`systemctl --user status frame-perf-overlay`). If you launched it from **+** while it was already running, that hid the panel; launch it again to show it.
 - **Not in the + list**: run `./install.sh` again and check that `~/.local/share/applications/frame-perf-overlay.desktop` exists.
-- **`--` instead of a value**: that sensor wasn't found or couldn't be read. The sensors are looked up by name when the app starts, so a SteamOS update that renames one shows up this way. `frame-perf-overlay --print` lists what was found.
-- **"No SteamVR" in the frame row**: the app isn't connected to SteamVR yet. It retries every 3 seconds.
+- **`--` or "N/A: sensor not found" / "read failed" instead of a value**: that sensor wasn't found or couldn't be read. The sensors are looked up by name when the app starts, so a SteamOS update that renames one shows up this way. `frame-perf-overlay --print` lists what was found.
+- **"No SteamVR" in the Frame card**: the app isn't connected to SteamVR yet. It retries every 3 seconds.
 - **Wrong font or boxes instead of text**: check `font` / `font_bold` in the settings file.
 
 ## How accurate the values are
@@ -223,7 +223,7 @@ Some values were checked against another source on a Steam Frame; others are est
 
 **Estimates**
 
-- **Power**: which circuit each power channel measures isn't documented. The main rail looks like the total supply, but that is a guess, and the "all channels" sum may count some power twice.
+- **Power**: which circuit each power channel measures isn't documented. The main rail (vph) looks like the total supply, but that is a guess. The "Rails" sum adds the channels measured under it, and whether they cover every circuit is unknown.
 - **GPU load**: the GPU time per frame that SteamVR measures, multiplied by the app's frame rate. It counts only the VR app and the SteamVR compositor (not other programs using the GPU), is capped at 100 % when GPU work overlaps, and shows `--` without SteamVR. So it isn't the GPU usage of the whole headset. The kernel's per-process GPU counters, which this used before, aren't used: on SteamOS 0.5.6 they are broken or miss most of a heavy game's work.
 - **fps while streaming with Steam Link**: not yet checked whether frames dropped on the PC or on the network always show up as a lower fps.
 - **Wireless throughput**: counts all traffic on the direct wireless link, not only the stream. On **Wi-Fi** it is everything the headset sends and receives over Wi-Fi (downloads, other apps and so on), not only Steam Link.
@@ -315,3 +315,4 @@ MIT. See [LICENSE](LICENSE). `vendor/frame-updater/` is a copy of the author's o
 
 - Wrist attachment, the clock and the tilt fade were contributed by [TaiKeid](https://github.com/TaiKeid) in [#1](https://github.com/sasaken1102r/frame-perf-overlay/pull/1).
 - The smaller release build, the faster RGBA conversion and the extra tests were contributed by [cinnacappu](https://github.com/cinnacappu) in [#2](https://github.com/sasaken1102r/frame-perf-overlay/pull/2).
+- The widget layout, the layout editor and profiles were contributed by [finaea](https://github.com/finaea) in [#4](https://github.com/sasaken1102r/frame-perf-overlay/pull/4).
