@@ -1,19 +1,24 @@
 # 変更履歴
 
-## 未リリース
+## 0.4.0 — 2026-10-24
 
-### Widget layout, layout editor, dashboard pages, profiles (finaea's PR)
+### ウィジェットの並べ替え・レイアウトの編集・プロファイル（finaea さんの PR #4）
 
-- The fixed panel is now a grid of widgets: Frame, Power, Temp, CPU, GPU & RAM, Network, Battery and General, each a card with the same readings and look as before. The default layout is one column with what the panel showed, top to bottom, so it keeps its width. It is taller than before (about 860 px tall instead of 460) because every reading has its own card
-- The dashboard tab has three pages: **Placement** (the cards from before), **Layout** and **Profiles**
-- **Layout** page: drag widgets between columns or onto the palette to remove them, add them from the palette, and switch Battery and Temp to a shorter **Compact** card. Up to 8 columns of 16 widgets; `width_m` is now the width of one column. Every edit is saved at once (a compare-and-set on the layout's version, so an edit made on an older layout is turned down instead of overwriting a newer one)
-- **Profiles** page: save up to 8 layouts as profiles, use, save, rename (SteamVR's keyboard), delete, reset to the default layout. Profiles are files in `~/.config/frame-perf-overlay/profiles/`
-- Reading only what's shown, only while someone looks: every metric has one owner widget and one source in a registry, and a source is read only when a widget on the panel needs it and the panel is shown on a headset in use (or the dashboard tab is open). Nothing is read while the panel is hidden or the headset is off your head. The read intervals are the old ones (power and wireless every 2 s, battery and the iio temperatures every 5 s, the rest every update)
-- Only the widgets whose readings changed are redrawn, and the panel's pixels go to OpenVR as cairo draws them (premultiplied BGRA), without the RGBA conversion. `FRAME_PERF_RGBA_UPLOAD=1` brings the conversion back
-- The settings file keeps every key it had and gets `layout` and `active_profile`. A settings file from before (no `layout`) loads with every setting kept and gets the one-column default layout. A file that can't be read is kept as `config.json.bad` before the next save. The save now waits for the data to reach the disk before it replaces the file
-- Visible changes on the panel: the Power card shows the sum of the rails under vph instead of the sum of all channels (which counted vph twice); the fan speed moved to the Temp card; the GPU load moved from the Frame row's title and the shaded area behind the frame rate graph to its own GPU & RAM card; the red frame for thermal throttling goes around the Temp card instead of the whole panel; the time shows the date too
-- New options: `--layout FILE` and `--bench N` for `--dump-png`, `--preview-page` and `--preview-select` for `--dump-settings-png`, `--debug-dump`, `--dump-metrics`
-- Tests for the registry, the scheduler, the layout and its edits, the widgets and the grid, the layout editor, profiles, the system sources (with a fake `/sys` and `/proc`), and loading a settings file from 0.3.2
+- 決まった形だったパネルを、ウィジェットを並べる形にした。ウィジェットは「フレーム」「電力」「温度」「CPU」「GPU・メモリ」「通信」「電池」「その他」で、どれも今までと同じ値を同じ見た目で出すカード。既定のレイアウトは 1 列で、今までパネルに出していたものを上から順に並べるので、幅は変わらない。値ごとにカードがあるので、高さは前より高い（460px → 860px ほど）
+- ダッシュボードのタブを 3 つのページにした: 「配置」（今までのカード）、「レイアウト」、「プロファイル」
+- 「レイアウト」のページ: ウィジェットをドラッグして列の間で動かす・パレットに落として外す・パレットから足す、「電池」と「温度」を短い「小さく表示」のカードにする。8 列、1 列に 16 個まで。`width_m` は 1 列の幅になった。変更はすぐ保存する（レイアウトの版を比べてから書き換えるので、古いレイアウトに対してした変更は、新しいほうを上書きせずに断る）
+- 「プロファイル」のページ: レイアウトを 8 個までプロファイルとして保存できる。［使う］［上書き保存］［名前を変える］（SteamVR のキーボード）［削除］［新しく作る］［既定に戻す］。プロファイルは `~/.config/frame-perf-overlay/profiles/` のファイル
+- 出しているものだけを、誰かが見ている間だけ読むようにした: 値ごとに持ち主のウィジェットと読み取り元を 1 つずつ登録表に決め、読み取り元は、パネルのウィジェットが必要としていて、使っているヘッドセットでパネルが出ているとき（またはダッシュボードのタブを開いているとき）だけ読む。パネルを隠している間と、ヘッドセットを外している間は何も読まない。読む間隔は前と同じ（電力と無線は 2 秒おき、電池と iio の温度は 5 秒おき、ほかは更新ごと）
+- パネルが隠れたあとにまた出すと、CPU 使用率と通信速度は 0.25 秒後にもう一度読む（前は 0.5〜2 秒「--」だった）
+- 値が変わったウィジェットだけを描き直し、パネルの画素は cairo が描いたまま（アルファを掛けた BGRA）で OpenVR に渡すようにした（RGBA に直さない）。`FRAME_PERF_RGBA_UPLOAD=1` で RGBA に直す処理を戻せる
+- 設定ファイルは今までのキーを全部残し、`layout` と `active_profile` を足した。前の設定ファイル（`layout` が無い）は、設定を全部そのまま読み、1 列の既定のレイアウトにする。読めないファイルは、次に保存する前に `config.json.bad` として残す。保存するときは、データがディスクに届くのを待ってからファイルを置き換えるようにした
+- 設定ファイルの `layout` だけが読めないときも、`config.json.bad` として残してから既定のレイアウトで保存する
+- ファイルから読んだレイアウトの、空の列と、重複できないウィジェットの 2 つ目は外す。知らないウィジェットしかないレイアウトは既定に戻す
+- 設定ファイル・プロファイルの文字列の壊れた UTF-8 や対になっていないサロゲートは U+FFFD にする（cairo に渡すと、その画面が再起動まで描けなくなっていた）
+- パネルの見た目の変わったところ: 「電力」のカードは、全チャンネルの合計（vph を 2 回数えていた）ではなく、vph の下のレールの合計（「各ch計」）を出す。ファン回転数は「温度」のカードに移した。GPU 負荷は、フレームの段の見出しと fps のグラフの後ろの塗りから、「GPU・メモリ」のカードに移した。熱でクロックが制限されているときの赤い枠は、パネル全体ではなく「温度」のカードに付く。時刻に日付も出す
+- 追加された画面の文言に日本語を足した。値が取れないとき、日本語では「N/A: 」を付けず理由だけ出す（「センサーなし」など）。プロファイルの操作の結果も日本語で出す
+- オプションを足した: `--dump-png` に `--layout FILE` と `--bench N`、`--dump-settings-png` に `--preview-page` と `--preview-select`、`--debug-dump`、`--dump-metrics`
+- テストを足した: 登録表、スケジューラー、レイアウトとその編集、ウィジェットと並べて描く部分、レイアウトの編集の画面、プロファイル、システムの読み取り元（作り物の `/sys` と `/proc` で）、0.3.2 の設定ファイルの読み込み
 
 ## 0.3.2 — 2026-10-17
 
