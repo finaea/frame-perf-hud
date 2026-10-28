@@ -20,7 +20,8 @@ size_t indexOf(SourceId source) {
 
 /** @return true if the source's values are deltas between two reads, so its first read after a pause shows nothing */
 bool readsDeltas(size_t index) {
-    return index == indexOf(SourceId::CpuLoad) || index == indexOf(SourceId::Network);
+    return index == indexOf(SourceId::CpuLoad) || index == indexOf(SourceId::Network) ||
+           index == indexOf(SourceId::Processes) || index == indexOf(SourceId::SelfCost);
 }
 
 bool validSource(SourceId source) {
@@ -129,6 +130,12 @@ double Scheduler::nextDue(double now) const {
         if (due < best) best = due;
     }
     return best;
+}
+
+void Scheduler::requestRead(SourceId source) {
+    if (!validSource(source)) return;
+    SourceState& s = sources_[indexOf(source)];
+    if (s.refs > 0 && s.read) s.nextDue = std::min(s.nextDue, now_);
 }
 
 uint32_t Scheduler::refCount(SourceId source) const {

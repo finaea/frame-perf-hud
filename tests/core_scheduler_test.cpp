@@ -331,6 +331,88 @@ void testResumeRefill() {
     CHECK(r.c.cpu - before2 >= 2);  // second read within one 0.1 s interval, not 0.25
 }
 
+// The process scan and the HUD's own cost are deltas too: a resumed read gets its refill ~0.25 s later, and
+// Uptime (an absolute value) doesn't
+void testResumeRefillProcessesAndSelfCost() {
+    const std::vector<MetricDef> defs = {
+        {1, "proc.rows", "", W::CpuItems, S::Processes, 2000, WireType::I32},
+        {2, "self.cpu", "", W::General, S::SelfCost, 2000, WireType::F32},
+        {3, "uptime", "", W::General, S::Uptime, 2000, WireType::I32},
+    };
+    Scheduler sched {defs};
+    std::vector<bool> proc, self, up;
+    sched.addSource(S::Processes, [&](double, bool resumed) { proc.push_back(resumed); });
+    sched.addSource(S::SelfCost, [&](double, bool resumed) { self.push_back(resumed); });
+    sched.addSource(S::Uptime, [&](double, bool resumed) { up.push_back(resumed); });
+    sched.setEnabledWidgets({W::CpuItems, W::General});
+    DemandInputs d;
+    d.editorOpen = true;
+    sched.setDemand(d);
+    double now = 0.0;
+    for (; now < 0.4; now += 0.05) sched.runDue(now);
+    CHECK(proc.size() == 2 && proc[0] && !proc[1]);  // the resumed read, then the refill
+    CHECK(self.size() == 2 && self[0] && !self[1]);
+    CHECK(up.size() == 1);                           // Uptime waits for its interval
+    for (; now < 1.9; now += 0.05) sched.runDue(now);
+    CHECK(proc.size() == 2 && self.size() == 2 && up.size() == 1);
+    for (; now < 2.4; now += 0.05) sched.runDue(now);
+    CHECK(proc.size() == 3 && self.size() == 3 && up.size() == 2);
+}
+
+// requestRead (the scene-app event): an early read only when the source is wanted
+void testRequestRead() {
+    const std::vector<MetricDef> defs = {
+        {1, "app.key", "", W::General, S::SceneApp, 5000, WireType::ShortString},
+    };
+    int reads = 0;
+    const auto rig = [&](Scheduler& sched, std::vector<W> widgets, bool look) {
+        sched.addSource(S::SceneApp, [&reads](double, bool) { ++reads; });
+        sched.setEnabledWidgets(widgets);
+        DemandInputs d;
+        d.hudShown = look;
+        d.hmdInUse = look;
+        sched.setDemand(d);
+    };
+    {  // wanted: one more read at once, and the 5 s cadence carries on
+        Scheduler sched {defs};
+        rig(sched, {W::General}, true);
+        sched.runDue(0.0);
+        CHECK(reads == 1);
+        sched.runDue(1.0);
+        CHECK(reads == 1);  // not due yet
+        sched.requestRead(S::SceneApp);
+        sched.runDue(1.05);
+        CHECK(reads == 2);
+        sched.runDue(3.0);
+        CHECK(reads == 2);
+        sched.runDue(6.2);
+        CHECK(reads == 3);
+    }
+    reads = 0;
+    {  // in the layout but nobody looking
+        Scheduler sched {defs};
+        rig(sched, {W::General}, false);
+        sched.requestRead(S::SceneApp);
+        sched.runDue(1.0);
+        CHECK(reads == 0);
+    }
+    {  // looking but its widget isn't in the layout
+        Scheduler sched {defs};
+        rig(sched, {W::Cpu}, true);
+        sched.requestRead(S::SceneApp);
+        sched.runDue(1.0);
+        CHECK(reads == 0);
+    }
+    {  // an invalid source is a no-op
+        Scheduler sched {defs};
+        rig(sched, {W::General}, true);
+        sched.requestRead(S::None);
+        sched.requestRead(S::Count);
+        sched.runDue(0.0);
+        CHECK(reads == 1);
+    }
+}
+
 // The quick refill read doesn't move the cadence: the reads after it stay on the grid of the first one
 void testResumeRefillKeepsGrid() {
     Rig r;
@@ -385,6 +467,8 @@ int main() {
     testIntervals();
     testUpdateInterval();
     testResumeRefill();
+    testResumeRefillProcessesAndSelfCost();
+    testRequestRead();
     testResumeRefillKeepsGrid();
     testRecomputeCount();
     if (failures) std::printf("%d check(s) failed\n", failures);
