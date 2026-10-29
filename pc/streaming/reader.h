@@ -67,7 +67,7 @@ private:
 class Reader {
 public:
     Reader(Memory& memory, uint64_t module, Anchors anchors);
-    void tick(double now, double displayHz, MetricStore& out);
+    void tick(double now, MetricStore& out);
     uint64_t resets() const {
         return resets_;
     }

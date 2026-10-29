@@ -235,6 +235,13 @@ public:
             out.setF32(kPcStreamPing, t.m_flTransferLatencyMs, now);
         else
             out.setNa(kPcStreamPing, Reason::NoFrames, now);
+        // The headset can switch refresh rate mid-session, so re-read it rather than keep the value from connect.
+        const double latest =
+            system_->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float);
+        if (latest > 0 && std::abs(latest - hz) >= 0.05) {
+            logLine("[stream] display %.1f -> %.1f Hz", hz, latest);
+            hz = latest;
+        }
         if (hz > 0)
             out.setF32(kPcStreamDisplayHz, hz, now);
     }
@@ -392,7 +399,7 @@ struct Service::Runtime {
         vr.sample(store, now);
         if (reader) {
             const double before = clockSec();
-            reader->tick(now, vr.hz, store);
+            reader->tick(now, store);
             store.setF32(kPcStreamReadMs, (clockSec() - before) * 1000, now);
             if (lastResets != reader->resets()) {
                 lastResets = reader->resets();

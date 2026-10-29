@@ -453,7 +453,7 @@ bool Reader::named(std::map<std::string, double>& values) {
     }
     return false;
 }
-void Reader::tick(double now, double displayHz, MetricStore& out) {
+void Reader::tick(double now, MetricStore& out) {
     using namespace metric;
     out.setText(kPcStreamBuild, std::to_string(anchors_.timestamp), now);
     naRange(out, 1021, 1067, Reason::SteamVrChanged, now);
@@ -685,10 +685,9 @@ void Reader::tick(double now, double displayHz, MetricStore& out) {
         valid = valid && values.count("sPingMS") && values.count("dbgEncTimeMS") &&
                 std::abs(average(pings) - values["sPingMS"]) <= 0.5 &&
                 std::abs(average(stages[1]) - values["dbgEncTimeMS"]) <= 1.0;
+        // No HMD display-Hz term: OpenVR's display frequency lags a mid-session refresh change (72 -> 90 Hz on
+        // 2026-10-29 kept L3 off for the whole session), so the frame ring is checked against the bandwidth ring only.
         valid = valid && std::abs(static_cast<double>(rate) - window.size()) <= std::max(2.0, rate * 0.1);
-        // During startup the window may contain fewer than a full second. Validate Hz once it is full.
-        if (displayHz > 0 && window.size() >= displayHz * 0.8)
-            valid = valid && std::abs(rate - displayHz) <= std::max(2.0, displayHz * 0.1);
         check3_ = now + 10;
     }
     if (!valid) {

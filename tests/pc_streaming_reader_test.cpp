@@ -537,6 +537,7 @@ void writeBandwidthRecord(FakeMemory& mem, uint64_t addr, uint64_t timestampUs) 
  *  same shape as the real 72 Hz stream the spike measured. */
 constexpr uint32_t kFixtureStepUs = 14000;
 constexpr uint32_t kFixtureRecentCount = 72;
+uint32_t gFixtureStepUs = kFixtureStepUs; // a test may set another cadence before buildWorld, then restore it
 
 struct World {
     uint64_t srv = 0, uber = 0, link0 = 0, link1 = 0, bw = 0;
@@ -591,8 +592,8 @@ World buildWorld(FakeMemory& mem, uint64_t base, uint32_t index, uint32_t extraT
     const uint32_t start = (index - kTailFrames) & 0xfff;
     const uint32_t count = kTailFrames + extraTail;
     for (uint32_t i = 0; i < count; ++i) {
-        writeAftmRecord(mem, w.srv + static_cast<uint64_t>(start + i) * kFrameStride, idStart + i, i * kFixtureStepUs);
-        writeBandwidthRecord(mem, w.bw + static_cast<uint64_t>(i) * 0xa8, i * kFixtureStepUs);
+        writeAftmRecord(mem, w.srv + static_cast<uint64_t>(start + i) * kFrameStride, idStart + i, i * gFixtureStepUs);
+        writeBandwidthRecord(mem, w.bw + static_cast<uint64_t>(i) * 0xa8, i * gFixtureStepUs);
     }
     mem.poke<uint16_t>(w.srv + 0x88000, static_cast<uint16_t>(index));
     return w;
@@ -658,7 +659,7 @@ void testReaderGoldenPath() {
 
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
     MetricStore store(readerMetricDefs());
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
 
     CHECK(reader.resets() == 0);
     CHECK(noteOf(store, metric::kPcStreamL1Note).empty());
@@ -690,7 +691,7 @@ void testReaderPublishesHoldDisplay() {
 
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
     MetricStore store(readerMetricDefs());
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
     gFixtureDecodeQueryUs = 0;
 
     CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
@@ -715,7 +716,7 @@ void testReaderHeaderMismatchOnlyL3() {
 
     Reader reader(mem, kModuleBase, a);
     MetricStore store(readerMetricDefs());
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
 
     // L1 and L2 are unaffected by an L3-only anchors failure
     CHECK(noteOf(store, metric::kPcStreamL1Note).empty());
@@ -744,7 +745,7 @@ void testReaderRttiMismatchOnlyL2() {
 
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
     MetricStore store(readerMetricDefs());
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
 
     CHECK(noteOf(store, metric::kPcStreamL1Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamNamedPing, 2.0, 1e-6));
@@ -768,7 +769,7 @@ void testReaderOwnerChangeWaitsForNewBaseline() {
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
     MetricStore store(readerMetricDefs());
 
-    reader.tick(0.0, 72.0, store);
+    reader.tick(0.0, store);
     CHECK(reader.resets() == 0);
     CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
     const uint64_t publishedBefore = reader.published();
@@ -779,7 +780,7 @@ void testReaderOwnerChangeWaitsForNewBaseline() {
     // resumes immediately. L3 is the one that must wait for its own ring baseline to actually move forward,
     // not just for the index to read as a different (unrelated) number.
     setActiveServer(mem, w2.srv);
-    reader.tick(1.0, 72.0, store);
+    reader.tick(1.0, store);
     CHECK(reader.resets() == 1);
     CHECK(noteOf(store, metric::kPcStreamL2Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamLink0Ping, 11.7, 1e-6));
@@ -789,7 +790,7 @@ void testReaderOwnerChangeWaitsForNewBaseline() {
     CHECK(store.get(metric::kPcStreamFps)->reason == Reason::NoFrames);
 
     // the ring hasn't moved since: L3 is still waiting, L2 stays valid, no further reset counted
-    reader.tick(2.0, 72.0, store);
+    reader.tick(2.0, store);
     CHECK(reader.resets() == 1);
     CHECK(noteOf(store, metric::kPcStreamL2Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamLink0Ping, 11.7, 1e-6));
@@ -798,7 +799,7 @@ void testReaderOwnerChangeWaitsForNewBaseline() {
     // now the new baseline actually advances (the ring moved forward by one): L3 publishing resumes too, with
     // a completely fresh dedupe/publish state (the old world's last-published Present IDs are gone)
     mem.poke<uint16_t>(w2.srv + 0x88000, static_cast<uint16_t>(501));
-    reader.tick(3.0, 72.0, store);
+    reader.tick(3.0, store);
     CHECK(reader.resets() == 1); // resolving the wait is not itself another reset
     CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
@@ -826,14 +827,14 @@ void testReaderL2RecoversIndependentlyOfDisabledL3() {
     Reader reader(mem, kModuleBase, a);
     MetricStore store(readerMetricDefs());
 
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
     CHECK(reader.resets() == 0);
     CHECK(noteOf(store, metric::kPcStreamL2Note).empty());
     CHECK(noteOf(store, metric::kPcStreamL3Note) == a.l3Note);
 
     setActiveServer(mem, w2.srv);
     for (const double now : {11.0, 12.0, 22.0, 42.0}) {
-        reader.tick(now, 72.0, store);
+        reader.tick(now, store);
         CHECK(reader.resets() == 1); // one owner change, counted once, not once per tick
         CHECK(noteOf(store, metric::kPcStreamL1Note).empty());
         CHECK(isOkF32(store, metric::kPcStreamNamedPing, 2.0, 1e-6));
@@ -863,7 +864,7 @@ void testReaderRewalksWhenStatsMapGrows() {
 
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
     MetricStore store(readerMetricDefs());
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
     CHECK(isOkF32(store, metric::kPcStreamNamedPing, 2.0, 1e-6));
     CHECK(notOk(store, metric::kPcStreamNamedEncode));
     CHECK(noteOf(store, metric::kPcStreamL1Note) == "missing dbgEncTimeMS +7"); // 8 of the 9 shown keys
@@ -882,7 +883,7 @@ void testReaderRewalksWhenStatsMapGrows() {
               {"nFramesSkippedPS", 0},
               {"dFrmsLate", 0},
               {"encResets", 3}});
-    reader.tick(10.5, 72.0, store);
+    reader.tick(10.5, store);
     CHECK(reader.resets() == 0);
     CHECK(noteOf(store, metric::kPcStreamL1Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamNamedEncode, 2.6, 1e-6));
@@ -890,7 +891,7 @@ void testReaderRewalksWhenStatsMapGrows() {
     CHECK(noteOf(store, metric::kPcStreamL3Note) == "frame validation retry pending");
 
     // and L3 passes its cross-check on its next retry
-    reader.tick(20.0, 72.0, store);
+    reader.tick(20.0, store);
     CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
     CHECK(isOkF32(store, metric::kPcStreamEncodeAvg, 2.6, 1e-6));
@@ -910,7 +911,7 @@ void testReaderIdleAudioAboveWireKeepsL3() {
 
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
     MetricStore store(readerMetricDefs());
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
     CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
 }
@@ -927,10 +928,29 @@ void testReaderNonAudioAboveWireFailsL3() {
 
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
     MetricStore store(readerMetricDefs());
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
     CHECK(noteOf(store, metric::kPcStreamL3Note) == "frame/bandwidth cross-check");
     CHECK(notOk(store, metric::kPcStreamFps));
     CHECK(notOk(store, metric::kPcStreamWireMbps));
+}
+
+/** 2026-10-29: the headset switched 72 -> 90 Hz mid-session while OpenVR's display frequency (and the app's single
+ *  read of it) still said 72, so a rate-vs-Hz term kept L3 off for the rest of the session. A 90 fps ring that
+ *  passes every other cross-check must publish, whatever the HMD property says. */
+void testReaderL3Valid90HzStream() {
+    gFixtureStepUs = 11111; // 90 Hz: the latest 1 s of the 144-record tail holds 91 records
+    FakeMemory mem;
+    constexpr uint32_t kBuild = kKnownBuild;
+    setupModule(mem, kBuild);
+    setActiveServer(mem, buildWorld(mem, 0x10000, 300, 0, 0).srv);
+    gFixtureStepUs = kFixtureStepUs;
+
+    Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store);
+    CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
+    CHECK(isOkF32(store, metric::kPcStreamFps, 91, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamEncodeAvg, 2.6, 1e-6));
 }
 
 // ==================== readLinkEndpoint ====================
@@ -1014,7 +1034,7 @@ void testReaderEndpointSuccessPopulatesAddress() {
 
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
     MetricStore store(readerMetricDefs());
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
 
     CHECK(noteOf(store, metric::kPcStreamL2Note).empty());
     CHECK(noteOf(store, metric::kPcStreamLink0Address) == "10.35.78.1");
@@ -1034,7 +1054,7 @@ void testReaderEndpointFailureDoesNotAffectL2Timing() {
 
     Reader reader(mem, kModuleBase, goldenAnchors(kBuild));
     MetricStore store(readerMetricDefs());
-    reader.tick(10.0, 72.0, store);
+    reader.tick(10.0, store);
 
     CHECK(noteOf(store, metric::kPcStreamL2Note).empty());
     CHECK(isOkF32(store, metric::kPcStreamLink0Ping, 11.7, 1e-6));
@@ -1070,6 +1090,7 @@ int main() {
     testReaderRewalksWhenStatsMapGrows();
     testReaderIdleAudioAboveWireKeepsL3();
     testReaderNonAudioAboveWireFailsL3();
+    testReaderL3Valid90HzStream();
     testReadLinkEndpointValid();
     testReadLinkEndpointGetterShapeChanged();
     testReadLinkEndpointBadFamily();
