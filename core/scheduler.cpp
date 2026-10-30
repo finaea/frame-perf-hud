@@ -24,6 +24,12 @@ bool readsDeltas(size_t index) {
            index == indexOf(SourceId::Processes) || index == indexOf(SourceId::SelfCost);
 }
 
+/** @return true if only a full (non-compact) card shows the source's metrics: General's Uptime, App and HUD cost rows */
+bool fullCardOnly(size_t index) {
+    return index == indexOf(SourceId::Uptime) || index == indexOf(SourceId::SelfCost) ||
+           index == indexOf(SourceId::SceneApp);
+}
+
 bool validSource(SourceId source) {
     return source != SourceId::None && indexOf(source) < kSourceCount;
 }
@@ -49,7 +55,13 @@ void Scheduler::addSource(SourceId source, ReadFn read) {
 }
 
 void Scheduler::setEnabledWidgets(const std::vector<WidgetType>& widgets) {
+    setEnabledWidgets(widgets, std::vector<bool>(widgets.size(), false));
+}
+
+void Scheduler::setEnabledWidgets(const std::vector<WidgetType>& widgets, const std::vector<bool>& compact) {
     widgets_ = widgets;
+    compact_ = compact;
+    compact_.resize(widgets_.size(), false);
     recompute();
 }
 
@@ -72,10 +84,13 @@ void Scheduler::setDemand(const DemandInputs& demand) {
 void Scheduler::recompute() {
     ++recomputes_;
     const bool looking = someoneLooking(demand_);
-    for (SourceState& s : sources_) {
+    for (size_t i = 0; i < kSourceCount; ++i) {
+        SourceState& s = sources_[i];
         uint32_t refs = 0;
         if (looking && s.interval > 0.0) {
-            for (WidgetType w : widgets_) {
+            for (size_t k = 0; k < widgets_.size(); ++k) {
+                const WidgetType w = widgets_[k];
+                if (compact_[k] && fullCardOnly(i)) continue;
                 if (static_cast<size_t>(w) < kWidgetTypeCount && (s.ownerMask & (1u << static_cast<unsigned>(w)))) {
                     ++refs;
                 }

@@ -1,4 +1,5 @@
 // core/ scheduler tests: reference counting, visibility rules, intervals (CTest runs them; no platform code).
+#include "layout.h"
 #include "scheduler.h"
 
 #include <cmath>
@@ -413,6 +414,115 @@ void testRequestRead() {
     }
 }
 
+// A compact General doesn't show Uptime, the HUD cost or the app rows, so it doesn't make the scheduler read them
+void testCompactGeneralReadsNothingExtra() {
+    const std::vector<MetricDef> defs = {
+        {1, "uptime", "", W::General, S::Uptime, 1000, WireType::I32},
+        {2, "self.cpu", "", W::General, S::SelfCost, 1000, WireType::F32},
+        {3, "app.key", "", W::General, S::SceneApp, 1000, WireType::ShortString},
+        {4, "clock", "", W::General, S::Clock, 1000, WireType::I32},
+    };
+    struct General {
+        Scheduler sched;
+        int uptime = 0, self = 0, app = 0, clock = 0;
+        std::vector<bool> uptimeResumed;
+        double now = 0.0;
+        explicit General(const std::vector<MetricDef>& d) : sched(d) {
+            sched.addSource(S::Uptime, [this](double, bool resumed) {
+                ++uptime;
+                uptimeResumed.push_back(resumed);
+            });
+            sched.addSource(S::SelfCost, [this](double, bool) { ++self; });
+            sched.addSource(S::SceneApp, [this](double, bool) { ++app; });
+            sched.addSource(S::Clock, [this](double, bool) { ++clock; });
+            DemandInputs demand;
+            demand.editorOpen = true;
+            sched.setDemand(demand);
+        }
+        void run(double seconds) {
+            for (const double end = now + seconds; now < end; now += 0.05) sched.runDue(now);
+        }
+    };
+
+    {  // (a) compact: only the compact card's own source is read, and requestRead does nothing
+        General g(defs);
+        g.sched.setEnabledWidgets({W::General}, {true});
+        CHECK(g.sched.refCount(S::Uptime) == 0 && g.sched.refCount(S::SelfCost) == 0 &&
+              g.sched.refCount(S::SceneApp) == 0);
+        CHECK(g.sched.refCount(S::Clock) == 1);
+        g.run(5.0);
+        g.sched.requestRead(S::SceneApp);
+        g.run(1.0);
+        CHECK(g.uptime == 0 && g.self == 0 && g.app == 0);
+        CHECK(g.clock > 0);
+    }
+    {  // (b) not compact: all three read
+        General g(defs);
+        g.sched.setEnabledWidgets({W::General}, {false});
+        g.run(3.0);
+        CHECK(g.uptime > 0 && g.self > 0 && g.app > 0 && g.clock > 0);
+    }
+    {  // (c) compact -> full -> compact: reads start on the switch (resumed), and stop again
+        General g(defs);
+        g.sched.setEnabledWidgets({W::General}, {true});
+        g.run(2.0);
+        CHECK(g.uptime == 0);
+        g.sched.setEnabledWidgets({W::General}, {false});
+        g.run(0.5);
+        CHECK(g.uptime >= 1 && g.uptimeResumed[0]);
+        CHECK(g.self >= 1 && g.app >= 1);
+        g.sched.setEnabledWidgets({W::General}, {true});
+        g.run(0.5);  // anything already due has been read; after this nothing more comes
+        const int uptime = g.uptime, self = g.self, app = g.app;
+        g.run(5.0);
+        CHECK(g.uptime == uptime && g.self == self && g.app == app);
+        CHECK(g.sched.refCount(S::Uptime) == 0);
+    }
+    {  // (d) the one-argument form treats every card as full
+        General g(defs);
+        g.sched.setEnabledWidgets({W::General});
+        CHECK(g.sched.refCount(S::Uptime) == 1 && g.sched.refCount(S::SelfCost) == 1 &&
+              g.sched.refCount(S::SceneApp) == 1);
+        g.run(3.0);
+        CHECK(g.uptime > 0 && g.self > 0 && g.app > 0);
+    }
+    {  // a compact flag list shorter than the widgets: the rest count as full
+        General g(defs);
+        g.sched.setEnabledWidgets({W::Cpu, W::General}, {true});
+        CHECK(g.sched.refCount(S::Uptime) == 1);
+    }
+}
+
+// (e) the default layout's General is compact, so the real registry's full-card-only sources are idle
+void testDefaultLayoutGeneralIsCompact() {
+    const Layout layout = defaultLayout();
+    const std::vector<W> widgets = enabledWidgets(layout);
+    const std::vector<bool> compact = enabledCompact(layout);
+    CHECK(compact.size() == widgets.size());
+    bool sawGeneral = false;
+    for (size_t i = 0; i < widgets.size() && i < compact.size(); ++i) {
+        if (widgets[i] == W::General) {
+            sawGeneral = true;
+            CHECK(compact[i]);
+        }
+    }
+    CHECK(sawGeneral);
+
+    Scheduler sched;
+    DemandInputs demand;
+    demand.editorOpen = true;
+    sched.setDemand(demand);
+    sched.setEnabledWidgets(widgets, compact);
+    CHECK(sched.refCount(S::Uptime) == 0);
+    CHECK(sched.refCount(S::SelfCost) == 0);
+    CHECK(sched.refCount(S::SceneApp) == 0);
+    CHECK(sched.refCount(S::Clock) > 0);  // General's compact rows still read
+
+    // the one-argument form (everything full) would have counted them
+    sched.setEnabledWidgets(widgets);
+    CHECK(sched.refCount(S::Uptime) > 0);
+}
+
 // The quick refill read doesn't move the cadence: the reads after it stay on the grid of the first one
 void testResumeRefillKeepsGrid() {
     Rig r;
@@ -469,6 +579,8 @@ int main() {
     testResumeRefill();
     testResumeRefillProcessesAndSelfCost();
     testRequestRead();
+    testCompactGeneralReadsNothingExtra();
+    testDefaultLayoutGeneralIsCompact();
     testResumeRefillKeepsGrid();
     testRecomputeCount();
     if (failures) std::printf("%d check(s) failed\n", failures);

@@ -201,7 +201,7 @@ if(BUILD_TESTING)
   target_include_directories(process-wifi-test PRIVATE headset)
   target_compile_options(process-wifi-test PRIVATE -Wall -Wextra)
   target_link_libraries(process-wifi-test PRIVATE frame-perf-core PkgConfig::LIBNL)
-  add_test(NAME process-wifi COMMAND process-wifi-test)
+  add_test(NAME process-wifi COMMAND process-wifi-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
 
   # Hide system: glob / rules file / defaults vs the captured Frame process list / scanner drops hidden pids
   add_executable(hide-rules-test tests/hide_rules_test.cpp headset/process_scan.cpp headset/hide_rules.cpp)

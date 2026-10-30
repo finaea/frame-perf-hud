@@ -81,6 +81,14 @@ std::vector<WidgetType> enabledWidgets(const Layout& layout) {
     return out;
 }
 
+std::vector<bool> enabledCompact(const Layout& layout) {
+    std::vector<bool> out;
+    for (const LayoutColumn& column : layout.columns) {
+        for (const WidgetInstance& w : column.widgets) out.push_back(hasCompactView(w.type) && w.compact);
+    }
+    return out;
+}
+
 const char* widgetKey(WidgetType type) {
     for (const KeyName& k : kKeys) {
         if (k.type == type) return k.key;

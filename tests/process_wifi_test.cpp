@@ -1,14 +1,20 @@
 // PR 2 readouts: /proc process scan (fixture trees) and the Wi-Fi channel / band / width / combine helpers. Linux only.
+#include "hide_rules.h"
 #include "process_scan.h"
 #include "wifi_link.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <set>
 #include <string>
 
 namespace {
@@ -325,6 +331,120 @@ void scannerMissingRoot() {
     CHECK(l.scanned == 0 && l.byRam.empty() && !l.cpuValid);
 }
 
+
+// ---- processDisplayName: comm, unless comm is a cut-off start of the exe (or the other way round) ----
+
+void displayNameFromCapturedList(const std::string& fixtureDir) {
+    std::ifstream in(fixtureDir + "/frame_processes_2026-10-17.txt");
+    CHECK(in.good());
+    std::map<std::string, std::string> got;  // comm -> display name (first line wins)
+    std::string line;
+    int lines = 0;
+    while (std::getline(in, line)) {
+        const size_t a = line.find('|');
+        const size_t b = line.find('|', a + 1);
+        if (a == std::string::npos || b == std::string::npos) continue;
+        const std::string comm = line.substr(0, a);
+        const std::string exe = line.substr(a + 1, b - a - 1);
+        const std::string name = processDisplayName(comm, exe);
+        got.emplace(comm + "|" + exe, name);
+        if (exe.empty()) CHECK(name == comm);
+        ++lines;
+    }
+    CHECK(lines > 100);
+    const std::pair<const char*, const char*> want[] = {
+        {"run_vrlink.sh|bash", "run_vrlink.sh"},
+        {"start-gamescope|bash", "start-gamescope"},
+        {"at-spi-bus-laun|at-spi-bus-launcher", "at-spi-bus-launcher"},
+        {"vrlinkrunthread|vrlink", "vrlink"},
+        {"XRServiceLoopTh|XRService", "XRService"},
+        {"dbus-broker-lau|dbus-broker-launch", "dbus-broker-launch"},
+        {"V4L2Cam|v4l2cam", "V4L2Cam"},
+        {"bash|bash", "bash"},
+    };
+    for (const auto& w : want) {
+        const auto it = got.find(w.first);
+        CHECK(it != got.end());
+        if (it != got.end() && it->second != w.second) {
+            std::printf("  %s -> %s (want %s)\n", w.first, it->second.c_str(), w.second);
+            CHECK(it->second == w.second);
+        }
+    }
+    CHECK(processDisplayName("UnityMain", "app_process64") == "UnityMain");
+    CHECK(processDisplayName("exact", "exact") == "exact");
+}
+
+/** A process whose exe link points at <dir>/<exeName>. */
+void writeProcWithExe(Fixture& f, int pid, const std::string& comm, const std::string& exeName,
+                      unsigned long utime, unsigned long starttime, const std::string& cgroup = "/user.slice/x") {
+    writeProc(f, pid, comm, utime, 0, starttime, 256);
+    f.symlink("/usr/bin/" + exeName, std::to_string(pid) + "/exe");
+    f.write(std::to_string(pid) + "/cgroup", "0::" + cgroup + "\n");
+}
+
+void scannerDisplayNames() {
+    // two scripts run by bash: different comm, same exe. Summing groups by what is shown, so they stay two rows
+    Fixture f;
+    writeProcWithExe(f, 100, "run_vrlink.sh", "bash", 0, 1000);
+    writeProcWithExe(f, 101, "start-gamescope", "bash", 0, 1001);
+    ProcessScanner scanner(f.root(), 100, 4096);
+    ProcessListOptions opts;
+    opts.sumSameName = true;
+    const ProcessLists& l = scanner.scan(1.0, opts);
+    CHECK(l.byRam.size() == 2);
+    std::set<std::string> names;
+    for (const ProcessRow& r : l.byRam) {
+        names.insert(r.name);
+        CHECK(r.exe == "bash");
+        CHECK(r.count == 1);
+    }
+    CHECK(names == (std::set<std::string> {"run_vrlink.sh", "start-gamescope"}));
+
+    // two renamed main threads of one program: one row under the exe name
+    Fixture g;
+    writeProcWithExe(g, 200, "vrlinkrunthread", "vrlink", 0, 2000);
+    writeProcWithExe(g, 201, "vrlinkrunthread", "vrlink", 0, 2001);
+    ProcessScanner scannerG(g.root(), 100, 4096);
+    const ProcessLists& lg = scannerG.scan(1.0, opts);
+    CHECK(lg.byRam.size() == 1);
+    CHECK(lg.byRam.size() == 1 && lg.byRam[0].name == "vrlink" && lg.byRam[0].count == 2);
+    CHECK(lg.byRam.size() == 1 && lg.byRam[0].comm == "vrlinkrunthread");
+}
+
+void scannerHideRulesMatchCommNotDisplayName() {
+    Fixture f;
+    Fixture rulesDir;
+    // a script under /system.slice: shows as "run_vrlink.sh" (comm), exe is "bash"
+    writeProcWithExe(f, 100, "run_vrlink.sh", "bash", 0, 1000, "/system.slice/x.service");
+    // a cut-off comm: shown as "vrlink" but rules must still see comm and exe
+    writeProcWithExe(f, 101, "vrlinkrunthread", "vrlink", 0, 1001, "/user.slice/session-1.scope");
+    writeProcWithExe(f, 102, "keepme", "keepme", 0, 1002, "/user.slice/session-1.scope");
+    rulesDir.write("hide_rules.json",
+                   "{\"version\": 1, \"hide\": [{\"name\": \"run_vrlink.sh\"}, {\"name\": \"vrlinkrunthread\"}]}");
+    HideRules rules(rulesDir.root() + "/hide_rules.json", 0);
+    ProcessScanner scanner(f.root(), 100, 4096);
+    scanner.setHideRules(&rules);
+    ProcessListOptions opts;
+    opts.cpuHideSystem = true;
+    opts.ramHideSystem = true;
+    scanner.scan(1.0, opts);
+    const ProcessLists& l = scanner.scan(2.0, opts);
+    CHECK(l.byRam.size() == 1 && l.byRam[0].name == "keepme");
+    CHECK(l.byCpu.size() == 1 && l.byCpu[0].name == "keepme");
+    CHECK(!l.hideRulesError);
+
+    // matching the exe still works for a cut-off comm: the display name "vrlink" is not what is matched,
+    // but the exe basename is
+    rulesDir.write("hide_rules.json", "{\"version\": 1, \"hide\": [{\"name\": \"vrlink\"}]}");
+    struct timespec times[2];
+    times[0].tv_sec = times[1].tv_sec = ::time(nullptr) + 100;
+    times[0].tv_nsec = times[1].tv_nsec = 0;
+    ::utimensat(AT_FDCWD, (rulesDir.root() + "/hide_rules.json").c_str(), times, 0);
+    const ProcessLists& l2 = scanner.scan(3.0, opts);
+    CHECK(l2.byRam.size() == 2);
+    for (const ProcessRow& r : l2.byRam) CHECK(r.name != "vrlink");
+}
+
 // ---- wifi_link.h pure functions ----
 
 void channels() {
@@ -398,7 +518,8 @@ void combine() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    const std::string fixtures = argc > 1 ? argv[1] : "tests/fixtures";
     parseNormal();
     parseOddComm();
     parseMalformed();
@@ -413,6 +534,9 @@ int main() {
     scannerReusedPid();
     scannerReset();
     scannerMissingRoot();
+    displayNameFromCapturedList(fixtures);
+    scannerDisplayNames();
+    scannerHideRulesMatchCommNotDisplayName();
     channels();
     bands();
     widths();

@@ -116,7 +116,7 @@ void testSeedAndParse() {
     const std::string path = dir.root() + "/sub/hide_rules.json";
     HideRules rules(path, 0);
     std::string error;
-    CHECK(rules.seedIfMissing(error));
+    CHECK(rules.seedOrUpgrade(error));
     std::vector<HideRule> parsed;
     CHECK(parseHideRules(slurp(path), parsed, error));
     CHECK(parsed.size() == defaultHideRules().size());
@@ -129,7 +129,7 @@ void testSeedAndParse() {
     // an existing file, even a broken one, is left alone
     dir.write("broken.json", "{ not json");
     HideRules broken(dir.root() + "/broken.json", 0);
-    CHECK(broken.seedIfMissing(error));
+    CHECK(broken.seedOrUpgrade(error));
     CHECK(slurp(dir.root() + "/broken.json") == "{ not json");
 
     // parse failures
@@ -256,7 +256,7 @@ void testScannerHidesSystem() {
 
     HideRules rules(rulesDir.root() + "/hide_rules.json", 0);
     std::string error;
-    CHECK(rules.seedIfMissing(error));
+    CHECK(rules.seedOrUpgrade(error));
     ProcessScanner scanner(proc.root(), 100, 4096);
     scanner.setHideRules(&rules);
 
@@ -298,7 +298,7 @@ void testExecKeepsPidButNotVerdict() {
     writeProc(proc, 600, "steam-launch-wrapper", 2560, steam);
     HideRules rules(rulesDir.root() + "/hide_rules.json", 0);
     std::string error;
-    CHECK(rules.seedIfMissing(error));
+    CHECK(rules.seedOrUpgrade(error));
     ProcessScanner scanner(proc.root(), 100, 4096);
     scanner.setHideRules(&rules);
     ProcessListOptions opts;
@@ -308,6 +308,157 @@ void testExecKeepsPidButNotVerdict() {
     writeProc(proc, 600, "IdolShowdown", 51200, steam);  // exec: same pid, same starttime, new comm
     const ProcessLists& after = scanner.scan(11.0, opts);
     CHECK(after.byRam.size() == 1 && after.byRam[0].name == "IdolShowdown");
+}
+
+// ---- the file's version: built-in rules added later reach existing files ----
+
+HideRule builtIn(const std::string& name, int since, const std::string& cgroup = "") {
+    HideRule r;
+    r.name = name;
+    r.cgroup = cgroup;
+    r.since = since;
+    return r;
+}
+
+bool hasRule(const std::vector<HideRule>& rules, const std::string& name) {
+    for (const HideRule& r : rules) {
+        if (r.name == name) return true;
+    }
+    return false;
+}
+
+int countRule(const std::vector<HideRule>& rules, const std::string& name) {
+    int n = 0;
+    for (const HideRule& r : rules) n += r.name == name ? 1 : 0;
+    return n;
+}
+
+void testUpgradePure() {
+    const std::vector<HideRule> builtIns = {builtIn("A", 1), builtIn("B", 1), builtIn("C", 2), builtIn("D", 3)};
+    // v1 file: A and a rule of the user's; the user deleted B
+    std::vector<HideRule> rules = {builtIn("A", 1), builtIn("U", 1)};
+    int version = 1;
+    CHECK(upgradeHideRules(rules, version, builtIns, 3));
+    CHECK(version == 3);
+    CHECK(rules.size() == 4);
+    CHECK(hasRule(rules, "A") && hasRule(rules, "U") && hasRule(rules, "C") && hasRule(rules, "D"));
+    CHECK(!hasRule(rules, "B"));  // deleted by the user: stays deleted
+
+    // already has C (same name + cgroup): not added twice
+    rules = {builtIn("A", 1), builtIn("C", 1)};
+    version = 1;
+    CHECK(upgradeHideRules(rules, version, builtIns, 3));
+    CHECK(countRule(rules, "C") == 1 && hasRule(rules, "D"));
+    // a same-name rule with another cgroup is a different rule
+    rules = {builtIn("C", 1, "/other")};
+    version = 2;
+    CHECK(upgradeHideRules(rules, version, builtIns, 3));
+    CHECK(countRule(rules, "C") == 1 && hasRule(rules, "D") && rules.size() == 2);  // C(since 2) is not re-added at v2
+
+    // at or past the built-in version: nothing changes
+    for (const int v : {3, 4}) {
+        rules = {builtIn("A", 1)};
+        version = v;
+        CHECK(!upgradeHideRules(rules, version, builtIns, 3));
+        CHECK(version == v && rules.size() == 1);
+    }
+}
+
+void testParseVersion() {
+    std::vector<HideRule> parsed;
+    std::string error;
+    int version = 0;
+    CHECK(parseHideRules("{\"version\": 3, \"hide\": [{\"name\": \"x\"}]}", parsed, error, &version) && version == 3);
+    CHECK(parseHideRules("{\"hide\": [{\"name\": \"x\"}]}", parsed, error, &version) && version == 1);
+    CHECK(parseHideRules("{\"version\": 2.5, \"hide\": [{\"name\": \"x\"}]}", parsed, error, &version) && version == 1);
+    CHECK(parseHideRules("{\"version\": \"2\", \"hide\": [{\"name\": \"x\"}]}", parsed, error, &version) && version == 1);
+}
+
+void testSeedOrUpgradeOnDisk() {
+    const std::vector<HideRule> builtIns = {builtIn("A", 1), builtIn("B", 1), builtIn("C", 2)};
+    TempDir dir;
+    std::string error;
+
+    // old v1 file: the user's note edit stays, B is gone for good, only the since-2 rule is added
+    const std::string oldPath = dir.root() + "/old.json";
+    dir.write("old.json", "{\"version\": 1, \"hide\": [{\"name\": \"A\", \"note\": \"my note\"}, {\"name\": \"U\"}]}");
+    HideRules old(oldPath, 0);
+    CHECK(old.seedOrUpgrade(error, builtIns, 2));
+    std::vector<HideRule> parsed;
+    int version = 0;
+    CHECK(parseHideRules(slurp(oldPath), parsed, error, &version));
+    CHECK(version == 2);
+    CHECK(parsed.size() == 3 && hasRule(parsed, "A") && hasRule(parsed, "U") && hasRule(parsed, "C"));
+    CHECK(!hasRule(parsed, "B"));
+    for (const HideRule& r : parsed) {
+        if (r.name == "A") CHECK(r.note == "my note");
+    }
+
+    // a current-version file is not rewritten
+    const std::string curText = "{\"version\": 2,\n  \"hide\": [ {\"name\": \"only\"} ]}";
+    dir.write("cur.json", curText);
+    HideRules cur(dir.root() + "/cur.json", 0);
+    CHECK(cur.seedOrUpgrade(error, builtIns, 2));
+    CHECK(slurp(dir.root() + "/cur.json") == curText);
+
+    // missing: seeded with the built-ins and their version
+    const std::string freshPath = dir.root() + "/fresh/hide_rules.json";
+    HideRules fresh(freshPath, 0);
+    CHECK(fresh.seedOrUpgrade(error, builtIns, 2));
+    parsed.clear();
+    CHECK(parseHideRules(slurp(freshPath), parsed, error, &version));
+    CHECK(version == 2 && parsed.size() == 3 && hasRule(parsed, "B") && hasRule(parsed, "C"));
+
+    // broken: byte for byte as it was
+    dir.write("broken.json", "{ \"version\": 1, \"hide\": [ oops");
+    HideRules broken(dir.root() + "/broken.json", 0);
+    broken.seedOrUpgrade(error, builtIns, 2);
+    CHECK(slurp(dir.root() + "/broken.json") == "{ \"version\": 1, \"hide\": [ oops");
+}
+
+void testLoadFailed() {
+    TempDir dir;
+    const std::string path = dir.root() + "/rules.json";
+    dir.write("rules.json", "{\"hide\": [{\"name\": \"alpha\"}]}");
+    HideRules rules(path, 0);
+    rules.refresh(1);
+    CHECK(!rules.loadFailed());
+    CHECK(rules.hides("alpha", "", ""));
+
+    dir.write("rules.json", "{\"hide\": [");
+    touchForward(path, 100);
+    rules.refresh(2);
+    CHECK(rules.loadFailed());
+    CHECK(rules.rules().size() == 1 && rules.hides("alpha", "", ""));  // the last good rules stay
+
+    dir.write("rules.json", "{\"hide\": [{\"name\": \"beta\"}]}");
+    touchForward(path, 200);
+    rules.refresh(3);
+    CHECK(!rules.loadFailed());
+    CHECK(rules.hides("beta", "", "") && !rules.hides("alpha", "", ""));
+}
+
+void testScannerReportsBrokenRules() {
+    TempDir proc;
+    TempDir rulesDir;
+    writeProc(proc, 100, "appa", 12800, "/user.slice/session-1.scope");
+    rulesDir.write("hide_rules.json", "{ not json");
+    HideRules rules(rulesDir.root() + "/hide_rules.json", 0);
+    ProcessScanner scanner(proc.root(), 100, 4096);
+    scanner.setHideRules(&rules);
+    ProcessListOptions opts;
+    opts.cpuHideSystem = true;
+    CHECK(scanner.scan(1.0, opts).hideRulesError);
+    CHECK(scanner.scan(2.0, opts).hideRulesError);
+
+    opts.cpuHideSystem = false;  // Hide system off: no hint
+    CHECK(!scanner.scan(3.0, opts).hideRulesError);
+
+    // a good file clears it
+    rulesDir.write("hide_rules.json", "{\"hide\": [{\"name\": \"zzz\"}]}");
+    touchForward(rulesDir.root() + "/hide_rules.json", 100);
+    opts.cpuHideSystem = true;
+    CHECK(!scanner.scan(4.0, opts).hideRulesError);
 }
 
 }  // namespace
@@ -341,6 +492,11 @@ int main(int argc, char** argv) {
     testDefaultsAgainstFrameList(fixtures);
     testScannerHidesSystem();
     testExecKeepsPidButNotVerdict();
+    testUpgradePure();
+    testParseVersion();
+    testSeedOrUpgradeOnDisk();
+    testLoadFailed();
+    testScannerReportsBrokenRules();
     if (failures == 0) std::printf("hide-rules-test: all passed\n");
     return failures == 0 ? 0 : 1;
 }

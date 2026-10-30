@@ -99,6 +99,18 @@ RateText formatRate(double mbps) {
     return {num(mbps, mbps >= 100 ? 0 : 1), " Mbps"};
 }
 
+std::string ellipsize(const Pen& pen, const std::string& s, double size, double maxWidth, bool bold) {
+    if (pen.measure(s, size, bold) <= maxWidth) return s;
+    std::string cut = s;
+    while (!cut.empty()) {
+        // One whole UTF-8 character per step: its continuation bytes (10xxxxxx), then its lead (or ASCII) byte
+        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) cut.pop_back();
+        if (!cut.empty()) cut.pop_back();
+        if (pen.measure(cut + "..", size, bold) <= maxWidth) return cut + "..";
+    }
+    return "..";
+}
+
 namespace {
 
 /** @return the value rounded with thousands separators, "--" for NaN */
@@ -146,19 +158,6 @@ Reason reasonOf(const WidgetContext& ctx, uint16_t id) {
 
 const WidgetText& texts(const WidgetContext& ctx) {
     return widgetText(ctx.language);
-}
-
-/** Cuts text to fit maxWidth, ending in ".." (UTF-8 safe). */
-std::string ellipsize(const Pen& pen, const std::string& s, double size, double maxWidth, bool bold = false) {
-    if (pen.measure(s, size, bold) <= maxWidth) return s;
-    std::string cut = s;
-    while (!cut.empty()) {
-        cut.pop_back();
-        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) cut.pop_back();
-        if (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0x80) != 0) cut.pop_back();
-        if (pen.measure(cut + "..", size, bold) <= maxWidth) return cut + "..";
-    }
-    return "..";
 }
 
 /** Whether the instance draws its extra rows: Compact off. */
@@ -1110,8 +1109,14 @@ void drawProcessList(const Pen& pen, double x, double y, const WidgetInstance& w
         return;
     }
     const std::vector<ProcessItem>& rows = cpu ? ctx.processes->byCpu : ctx.processes->byRam;
+    // A bad hide_rules.json edit takes the last row: the rules in use are the last ones that loaded
+    const bool hint = w.hideSystem && ctx.processes->hideRulesError;
+    if (hint) {
+        const double ry = top + kListTop + kRowH * static_cast<double>(std::max<uint32_t>(w.maxItems, 1));
+        pen.text(cx + 8, ry, ellipsize(pen, t.hideRulesError, 13, right - (cx + 8)), 13, kTextMuted);
+    }
     // The HUD isn't scrollable: the top rows that fit
-    const size_t n = std::min<size_t>(rows.size(), w.maxItems);
+    const size_t n = std::min<size_t>(rows.size(), hint && w.maxItems > 0 ? w.maxItems - 1 : w.maxItems);
     for (size_t k = 0; k < n; ++k) {
         const ProcessItem& r = rows[k];
         const double ry = top + kListTop + kRowH * static_cast<double>(k + 1);

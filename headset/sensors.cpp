@@ -301,8 +301,7 @@ void Sensors::discover(const std::string& root) {
 }
 
 void Sensors::resetCpuBaseline() {
-    prevBusy_.clear();
-    prevTotal_.clear();
+    prevTicks_ = sensor_math::CpuTicks();
 }
 
 void Sensors::resetSelfBaseline() {
@@ -349,52 +348,28 @@ void Sensors::readCpuUsage(SensorSample& sample) {
     // cpu 行は先頭にあるので 4KB で足りる（後ろの intr 行などは読まない）
     char buffer[4096];
     sample.corePct.clear();
-    if (readRaw(procStat_, buffer, sizeof(buffer)) <= 0) return;
+    sensor_math::CpuTicks current;
+    if (readRaw(procStat_, buffer, sizeof(buffer)) <= 0 || !sensor_math::parseProcStat(buffer, current)) return;
 
-    currentBusy_.clear();
-    currentTotal_.clear();
-    const char* line = buffer;
-    while (line != nullptr && std::strncmp(line, "cpu", 3) == 0) {
-        // cpu  user nice system idle iowait irq softirq steal ...
-        const char* p = line + 3;
-        while (*p != ' ' && *p != '\0') ++p;  // "cpu" の後ろの番号を飛ばす
-        uint64_t fields[10] = {};
-        int count = 0;
-        char* end = nullptr;
-        while (count < 10) {
-            const unsigned long long v = std::strtoull(p, &end, 10);
-            if (end == p) break;
-            fields[count++] = v;
-            p = end;
-        }
-        if (count >= 5) {
-            uint64_t all = 0;
-            for (int i = 0; i < std::min(count, 8); ++i) all += fields[i];  // guest は user に含まれるので除く
-            const uint64_t idle = fields[3] + fields[4];                    // idle + iowait
-            currentBusy_.push_back(all - idle);
-            currentTotal_.push_back(all);
-        }
-        const char* next = std::strchr(line, '\n');
-        line = next != nullptr ? next + 1 : nullptr;
-    }
-
-    if (!prevTotal_.empty() && prevTotal_.size() == currentTotal_.size()) {
-        double maxCore = kNoValue;
-        for (size_t i = 0; i < currentTotal_.size(); ++i) {
-            const double dt = static_cast<double>(currentTotal_[i] - prevTotal_[i]);
-            const double db = static_cast<double>(currentBusy_[i] - prevBusy_[i]);
-            const double pct = dt > 0 ? 100.0 * db / dt : 0.0;
-            if (i == 0) {
-                sample.cpuUsagePct = pct;
-            } else {
-                sample.corePct.push_back(pct);
-                if (std::isnan(maxCore) || pct > maxCore) maxCore = pct;
+    // Cores are keyed by their cpuN id, so an offline core is a NaN in its own slot and the others stay put
+    if (!prevTicks_.total.empty()) {
+        std::vector<double> pct = sensor_math::cpuPercents(prevTicks_, current);
+        // Same cpu lines as last time: a line with no tick between the two reads is 0%, as before (cpuPercents says
+        // NaN). When the set changed (a core went offline or came back), it stays NaN
+        if (current.present == prevTicks_.present) {
+            for (size_t i = 0; i < pct.size(); ++i) {
+                if (current.present[i] && current.total[i] == prevTicks_.total[i]) pct[i] = 0.0;
             }
+        }
+        sample.cpuUsagePct = pct[0];
+        double maxCore = kNoValue;
+        for (size_t i = 1; i < pct.size(); ++i) {
+            sample.corePct.push_back(pct[i]);
+            if (!std::isnan(pct[i]) && (std::isnan(maxCore) || pct[i] > maxCore)) maxCore = pct[i];
         }
         sample.cpuMaxCorePct = maxCore;
     }
-    prevBusy_.swap(currentBusy_);
-    prevTotal_.swap(currentTotal_);
+    prevTicks_ = std::move(current);
 }
 
 void Sensors::readMemory(SensorSample& sample) {

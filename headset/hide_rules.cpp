@@ -88,8 +88,8 @@ const std::vector<HideRule>& defaultHideRules() {
     return kRules;
 }
 
-std::string hideRulesToJson(const std::vector<HideRule>& rules) {
-    std::string out = "{\n  \"version\": 1,\n  \"hide\": [\n";
+std::string hideRulesToJson(const std::vector<HideRule>& rules, int version) {
+    std::string out = "{\n  \"version\": " + std::to_string(version) + ",\n  \"hide\": [\n";
     for (size_t i = 0; i < rules.size(); ++i) {
         const HideRule& r = rules[i];
         std::string line;
@@ -101,7 +101,7 @@ std::string hideRulesToJson(const std::vector<HideRule>& rules) {
     return out + "  ]\n}\n";
 }
 
-bool parseHideRules(const std::string& text, std::vector<HideRule>& out, std::string& error) {
+bool parseHideRules(const std::string& text, std::vector<HideRule>& out, std::string& error, int* version) {
     JsonValue root;
     if (!parseJson(text, root, error)) return false;
     const JsonValue* hide = root.isObject() ? root.get("hide") : nullptr;
@@ -137,6 +137,25 @@ bool parseHideRules(const std::string& text, std::vector<HideRule>& out, std::st
         rules.push_back(std::move(rule));
     }
     out = std::move(rules);
+    if (version != nullptr) {
+        const JsonValue* v = root.get("version");
+        const bool whole = v != nullptr && v->isNumber() && v->number >= 1 && v->number <= 1e6 &&
+                           v->number == static_cast<double>(static_cast<int>(v->number));
+        *version = whole ? static_cast<int>(v->number) : 1;
+    }
+    return true;
+}
+
+bool upgradeHideRules(std::vector<HideRule>& rules, int& version, const std::vector<HideRule>& builtIns,
+                      int builtInVersion) {
+    if (version >= builtInVersion) return false;
+    for (const HideRule& b : builtIns) {
+        if (b.since <= version) continue;
+        bool have = false;
+        for (const HideRule& r : rules) have = have || (r.name == b.name && r.cgroup == b.cgroup);
+        if (!have) rules.push_back(b);
+    }
+    version = builtInVersion;
     return true;
 }
 
@@ -154,11 +173,25 @@ std::string cgroupV2Path(const std::string& text) {
 HideRules::HideRules(std::string path, double checkSeconds)
     : path_(std::move(path)), checkSeconds_(checkSeconds), rules_(defaultHideRules()) {}
 
-bool HideRules::seedIfMissing(std::string& error) {
+bool HideRules::seedOrUpgrade(std::string& error, const std::vector<HideRule>& builtIns, int builtInVersion) {
     struct stat st {};
-    if (::stat(path_.c_str(), &st) == 0) return true;
-    if (!frame_perf_overlay::atomicWriteFile(path_, hideRulesToJson(defaultHideRules()), error)) return false;
-    std::fprintf(stderr, "[hide] Wrote the default Hide system rules to %s\n", path_.c_str());
+    if (::stat(path_.c_str(), &st) != 0) {
+        if (!frame_perf_overlay::atomicWriteFile(path_, hideRulesToJson(builtIns, builtInVersion), error)) return false;
+        std::fprintf(stderr, "[hide] Wrote the default Hide system rules to %s\n", path_.c_str());
+        return true;
+    }
+    std::ifstream file(path_, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    std::vector<HideRule> rules;
+    std::string parseError;
+    int version = 1;
+    // A broken file is left for the user to fix (refresh() reports it); an up-to-date one isn't rewritten
+    if (!file || !parseHideRules(text, rules, parseError, &version)) return true;
+    const size_t before = rules.size();
+    if (!upgradeHideRules(rules, version, builtIns, builtInVersion)) return true;
+    if (!frame_perf_overlay::atomicWriteFile(path_, hideRulesToJson(rules, version), error)) return false;
+    std::fprintf(stderr, "[hide] Added %zu new built-in Hide system rules to %s (version %d)\n", rules.size() - before,
+                 path_.c_str(), version);
     return true;
 }
 
@@ -183,8 +216,10 @@ bool HideRules::refresh(double now) {
     if (!file || !parseHideRules(text, rules, error)) {
         std::fprintf(stderr, "[hide] Can't use %s (%s): keeping the last good rules\n", path_.c_str(),
                      error.empty() ? "can't read it" : error.c_str());
+        loadFailed_ = true;
         return false;
     }
+    loadFailed_ = false;
     if (rules.size() == rules_.size()) {
         bool same = true;
         for (size_t i = 0; i < rules.size() && same; ++i)

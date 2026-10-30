@@ -19,7 +19,7 @@ constexpr int kColumnWidth = 512;
 
 /** One process-list row (a process, or every process of one name). */
 struct ProcessItem {
-    std::string name;         ///< what to show: the exe basename when known, else comm
+    std::string name;         ///< what to show: comm, or the exe basename when comm is cut off (processDisplayName)
     int pid = 0;              ///< 0 for a summed row
     int count = 1;            ///< processes in this row
     double cpuCorePct = 0.0;  ///< % of one core
@@ -30,8 +30,9 @@ struct ProcessItem {
 struct ProcessListsView {
     std::vector<ProcessItem> byCpu;
     std::vector<ProcessItem> byRam;
-    bool cpuValid = false;    ///< byCpu has a real interval behind it
-    uint64_t generation = 0;  ///< bumped on every scan (the list widgets redraw only when it moves)
+    bool cpuValid = false;        ///< byCpu has a real interval behind it
+    bool hideRulesError = false;  ///< hide_rules.json's last load failed: the cards with Hide system say so
+    uint64_t generation = 0;      ///< bumped on every scan (the list widgets redraw only when it moves)
 };
 
 /** What every widget gets to draw with. */
@@ -65,6 +66,12 @@ struct RateText {
  * @param mbps megabits per second
  */
 RateText formatRate(double mbps);
+
+/**
+ * Cuts text to fit maxWidth, ending in "..". Removes one whole UTF-8 character per step, so it never splits one.
+ * @return s itself if it fits, else the longest cut + ".." that fits ("..": nothing fits)
+ */
+std::string ellipsize(const Pen& pen, const std::string& s, double size, double maxWidth, bool bold = false);
 
 /**
  * Natural height of a widget's card (px). Network and General follow their visible rows when a context is

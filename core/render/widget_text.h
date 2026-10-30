@@ -101,6 +101,7 @@ struct WidgetText {
     const char* app;
     const char* noApp;      ///< no scene app (SteamVR Home)
     const char* hudCost;
+    const char* hideRulesError;  ///< CPU / RAM items with Hide system: hide_rules.json didn't load
 };
 
 /**

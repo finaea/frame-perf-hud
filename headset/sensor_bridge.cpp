@@ -74,8 +74,7 @@ void SensorBridge::readProcesses(double now, bool resumed) {
         out.reserve(rows.size());
         for (const ProcessRow& r : rows) {
             frame_perf_overlay::ProcessItem item;
-            // comm is the main thread's name ("vrlinkrunthread"); the exe basename ("vrlink") reads better
-            item.name = r.exe.empty() ? r.name : r.exe;
+            item.name = r.name;
             item.pid = r.pid;
             item.count = r.count;
             item.cpuCorePct = r.cpuCorePct;
@@ -87,6 +86,7 @@ void SensorBridge::readProcesses(double now, bool resumed) {
     processView_.byCpu = convert(l.byCpu);
     processView_.byRam = convert(l.byRam);
     processView_.cpuValid = l.cpuValid;
+    processView_.hideRulesError = l.hideRulesError;
     ++processView_.generation;
     if (l.scanned == 0) {
         for (uint16_t id : {metric::kProcScanned, metric::kProcVanished, metric::kProcScanMs, metric::kCpuItemsRows,

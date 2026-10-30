@@ -96,6 +96,7 @@ const WidgetText kJapanese = {
     "App",                 // TODO(ja)
     "none (SteamVR home)", // TODO(ja)
     "HUD cost",            // TODO(ja)
+    "hide_rules.json has an error, using the last rules",  // TODO(ja)
 };
 
 const WidgetText kEnglish = {
@@ -188,6 +189,7 @@ const WidgetText kEnglish = {
     "App",
     "none (SteamVR home)",
     "HUD cost",
+    "hide_rules.json has an error, using the last rules",
 };
 
 }  // namespace

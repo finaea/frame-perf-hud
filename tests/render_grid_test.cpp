@@ -5,6 +5,7 @@
 
 #include <cairo.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -527,7 +528,7 @@ WidgetContext ctxFor(const MetricStore& store, int clockFormat = 24) {
     return ctx;
 }
 
-// His 2-column default and every card in it: the heights v0.4.0 drew, with and without a context
+// The default 2-column layout and every card in it: the heights v0.4.0 drew, with and without a context
 void testV040HeightsUnchanged() {
     const Layout def = defaultLayout();
     MetricStore empty;
@@ -547,7 +548,7 @@ void testV040HeightsUnchanged() {
             int want = 0;
             switch (s.widget.type) {
                 case W::Frame: case W::Power: case W::GpuRam: want = 102; break;
-                case W::Temp: want = 102; break;     // compact in his default
+                case W::Temp: want = 102; break;     // compact in the default layout
                 case W::Cpu: want = 64; break;
                 case W::Battery: want = 88; break;   // compact
                 case W::Network: want = g == &noLink ? 64 : 88; break;
@@ -581,7 +582,7 @@ void testV040SavedLayout() {
     const GridGeometry g = layoutGrid(layout);
     CHECK(g.slots[0].h == 102 && g.slots[1].h == 102 && g.slots[2].h == 88 && g.slots[3].h == 64);
 
-    // and his own default
+    // and the built-in default layout
     const std::string def = layoutToJson(defaultLayout(), 0);
     CHECK(def.find("details") == std::string::npos && def.find("adapter") == std::string::npos);
     CHECK(def.find("false") == std::string::npos);
@@ -661,7 +662,7 @@ void setLinkBlock(MetricStore& s, uint16_t base, bool present, bool connected) {
     }
 }
 
-// Network with Compact on is his combined card and ignores the per-link blocks
+// Network with Compact on is the 0.4.0 combined card and ignores the per-link blocks
 void testNetworkDetailsOffIgnoresBlocks() {
     MetricStore combined;
     combined.setEnum(metric::kNetInterfaceUp, 1, kNow);
@@ -785,6 +786,99 @@ void testProcessListWidgets() {
     cairo_surface_destroy(surface);
 }
 
+// The hide_rules.json hint takes the card's last row, the card keeps its height; without Hide system it isn't drawn
+void testHideRulesErrorHint() {
+    MetricStore store;
+    store.setI32(metric::kCpuItemsRows, 2, kNow);
+    ProcessListsView lists;
+    lists.cpuValid = true;
+    lists.generation = 1;
+    lists.byCpu = {{"vrchat", 10, 1, 42.5, 800}, {"steamwebhelper", 0, 3, 12.0, 300}};
+    const auto draw = [&](bool hideSystem, bool error) {
+        lists.hideRulesError = error;
+        WidgetInstance card = inst(W::CpuItems);
+        card.hideSystem = hideSystem;
+        card.maxItems = 4;
+        cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 512, 200);
+        cairo_t* cr = cairo_create(surface);
+        const Pen pen {cr, &fonts()};
+        WidgetContext ctx = ctxFor(store);
+        ctx.processes = &lists;
+        drawWidgetDynamic(pen, 8, 8, card, ctx, WidgetHistory());
+        CHECK(cairo_status(cr) == CAIRO_STATUS_SUCCESS);
+        const unsigned hash = pixelHash(surface);
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+        return hash;
+    };
+    CHECK(draw(true, true) != draw(true, false));    // the hint is on the card
+    CHECK(draw(false, true) == draw(false, false));  // Hide system off: nothing to say
+    // same height either way
+    WidgetInstance card = inst(W::CpuItems);
+    card.hideSystem = true;
+    card.maxItems = 4;
+    WidgetContext ctx = ctxFor(store);
+    ctx.processes = &lists;
+    lists.hideRulesError = false;
+    const int plain = widgetHeight(card, &ctx);
+    lists.hideRulesError = true;
+    CHECK(widgetHeight(card, &ctx) == plain && plain == 6 + 26 + 20 * 4 + 10);
+}
+
+// ellipsize cuts at whole characters: always valid UTF-8, ends in "..", and keeps the longest prefix that fits
+bool validUtf8(const std::string& s) {
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        const size_t n = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        if (n == 0 || i + n > s.size()) return false;
+        for (size_t k = 1; k < n; ++k) {
+            if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80) return false;
+        }
+        i += n;
+    }
+    return true;
+}
+
+void testEllipsizeMixedText() {
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 200, 40);
+    cairo_t* cr = cairo_create(surface);
+    const Pen pen {cr, &fonts()};
+    const double size = 15;
+    for (const bool bold : {false, true}) {
+        for (const std::string& s : {std::string("ab日本語cd"),
+                                    std::string("日本a語b"),
+                                    std::string("plain ascii text")}) {
+            const double full = pen.measure(s, size, bold);
+            CHECK(ellipsize(pen, s, size, full, bold) == s);  // fits as it is
+            CHECK(ellipsize(pen, s, size, full + 50, bold) == s);
+            // whole-character prefixes, longest first
+            std::vector<std::string> prefixes;
+            for (size_t i = 0; i < s.size(); ++i) {
+                if ((static_cast<unsigned char>(s[i]) & 0xC0) != 0x80) prefixes.push_back(s.substr(0, i));
+            }
+            std::reverse(prefixes.begin(), prefixes.end());  // longest proper prefix ... empty
+            for (double w = 0; w < full; w += 1.5) {
+                std::string want = "..";
+                for (const std::string& p : prefixes) {
+                    if (pen.measure(p + "..", size, bold) <= w) {
+                        want = p + "..";
+                        break;
+                    }
+                }
+                const std::string got = ellipsize(pen, s, size, w, bold);
+                CHECK(validUtf8(got));
+                CHECK(got.size() >= 2 && got.compare(got.size() - 2, 2, "..") == 0);
+                if (got != want) {
+                    std::printf("  ellipsize(w=%.1f) got [%s] want [%s]\n", w, got.c_str(), want.c_str());
+                    CHECK(got == want);
+                }
+            }
+        }
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}
+
 // ---- Text with broken UTF-8 doesn't upset cairo ----
 
 void testInvalidUtf8Text() {
@@ -865,6 +959,8 @@ int main() {
     testNetworkDetailsBlocks();
     testNetworkJson();
     testProcessListWidgets();
+    testHideRulesErrorHint();
+    testEllipsizeMixedText();
     testTitles();
     testEmptyStoreAllTypes();
     testDefaultFilled();

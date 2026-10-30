@@ -204,9 +204,7 @@ private:
     std::vector<Source> gpuCooling_;                   ///< cooling_device（devfreq-*gpu）の cur_state
     WifiLink wifiLink_;
 
-    std::vector<uint64_t> prevBusy_;   ///< /proc/stat の前回値（[0] が全体、以降コアごと）
-    std::vector<uint64_t> prevTotal_;
-    std::vector<uint64_t> currentBusy_, currentTotal_;  ///< 次の読み取りにも領域を再利用する
+    sensor_math::CpuTicks prevTicks_;  ///< /proc/stat's last read, keyed by cpuN id (empty = no baseline)
 
     // The full (non-compact) rows' files
     std::vector<Source> powerVolts_;    ///< in*_input matching powers_[i] by label (fd -1 if none)

@@ -566,10 +566,12 @@ double updateIntervalSec(const Config& config) {
     return std::max(100, config.updateIntervalMs) / 1000.0;
 }
 
-/** Applies a layout to the scheduler (a widget that isn't in it reads nothing) and the process lists' settings. */
+/** Applies a layout to the scheduler (a widget that isn't in it reads nothing, a compact General no full-card rows)
+ *  and the process lists' settings. */
 void applyLayout(const frame_perf_overlay::Layout& layout, frame_perf_overlay::Scheduler& scheduler,
                  SensorBridge& bridge) {
-    scheduler.setEnabledWidgets(frame_perf_overlay::enabledWidgets(layout));
+    scheduler.setEnabledWidgets(frame_perf_overlay::enabledWidgets(layout),
+                                frame_perf_overlay::enabledCompact(layout));
     bridge.setProcessOptions(layout);
 }
 
@@ -1015,11 +1017,12 @@ int runOverlay(const Options& options) {
     frame_perf_overlay::MetricStore store;
     frame_perf_overlay::Scheduler scheduler;
     SensorBridge bridge(sensors, &vr, store);
-    // Hide system's rules: the built-in list is written once if the file is missing; edits are picked up live
+    // Hide system's rules: the built-in list is written if the file is missing, an older file gets the newer
+    // built-ins (seedOrUpgrade); edits are picked up live
     HideRules hideRules(hideRulesPath(options.configPath));
     {
         std::string error;
-        if (!hideRules.seedIfMissing(error)) {
+        if (!hideRules.seedOrUpgrade(error)) {
             std::fprintf(stderr, "[hide] Couldn't write %s: %s\n", hideRules.path().c_str(), error.c_str());
         }
     }

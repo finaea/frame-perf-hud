@@ -84,6 +84,12 @@ Layout defaultLayout();
 std::vector<WidgetType> enabledWidgets(const Layout& layout);
 
 /**
+ * @param layout a layout
+ * @return per enabledWidgets() entry, true if that card is compact (hasCompactView and compact on)
+ */
+std::vector<bool> enabledCompact(const Layout& layout);
+
+/**
  * @param type a widget type
  * @return its key in the layout JSON ("frame", "gpu_ram", ...), or nullptr for None / unknown
  */
