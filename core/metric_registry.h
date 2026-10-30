@@ -262,7 +262,7 @@ constexpr uint16_t kSelfRssMib = 1113;
 constexpr uint16_t kSelfPowerW = 1114;    ///< estimate, show with "≈": own share of busy CPU × CPU rails (apc0-2)
 // T11: set once at agent start, whatever the demand
 constexpr uint16_t kLastPowerOff = 1115;  ///< short string: decoded qcom-pon reason ("Normal restart") or raw hex
-constexpr uint16_t kCrashLogNote = 1116;  ///< short string, "Crash log saved (hh:mm)"; N/A NotConnected when none
+constexpr uint16_t kCrashLogNote = 1116;  ///< short string, "Crash log kept (hh:mm)"; N/A NotConnected when none
 }  // namespace metric
 
 /** Values of the per-adapter kNetAdapterBand metric. */

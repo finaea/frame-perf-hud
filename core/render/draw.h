@@ -130,6 +130,9 @@ struct Pen {
  */
 double fitSize(const Pen& pen, const std::string& text, double size, double minSize, double maxWidth, bool bold);
 
+/** Removes the last whole UTF-8 character (its continuation bytes and its lead byte, or one ASCII byte). */
+void popUtf8Char(std::string& text);
+
 /** HTTP camera: text cut at the end with "..." so it fits maxWidth (whole UTF-8 characters). */
 std::string ellipsize(const Pen& pen, const std::string& text, double size, double maxWidth, bool bold);
 

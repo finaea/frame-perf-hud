@@ -77,6 +77,9 @@ public:
 
     /** @return the current headset session */
     const fph::SessionInfo& session() const { return session_.current(); }
+    /** Session logs on (the config's session_logs): LINK_STATE carries the session only then. */
+    void setSessionLogs(bool on) { sessionLogs_ = on; }
+    bool sessionLogs() const { return sessionLogs_; }
 
     /** @return the process lists and the session, for the debug dump */
     std::string debugText() const;
@@ -94,6 +97,7 @@ private:
     ProcessScanner processes_;
     ProcessListOptions processOptions_;
     uint64_t processScans_ = 0;  ///< T04: ProcessListsView::generation
+    bool sessionLogs_ = false;   ///< setSessionLogs
     InterfaceCounters streamDongle_;  ///< own baselines: Network's would be reset by the same tick
     InterfaceCounters streamHome_;
     VrlinkWatch vrlink_;

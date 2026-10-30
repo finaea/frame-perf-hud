@@ -55,7 +55,7 @@ double paragraph(const Pen& pen, double x, double y, double w, const std::string
 }  // namespace
 
 PageBox drawStatusSaveButton(const Pen& pen, double width, double barH, double s) {
-    static const char* const kLabel = "Save Logs";
+    static const char* const kLabel = "Direct Save";
     const double bw = pen.measure(kLabel, 12.5 * s, true) + 24 * s;
     const double bh = barH - 8 * s;
     const PageBox b {width - bw - 6 * s, 4 * s, bw, bh};
@@ -214,25 +214,63 @@ void PcPages::drawProfiles(const Pen& pen, const PageBox& area, double s, const 
 }
 
 void PcPages::drawLogs(const Pen& pen, const PageBox& area, double s, const PagesView& view) {
-    const double gap = 12 * s, pad = 16 * s;
-    const double w1 = (area.w - gap) / 2;
-    const double x2 = area.x + w1 + gap, w2 = area.w - w1 - gap;
-    drawCard(pen, area.x, area.y, w1, area.h, 14 * s, kCard, kCard, 0);
-    drawCard(pen, x2, area.y, w2, area.h, 14 * s, kCard, kCard, 0);
+    // Shrinks the page's text and controls (not the cards) until the lowest line fits the cards: measured on a scratch
+    // surface first, so a small window never cuts text off
+    cairo_surface_t* scratch = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, nullptr);
+    cairo_t* cr = cairo_create(scratch);
+    const Pen measure {cr, pen.fonts};
+    double k = 1.0;
+    const double limit = area.y + area.h - 8 * s;
+    while (k > 0.65 && drawLogsAt(measure, area, s, s * k, view) > limit) k -= 0.05;
+    cairo_destroy(cr);
+    cairo_surface_destroy(scratch);
+    boxes_.clear();
+    disabled_.clear();
+    drawCard(pen, area.x, area.y, (area.w - 12 * s) / 2, area.h, 14 * s, kCard, kCard, 0);
+    drawCard(pen, area.x + (area.w - 12 * s) / 2 + 12 * s, area.y, area.w - (area.w - 12 * s) / 2 - 12 * s, area.h, 14 * s,
+             kCard, kCard, 0);
+    drawLogsAt(pen, area, s, s * k, view);
+}
 
-    // This PC: Save, the folder, the last session's card
+double PcPages::drawLogsAt(const Pen& pen, const PageBox& area, double cardS, double s, const PagesView& view) {
+    boxes_.clear();
+    disabled_.clear();
+    // the cards as drawLogs draws them (cardS); everything inside at s
+    const double w1 = (area.w - 12 * cardS) / 2;
+    const double x2 = area.x + w1 + 12 * cardS, w2 = area.w - w1 - 12 * cardS;
+    const double gap = 12 * s, pad = 16 * s;
+
+    // This PC: Direct Save, the folder, what the logs are, the last session's card
     const double ax = area.x + pad, aw = w1 - 2 * pad;
     pen.text(ax, area.y + 30 * s, "This PC", 17 * s, kText, true);
     const double bw = (aw - gap) / 2, bh = 36 * s;
-    button(pen, PageAction::SaveLocal, "Save Logs", {ax, area.y + 46 * s, bw, bh}, s, true, true);
+    button(pen, PageAction::SaveLocal, "Direct Save", {ax, area.y + 46 * s, bw, bh}, s, true, true);
     button(pen, PageAction::OpenFolder, "Open logs folder", {ax + bw + gap, area.y + 46 * s, bw, bh}, s, true, false);
     double y = paragraph(pen, ax, area.y + 46 * s + bh + 22 * s, aw,
-                         "Save Logs writes the last 10 minutes of metrics and the headset session's summary to this "
-                         "PC's logs folder, right now",
-                         12 * s, kTextMuted) + 8 * s;
-    if (!view.pcMessage.empty()) y = paragraph(pen, ax, y, aw, view.pcMessage, 13 * s, kText) + 6 * s;
-    pen.text(ax, y + 6 * s, "Last session", 15 * s, kText, true);
-    y += 30 * s;
+                         "Direct Save: saves the last 10 minutes right now, to this PC.", 12 * s, kTextMuted) + 4 * s;
+    if (!view.pcMessage.empty()) y = paragraph(pen, ax, y, aw, view.pcMessage, 13 * s, kText) + 4 * s;
+    y += 6 * s;
+    y = paragraph(pen, ax, y, aw, "A log keeps everything the HUD reads:", 12 * s, kTextMuted);
+    y = paragraph(pen, ax + 10 * s, y, aw - 10 * s,
+                  "• a summary (.json): the average, lowest, highest and peaks of each reading", 12 * s, kTextMuted);
+    y = paragraph(pen, ax + 10 * s, y, aw - 10 * s, "• a timeline (.csv): every reading, once a second", 12 * s,
+                  kTextMuted);
+    y = paragraph(pen, ax, y + 4 * s, aw, "This PC keeps its logs in %LOCALAPPDATA%\\frame-perf-hud\\", 12 * s,
+                  kTextMuted);
+    const char* const folders[][2] = {{"sessions\\", "its copy of the headset's Session Record"},
+                                      {"sessions\\pc-stream\\", "its own streaming logs"},
+                                      {"saves\\", "Direct Save"}};
+    double dirW = 0;
+    for (const auto& f : folders) dirW = std::max(dirW, pen.measure(f[0], 12 * s));
+    dirW += 8 * s;
+    for (const auto& f : folders) {
+        pen.text(ax + 10 * s, y, f[0], 12 * s, kText);
+        const double fx = ax + 10 * s + dirW;
+        pen.text(fx, y, f[1], fitSize(pen, f[1], 12 * s, 8 * s, ax + aw - fx, false), kTextMuted);
+        y += 12 * s * 1.4;
+    }
+    pen.text(ax, y + 10 * s, "Last session", 15 * s, kText, true);
+    y += 32 * s;
     if (view.lastCard.empty()) {
         y = paragraph(pen, ax, y, aw, "No session saved since this app started", 13 * s, kTextMuted);
     } else {
@@ -240,16 +278,19 @@ void PcPages::drawLogs(const Pen& pen, const PageBox& area, double s, const Page
             y = paragraph(pen, ax, y, aw, view.lastCard[i], (i == 0 ? 14 : 13) * s, kText, i == 0) + 2 * s;
         }
     }
-    paragraph(pen, ax, area.y + area.h - 18 * s, aw, "Files: " + view.dataDir, 12 * s, kTextMuted);
+    double bottom = y;
+    const double files = std::max(y + 4 * s, area.y + area.h - 18 * s);
+    bottom = std::max(bottom, paragraph(pen, ax, files, aw, "Files: " + view.dataDir, 12 * s, kTextMuted) - 12 * s * 1.4);
 
-    // The headset: Record, the crash recorder, the last power-off
+    // The headset: Direct Record and Crash Record (switched from here), Session Record (only on the headset)
     const double hx = x2 + pad, hw = w2 - 2 * pad;
     pen.text(hx, area.y + 30 * s, "Headset", 17 * s, kText, true);
     const link::ControlState* h = view.headset;
     const bool live = h != nullptr && view.subscribed && !view.busy;
     const double labelW = 130 * s, pillW = std::min(200 * s, hw - labelW), pillH = 34 * s;
     const auto pill = [&](double top, const char* label, PageAction on, PageAction off, bool isOn) {
-        pen.text(hx, centerBaseline(top, pillH, 14 * s), label, 14 * s, kTextMuted);
+        pen.text(hx, centerBaseline(top, pillH, 14 * s), label, fitSize(pen, label, 14 * s, 9 * s, labelW - 8 * s, false),
+                 kTextMuted);
         std::vector<PillPart> parts(2);
         parts[0].label = "On";
         parts[1].label = "Off";
@@ -263,23 +304,29 @@ void PcPages::drawLogs(const Pen& pen, const PageBox& area, double s, const Page
     };
     const bool recording = h != nullptr && (h->flags & link::kControlRecording) != 0;
     const bool crash = h != nullptr && (h->flags & link::kControlCrashRecorder) != 0;
-    // Each switch has its hint underneath, shown connected or not so the switches never move
-    const double recordTop = area.y + 46 * s;
-    pill(recordTop, "Record", PageAction::RecordOn, PageAction::RecordOff, recording);
+    y = paragraph(pen, hx, area.y + 52 * s, hw, "These switches control the headset's logs, on the headset.", 12 * s,
+                  kTextMuted);
+    // Each switch has its description underneath, shown connected or not so the switches never move
+    const double recordTop = y;
+    pill(recordTop, "Direct Record", PageAction::RecordOn, PageAction::RecordOff, recording);
     y = paragraph(pen, hx, recordTop + pillH + 20 * s, hw,
-                  "Writes the metrics to a CSV file on the headset once a second until you turn it off, even with the "
-                  "HUD hidden",
-                  12 * s, kTextMuted);
+                  "Starts when you turn it on and stops when you turn it off.", 12 * s, kTextMuted);
     const double crashTop = y - 2 * s;
-    pill(crashTop, "Crash recorder", PageAction::CrashOn, PageAction::CrashOff, crash);
+    pill(crashTop, "Crash Record", PageAction::CrashOn, PageAction::CrashOff, crash);
     y = paragraph(pen, hx, crashTop + pillH + 20 * s, hw,
-                  "Keeps the last 10 minutes of battery, power and temperatures on the headset's disk, so a crash or "
-                  "power cut leaves a log",
-                  12 * s, kTextMuted) + 10 * s;
+                  "Keeps the last 10 minutes in a loop on disk, so if the Frame crashes or loses power the log is still "
+                  "there, unlike the others. Timeline (CSV) only.",
+                  12 * s, kTextMuted) + 6 * s;
+    pen.text(hx, y + 4 * s, "Session Record", 14 * s, kTextMuted);
+    pen.text(hx + labelW, y + 4 * s, "Set in the headset's Logs tab",
+             fitSize(pen, "Set in the headset's Logs tab", 14 * s, 9 * s, hw - labelW, true), kText, true);
+    y = paragraph(pen, hx, y + 4 * s + 22 * s, hw,
+                  "Detects when a game starts and logs it until it exits. Records only while the HUD is on.", 12 * s,
+                  kTextMuted) + 8 * s;
     if (h == nullptr) {
         y = paragraph(pen, hx, y, hw,
-                      view.subscribed ? "This headset's HUD is older than this app: update it to control Record and "
-                                        "the crash recorder here"
+                      view.subscribed ? "This headset's HUD is older than this app: update it to control Direct "
+                                        "Record and Crash Record here"
                                       : "Not connected to the headset",
                       13 * s, kTextMuted);
     } else {
@@ -289,8 +336,9 @@ void PcPages::drawLogs(const Pen& pen, const PageBox& area, double s, const Page
         pen.text(hx, y, "Last power-off", 13 * s, kTextMuted);
         y = paragraph(pen, hx, y + 20 * s, hw, h->powerOff.empty() ? "unknown" : h->powerOff, 14 * s, kText, true);
         if (view.busy) y = paragraph(pen, hx, y + 6 * s, hw, "Waiting for the headset…", 13 * s, kTextMuted);
-        if (!view.headsetMessage.empty()) paragraph(pen, hx, y + 6 * s, hw, view.headsetMessage, 13 * s, kText);
+        if (!view.headsetMessage.empty()) y = paragraph(pen, hx, y + 6 * s, hw, view.headsetMessage, 13 * s, kText);
     }
+    return std::max(bottom, y - 13 * s * 1.4);
 }
 
 PageAction PcPages::press(double x, double y, double now, const PagesView& view) {

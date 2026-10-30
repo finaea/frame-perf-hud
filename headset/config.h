@@ -105,6 +105,9 @@ struct Config {
     bool layoutRejected = false;  ///< the file had a "layout" that couldn't be read (the default runs instead)
     LinkConfig link;            ///< T06: the PC link ("link" key)
     bool crashRecorder = false;  ///< T11: the 1 Hz crash ring ("crash_recorder"); off by default
+    /** Game session logs ("session_logs"): off by default, and a config without the key is off. Off, the wrist HUD
+     *  faded out pauses the sources too (#20); on, they keep reading so a session's timeline stays whole */
+    bool sessionLogs = false;
     std::string activeProfile;   ///< R2: the profile last used / saved ("active_profile", e.g. "profile-2"); "" = none
 };
 

@@ -54,7 +54,7 @@ public:
      * At start (before setEnabled): if the marker is there, the last run ended uncleanly; the ring is copied to
      * crashes/<time of its last record>.csv and the marker removed.
      * @param log one line for the journal ("" if nothing happened)
-     * @return "Crash log saved (hh:mm)" (the last record's local time), or "" if there was no crash log
+     * @return "Crash log kept (hh:mm)" (the last record's local time), or "" if there was no crash log
      */
     std::string recover(std::string& log);
 

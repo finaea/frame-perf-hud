@@ -27,10 +27,20 @@ struct ProcStat {
  */
 bool parseProcStat(const char* text, size_t length, ProcStat& out);
 
+/**
+ * The name a row shows: comm, or the exe basename when one is a cut-off start of the other ("vrlinkrunthread" with
+ * exe "vrlink" -> "vrlink", "at-spi-bus-laun" -> "at-spi-bus-launcher"). Scripts keep their name ("run_vrlink.sh",
+ * not "bash"), and so do Android apps (not "app_process64").
+ * @param comm /proc/[pid]/stat's comm
+ * @param exe basename of /proc/[pid]/exe ("" when unreadable)
+ */
+std::string displayName(const std::string& comm, const std::string& exe);
+
 /** One list row: a process, or with "sum same name" every process of that name. */
 struct ProcessRow {
-    std::string name;      ///< comm: the main thread's name, e.g. "vrlinkrunthread"
-    std::string exe;       ///< T04: basename of /proc/[pid]/exe ("vrlink"); empty for summed rows, other users' processes
+    std::string name;      ///< what the row shows (displayName); "sum same name" groups by it
+    std::string comm;      ///< the main thread's name, e.g. "vrlinkrunthread" (the hide rules match it)
+    std::string exe;       ///< T04: basename of /proc/[pid]/exe ("vrlink"); empty for other users' processes
     int pid = 0;           ///< 0 for a summed row
     int count = 1;         ///< processes in this row
     double cpuCorePct = 0.0;   ///< % of one core over the last interval (top's convention: 4 busy cores = 400%)
@@ -96,6 +106,8 @@ public:
 
     /** R2: the rules "Hide system" uses (nullptr = nothing is hidden). Not owned. */
     void setHideRules(HideRules* rules) { hideRules_ = rules; }
+    /** @return true while the rules file doesn't parse (the last good rules are in use) */
+    bool hideRulesBroken() const;
 
 private:
     struct Previous {
@@ -112,17 +124,16 @@ private:
         std::string comm;  ///< R2: an exec keeps pid + starttime but changes comm: then the exe is read again
         std::string name;
     };
-    std::unordered_map<int, ExeName> exeNames_;  ///< T04: readlink cache for listed rows only (≤ 2 × max per scan)
+    std::unordered_map<int, ExeName> exeNames_;  ///< T04: readlink cache, one per live process (pid + starttime)
 
-    /** T04: fills ProcessRow::exe for the listed rows, from the cache or one readlink each. */
-    void fillExeNames(std::vector<ProcessRow>& rows, const std::unordered_map<int, Previous>& current);
+    /** Fills ProcessRow::exe and ::name for every row: from the cache, or one readlink for a new process. */
+    void fillNames(std::vector<ProcessRow>& rows, const std::unordered_map<int, Previous>& current);
 
-    // R2: per process, whether the rules hide it. The cgroup and exe are read once per process (pid + starttime);
+    // R2: per process, whether the rules hide it. The cgroup is read once per process (pid + starttime);
     // the verdict is redone only when the rules change
     struct Hidden {
         uint64_t starttime = 0;
         std::string comm;  ///< an exec (a launcher becoming the game) keeps pid + starttime: comm tells it apart
-        std::string exe;
         std::string cgroup;
         uint64_t generation = 0;  ///< HideRules::generation() the verdict was made with
         bool hidden = false;

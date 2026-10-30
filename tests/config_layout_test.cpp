@@ -256,6 +256,30 @@ void testFontPathEscaping() {
     CHECK(loaded.boldFontPath == config.boldFontPath);
 }
 
+// ---- session_logs: off by default, round-trips, no "unknown key" warning either way ----
+
+void testSessionLogsConfigKey() {
+    std::string error;
+    std::vector<std::string> warnings;
+
+    writeFile(tempDir + "/nologs.json", R"({ "alpha": 0.4 })");
+    Config loaded;
+    CHECK(loadConfig(tempDir + "/nologs.json", loaded, warnings, error));
+    CHECK(!loaded.sessionLogs);
+    CHECK(warnings.empty());
+
+    for (const bool on : {true, false}) {
+        Config saved;
+        saved.sessionLogs = on;
+        CHECK(saveConfig(tempDir + "/sessionlogs.json", saved, error));
+        Config reloaded;
+        warnings.clear();
+        CHECK(loadConfig(tempDir + "/sessionlogs.json", reloaded, warnings, error));
+        CHECK(reloaded.sessionLogs == on);
+        CHECK(warnings.empty());
+    }
+}
+
 int main() {
     char pattern[] = "/tmp/fph-t04-tests/cfg-XXXXXX";
     makeDirectories("/tmp/fph-t04-tests");
@@ -270,6 +294,7 @@ int main() {
     testBrokenConfigKeptAsBad();
     testRejectedLayoutKeptAsBad();
     testFontPathEscaping();
+    testSessionLogsConfigKey();
     const std::string cleanup = "rm -rf '" + tempDir + "'";
     if (std::system(cleanup.c_str()) != 0) std::printf("(could not remove %s)\n", tempDir.c_str());
     if (failures == 0) std::printf("config-layout-test: all passed\n");

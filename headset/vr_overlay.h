@@ -143,6 +143,12 @@ public:
     double nextPlacementAt() const { return nextPlacementAt_; }
 
     /**
+     * @return true if OpenVR shows the HUD panel now: false while it's off, and also while the wrist fade, lost
+     *         tracking or alpha 0 hides it (updatePlacement keeps polling, so it shows again by itself)
+     */
+    bool panelShown() const { return connected_ && panelHandle_ != 0 && presentation_.shown(); }
+
+    /**
      * --verbose のとき true にする。applyConfig のたびに、少し後の pollEvents で
      * パネルの向きの確かめ（logFacingCheck）をログに出す。
      * @param verbose 出すなら true

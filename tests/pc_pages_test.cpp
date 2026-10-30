@@ -415,6 +415,40 @@ void testLongStrings() {
     CHECK(r.pages.boxOf(PageAction::CrashOff, b));
 }
 
+/** @return true if box b lies entirely inside area (the Logs page shrinks its own text to fit; the boxes must follow) */
+bool insideArea(const PageBox& b, const PageBox& area) {
+    return b.x >= area.x - 1e-6 && b.y >= area.y - 1e-6 && b.x + b.w <= area.x + area.w + 1e-6 &&
+           b.y + b.h <= area.y + area.h + 1e-6;
+}
+
+// The Logs page shrinks its text/controls until the lowest line fits (drawLogsAt): check that really keeps every
+// pill and button inside a cramped area, not just avoiding a crash -- a small window, and the preview's own size
+void testLogsBoxesFitSmallArea() {
+    Rig r;
+    const struct {
+        PageBox area;
+        double scale;
+    } cases[] = {
+        {{0, 0, 960, 520}, 1.0},
+        {{0, 0, 960, 640}, 1.25},
+    };
+    for (const auto& c : cases) {
+        Pen pen {r.cr, &r.fonts};
+        r.pages.setTab(PcTab::Logs);
+        r.pages.drawPage(pen, c.area, c.scale, r.view);
+        for (PageAction a : {PageAction::SaveLocal, PageAction::RecordOn, PageAction::RecordOff, PageAction::CrashOn,
+                             PageAction::CrashOff}) {
+            PageBox b;
+            CHECK(r.pages.boxOf(a, b));
+            CHECK(insideArea(b, c.area));
+            if (!insideArea(b, c.area)) {
+                std::printf("box %d at (%.1f,%.1f,%.1f,%.1f) outside area (%.1f,%.1f,%.1f,%.1f) scale %.2f\n",
+                            static_cast<int>(a), b.x, b.y, b.w, b.h, c.area.x, c.area.y, c.area.w, c.area.h, c.scale);
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -428,6 +462,7 @@ int main() {
     testDisabled();
     testLogsPills();
     testLongStrings();
+    testLogsBoxesFitSmallArea();
     if (failures != 0) {
         std::printf("pc-pages-test: %d failure(s)\n", failures);
         return 1;

@@ -129,6 +129,53 @@ void parseMalformed() {
     CHECK(!parseProcStat(full.data(), cut, s));
 }
 
+// ---- displayName ----
+
+void displayNameCases() {
+    CHECK(displayName("vrlinkrunthread", "vrlink") == "vrlink");
+    CHECK(displayName("at-spi-bus-laun", "at-spi-bus-launcher") == "at-spi-bus-launcher");
+    CHECK(displayName("run_vrlink.sh", "bash") == "run_vrlink.sh");
+    CHECK(displayName("com.vrchat.oculus", "app_process64") == "com.vrchat.oculus");
+    CHECK(displayName("comm", "") == "comm");
+    CHECK(displayName("same", "same") == "same");
+}
+
+// ---- ProcessScanner: exe-derived names, sum-same-name groups by the displayed name ----
+
+void scannerDisplayNameSumAndSplit() {
+    Fixture f;
+    // the main thread was renamed ("vrlinkrunthread"); exe resolves to the real binary
+    writeProc(f, 10, "vrlinkrunthread", 0, 0, 1000, 256);
+    f.symlink("/usr/bin/vrlink", "10/exe");
+    // another vrlink process whose comm is already the exe's name
+    writeProc(f, 20, "vrlink", 0, 0, 2000, 256);
+    f.symlink("/usr/bin/vrlink", "20/exe");
+    // a script: comm is the script, exe is the interpreter it keeps its own name
+    writeProc(f, 30, "run_vrlink.sh", 0, 0, 3000, 256);
+    f.symlink("/usr/bin/bash", "30/exe");
+
+    ProcessScanner scanner(f.root(), 100, 4096);
+    ProcessListOptions opts;
+    opts.sumSameName = true;
+    const ProcessLists& summed = scanner.scan(1.0, opts);
+    CHECK(summed.byRam.size() == 2);  // the two vrlink rows merge; the script stays its own row
+    int vrlinkCount = -1;
+    for (const ProcessRow& r : summed.byRam) {
+        if (r.name == "vrlink") vrlinkCount = r.count;
+        CHECK(r.name != "run_vrlink.sh" || r.count == 1);
+    }
+    CHECK(vrlinkCount == 2);
+
+    opts.sumSameName = false;
+    const ProcessLists& split = scanner.scan(2.0, opts);
+    CHECK(split.byRam.size() == 3);
+    int vrlinkRows = 0;
+    for (const ProcessRow& r : split.byRam) {
+        if (r.name == "vrlink") ++vrlinkRows;
+    }
+    CHECK(vrlinkRows == 2);  // both pids show under "vrlink", kept as separate rows
+}
+
 // ---- topRows ----
 
 ProcessRow row(const std::string& name, int pid, double cpu, double rss) {
@@ -557,6 +604,8 @@ int main() {
     parseNormal();
     parseOddComm();
     parseMalformed();
+    displayNameCases();
+    scannerDisplayNameSumAndSplit();
     topRowsOrdering();
     topRowsTieBreak();
     topRowsSumSameNameValues();

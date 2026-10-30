@@ -49,7 +49,8 @@ Profiles and Logs.
 
 ---
 
-**Logs:** Save Logs, Record, the crash recorder, the last power-off reason and the last session's card.
+**Logs:** what the logs are and where they go, then the four ways to log: Session Record, Direct Record, Direct Save
+and Crash Record, each with its status (the last session, the file being recorded, the last save, the last power-off).
 
 ![The Logs page of the dashboard tab (sample values)](docs/images/dashboard-logs-en.png)
 
@@ -66,11 +67,13 @@ preview tools), not captured inside the headset. Their numbers are sample values
   link, and the stream's error counters.
 - Shows the headset's outward and eye cameras, with an optional helper, and any MJPEG camera stream over HTTP.
 - Lets the layout be built from widgets, on the headset or on the PC, and kept in up to 8 profiles.
-- Logs game sessions: the samples stay in memory during play and each finished session is saved afterwards. Plus
-  Save Logs, Record and an optional crash recorder.
+- Logs game sessions with Session Record (off by default): the samples stay in memory during play and each
+  finished session is saved afterwards. Plus Direct Record, Direct Save and an optional Crash Record.
 - Tells why the headset last powered off.
-- Reads only what's needed: sensor reads pause when the HUD is hidden or the headset is off the head, unless the
-  dashboard tab, a connected PC, Record or the crash recorder still needs them.
+- Reads only what's needed: sensor reads pause when the HUD is hidden (also when it fades out on the wrist) or the
+  headset is off the head, unless the dashboard tab, a connected PC, Direct Record or Crash Record still needs them.
+  With Session Record on, the sensors keep being read while the wrist HUD is faded out, so a session's timeline stays
+  whole; the HUD itself still isn't redrawn while nobody can see it.
 - Updates itself from GitHub on both the headset and the PC.
 
 ## What it shows
@@ -194,7 +197,7 @@ The HUD shows up whenever SteamVR runs. Its settings are in the SteamVR dashboar
 
 | Control | What it does |
 |---|---|
-| Show: On / Off | Show or hide the HUD. While it's hidden, it isn't drawn, and its sensors pause unless the dashboard tab, a connected PC, Record or the crash recorder still needs them |
+| Show: On / Off | Show or hide the HUD. While it's hidden, it isn't drawn, and its sensors pause unless the dashboard tab, a connected PC, Direct Record or Crash Record still needs them |
 | Column − / + | The width of one widget column, in 2 cm steps (6 cm to 1 m). The HUD is that × its number of columns |
 | Opacity − / + | 10 % steps (20 % to 100 %) |
 | Clock: Off / 12h / 24h | The Time row in the General widget: hidden, 12-hour or 24-hour |
@@ -244,18 +247,21 @@ they are.
 
 | Control | What it does |
 |---|---|
-| Record: On / Off | Write every second to a file until it's turned off. The sensors keep being read while it's on, even with the HUD hidden |
-| Save Logs | Write the last 10 minutes and the current session's summary right away |
-| Crash recorder: On / Off | Keep the last 10 minutes of battery, power and temperatures on disk (one small write a second), so a crash or power cut leaves a log. Off by default |
-| Last power-off | Why the headset last switched off: a normal restart, a normal shutdown, or the power controller's raw registers when the reason isn't known yet |
-| Last session | The card of the last game session: length, frame rate and drops, power, battery used, peak temperatures and, when streaming, latency and link resets |
+| Card | Control | What it does |
+|---|---|---|
+| Session Record | On / Off | Detects when a game starts and logs it until it exits: a summary (`.json`) and a timeline (`.csv.gz`) in `sessions/`. Off by default, and a config from before this switch is off too. The card shows the last session: its length, frame rate and drops, power, battery used and peak CPU temperature |
+| Direct Record | On / Off | Starts when you turn it on and stops when you turn it off: a timeline (`.csv`, written once a second) and, when it stops, a summary of the recorded time (`.json`), in `saves/`. The sensors keep being read while it's on. The card turns red while recording |
+| Direct Save | Save now | Saves the last 10 minutes right now: their timeline (`.csv.gz`) and their own summary (`.json`), in `saves/`. With Session Record on, the summary also holds the open session's summary so far |
+| Crash Record | On / Off | Keeps the last 10 minutes in a loop on disk (one small write a second), so if the Frame crashes or loses power the log is still there, unlike the others. A timeline (CSV) only, in `crashes/`. Off by default. The card also shows why the headset last switched off: a normal restart, a normal shutdown, or the power controller's raw registers when the reason isn't known yet |
 
-Game sessions are logged by themselves. The samples stay in memory while playing, and when a game ends, its
-summary and timeline are written once. Samples are only taken while something is reading the sensors (the HUD
-shown and worn, the dashboard tab open, a connected PC or Record), so a session with less than a minute of samples
-is skipped, even if the game ran longer. A session ends a minute after its game quits with nothing else started: it
-ends at the moment the game left, and that minute isn't counted. A short trip to SteamVR Home, or the same game back
-within the minute, doesn't split a game. The HUD also shows the session card for 10 seconds.
+The summary holds the average, lowest, highest and peaks (5th and 95th percentile) of each reading; the timeline
+holds every reading, once a second. Each of the four works on its own.
+
+Session Record records while something reads the sensors: the HUD shown and worn, the dashboard tab open, the PC app
+connected, or Direct Record on. So a session with less than a minute of samples is skipped, even if the game ran
+longer. A session ends a minute after its game quits with nothing else started: it ends at the moment the game left,
+and that minute isn't counted. A short trip to SteamVR Home, or the same game back within the minute, doesn't split a
+game. The HUD also shows the session's card for 10 seconds when it ends.
 
 ### Bottom row
 
@@ -275,13 +281,13 @@ hides the HUD.
 |---|---|
 | Layout | The HUD's widgets, live. **Edit layout** in the right-click menu (or Ctrl+E) switches to the same editor as the dashboard's: drag cards, add widgets from the palette, change a widget's settings |
 | Profiles | The headset's profiles, with the same buttons as the dashboard (Rename opens a text box). The headset makes the change, so both stay in step |
-| Logs | **This PC:** Save Logs, Open logs folder and the last session's card. **Headset:** the Record and Crash recorder switches and the last power-off reason |
+| Logs | **This PC:** Direct Save (the last 10 minutes, to this PC), Open logs folder, where this PC keeps its logs, and the last session's card. **Headset:** the Direct Record and Crash Record switches (they control the headset), Session Record's description (it's switched on the headset), and the last power-off reason |
 
 ![The Windows app's Profiles tab](docs/images/pc-window-profiles.png)
 
 ![The Windows app's Logs tab](docs/images/pc-window-logs.png)
 
-The status bar's **Save Logs** and the right-click menu do the same as the Logs tab's buttons.
+The status bar's **Direct Save** and the right-click menu do the same as the Logs tab's buttons.
 
 ## Files and settings
 
@@ -290,11 +296,11 @@ The status bar's **Save Logs** and the right-click menu do the same as the Logs 
 | Path | What |
 |---|---|
 | `~/.config/frame-perf-hud/config.json` | All settings and the layout. Missing keys keep their defaults, and changes are picked up while it runs. [`contrib/config.example.json`](contrib/config.example.json) has every key at its default |
-| `~/.config/frame-perf-hud/hide_rules.json` | What **Hide system** leaves out of the process lists. Written with a built-in list the first time, then read again whenever it changes |
+| `~/.config/frame-perf-hud/hide_rules.json` | What **Hide system** leaves out of the process lists. Written with a built-in list the first time, then read again whenever it changes. A later version adds only its new built-in rules once (rules you deleted stay deleted). While the file has an error, the CPU / RAM items cards say so and the last good rules stay in use |
 | `~/.config/frame-perf-hud/profiles/` | One file per profile |
-| `~/.local/state/frame-perf-hud/sessions/` | One summary (`.json`) and timeline (`.csv.gz`) per game session; the last 10 are kept |
-| `~/.local/state/frame-perf-hud/saves/` | Save Logs and Record files; the last 20 are kept |
-| `~/.local/state/frame-perf-hud/crashes/` | Crash logs from the crash recorder; the last 5 are kept |
+| `~/.local/state/frame-perf-hud/sessions/` | Session Record: one summary (`.json`) and timeline (`.csv.gz`) per game session; the last 10 are kept |
+| `~/.local/state/frame-perf-hud/saves/` | Direct Record (`_record.csv` + `_record.json`) and Direct Save (`_save.json` + `_save.csv.gz`); the last 20 are kept |
+| `~/.local/state/frame-perf-hud/crashes/` | Crash Record's crash logs (CSV); the last 5 are kept |
 
 Settings that differ from frame-perf-overlay's:
 
@@ -307,7 +313,9 @@ Settings that differ from frame-perf-overlay's:
   `hide_system` for the process lists; `adapter` (`"dongle"` or `"home"`) for Network; `cameras`, `full_size` and
   `fps` for the cameras; `url`, `fps`, `size` (40 to 100, % of the column), `full_size` and `rotation` (0, 90, 180
   or 270) for HTTP camera. A widget that isn't listed is off and reads nothing.
-- `crash_recorder` turns the crash recorder on, and `active_profile` names the active profile.
+- `crash_recorder` turns Crash Record on, and `active_profile` names the active profile.
+- `session_logs` turns Session Record on. It's off by default, and a `config.json` without the key (every config from
+  before it) is off.
 - `link` holds the PC link's UDP port (47630) and the allowed PCs.
 - `font` / `font_bold` empty means the bundled Noto Sans. `language` is `"en"` for now.
 
@@ -334,8 +342,8 @@ Everything is in `%LOCALAPPDATA%\frame-perf-hud\`:
 | `settings.json` | The app's settings: the PC's id, the manual IP, remembered headsets, window placement, update check |
 | `layout-cache.json` | The last layout, shown greyed until the headset answers |
 | `pc.log` | The app's log, started fresh on every start |
-| `sessions\` | The PC's copy of each headset session; `sessions\pc-stream\` the PC's own streaming stats per game |
-| `saves\` | Save Logs files |
+| `sessions\` | The PC's copy of each headset session (only while the headset's Session Record is on); `sessions\pc-stream\` the PC's own streaming stats per game |
+| `saves\` | Direct Save files |
 | `update\` | Downloads of a new version, while one is being installed |
 
 ## Updates
@@ -375,7 +383,7 @@ Everything is in `%LOCALAPPDATA%\frame-perf-hud\`:
   profiles and is sent to allowed PCs with the layout, so it shouldn't hold a password.
 - **Files written:** its own settings, profiles, logs and caches (listed above), the updaters' small caches, and
   a lock file and the debug dump in `/run/user/<uid>` (memory only). Session samples stay in memory during play and
-  are written after the session ends; Save Logs, Record and the crash recorder can write while a game runs, and
+  are written after the session ends; Direct Save, Direct Record and Crash Record can write while a game runs, and
   changing settings or the layout saves them right away.
 
 ## Troubleshooting

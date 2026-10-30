@@ -64,7 +64,7 @@ Releasing both halves is in [`docs/RELEASING.md`](../docs/RELEASING.md).
   with the same rules as its own dashboard, including the second tap when unsaved changes would be lost. The list
   comes from the headset's `CONTROL_STATE`. A headset older than these messages leaves the tab with an "update it"
   note and its buttons disabled.
-- **Logs:** the PC's Save Logs, Open logs folder and last session card; the headset's Record and crash recorder
+- **Logs:** the PC's Direct Save, Open logs folder and last session card; the headset's Direct Record and Crash Record
   switches and last power-off reason.
 
 ## Updates

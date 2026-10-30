@@ -144,9 +144,7 @@ std::string ellipsize(const Pen& pen, const std::string& s, double size, double 
     if (pen.measure(s, size, bold) <= maxWidth) return s;
     std::string cut = s;
     while (!cut.empty()) {
-        cut.pop_back();
-        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) cut.pop_back();
-        if (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0x80) != 0) cut.pop_back();
+        popUtf8Char(cut);  // one whole character per step
         if (pen.measure(cut + "..", size, bold) <= maxWidth) return cut + "..";
     }
     return "..";
@@ -904,8 +902,14 @@ void drawProcessList(const Pen& pen, double x, double y, const WidgetInstance& w
         return;
     }
     const std::vector<ProcessItem>& rows = cpu ? ctx.processes->byCpu : ctx.processes->byRam;
+    // A broken hide_rules.json takes the last row (the last good rules still hide), until the file parses again
+    const bool hint = w.hideSystem && ctx.processes->hideRulesBroken && w.maxItems > 0;
     // The in-game HUD isn't interactive: the top rows that fit, no scrolling
-    const size_t n = std::min<size_t>(rows.size(), w.maxItems);
+    const size_t n = std::min<size_t>(rows.size(), w.maxItems - (hint ? 1 : 0));
+    if (hint) {
+        const double ry = top + 26 + kRowH * static_cast<double>(w.maxItems);
+        pen.text(cx + 8, ry, ellipsize(pen, t.hideRulesBroken, 13, right - (cx + 8)), 13, kWarn);
+    }
     for (size_t k = 0; k < n; ++k) {
         const ProcessItem& r = rows[k];
         const double ry = top + 26 + kRowH * static_cast<double>(k + 1);

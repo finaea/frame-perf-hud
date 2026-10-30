@@ -203,8 +203,8 @@ void crashIsRecovered() {
     CrashRecorder next(dir);
     std::string log;
     const std::string note = next.recover(log);
-    CHECK(note == "Crash log saved (" + fph::slog::clockTime(last).substr(0, 5) + ")");
-    CHECK(note.size() == 23);
+    CHECK(note == "Crash log kept (" + fph::slog::clockTime(last).substr(0, 5) + ")");
+    CHECK(note.size() == 22);
     CHECK(!log.empty());
     CHECK(!fs::exists(dir + "/crash/running"));
     const std::string csvPath = dir + "/crashes/" + fph::slog::fileTime(last) + "_crash.csv";

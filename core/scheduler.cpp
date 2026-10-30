@@ -124,6 +124,12 @@ double Scheduler::nextDue(double now) const {
     return best;
 }
 
+void Scheduler::requestRead(SourceId source) {
+    if (!validSource(source)) return;
+    SourceState& s = sources_[indexOf(source)];
+    if (s.refs > 0 && s.read) s.nextDue = std::min(s.nextDue, now_);
+}
+
 uint32_t Scheduler::refCount(SourceId source) const {
     return validSource(source) ? sources_[indexOf(source)].refs : 0;
 }

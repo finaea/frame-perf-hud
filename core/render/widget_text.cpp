@@ -79,6 +79,7 @@ const WidgetText& widgetText() {
         "CPU % of one core",
         "RSS",
         "Measuring...",
+        "hide_rules.json has an error: using the last good rules",
         // Network
         "Not connected",
         "Link ",

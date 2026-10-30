@@ -60,14 +60,21 @@ const UiText kEnglish = {
     // R2: Compact cards, Hide system
     "Compact", "Hide system", ", no system",
     // T11: the Logs page
-    "Logs", "Save and Record", "Record", "Save Logs",
-    "Writes the metrics to a CSV file once a second until you turn it off, even with the HUD hidden",
-    "Saves the last 10 minutes of metrics and this session's summary so far, right now",
-    "Crash recorder", "Recorder",
-    "Keeps the last 10 minutes of battery, power and temperatures on disk (1 write a second), so a crash or power "
-    "cut leaves a log",
-    "Last power-off", "Last session", "No session has ended since the HUD started",
-    "Files: ~/.local/state/frame-perf-hud/ (sessions, saves, crashes)",
+    "Logs",
+    "Logs", "The HUD can keep a log of everything it reads:",
+    "• a summary (.json): the average, lowest, highest and peaks of each reading",
+    "• a timeline (.csv): every reading, once a second", "Logs are saved on the Frame in",
+    "~/.local/state/frame-perf-hud/", "sessions/", "Session Record (last 10)", "saves/",
+    "Direct Record and Direct Save (last 20)", "crashes/", "Crash Record (last 5)",
+    "There are 4 ways to log, on the right. Each one works on its own.",
+    "Session Record", "Detects when a game starts and logs it until it exits. Records only while the HUD is on.",
+    "Session Record is off", "No session has ended since the HUD started",
+    "Direct Record", "Starts when you turn it on and stops when you turn it off.",
+    "Direct Save", "Save now", "Saves the last 10 minutes right now.",
+    "Crash Record",
+    "Keeps the last 10 minutes in a loop on disk, so if the Frame crashes or loses power the log is still there, "
+    "unlike the others. Timeline (CSV) only.",
+    "Last power-off: ",
     // R2: the Profiles page
     "Profiles", "Profiles", "%zu / %zu", "No profiles yet. New profile saves the layout you have now",
     "Active", "unsaved changes",

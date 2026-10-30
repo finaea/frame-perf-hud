@@ -140,3 +140,35 @@ private:
     double appliedAlpha_ = -1.0;  ///< 最後に受け付けられた透明度（まだなら負）
     bool shown_ = false;          ///< 最後に受け付けられた表示・非表示
 };
+
+/**
+ * #20: the "HUD shown" input of the source demand. Session logs off: what OpenVR shows (VrOverlay::panelShown), so a
+ * wrist faded out, lost tracking or alpha 0 pauses the reads too. On: the HUD switch (config.visible), so the sources
+ * keep reading on the wrist and a session's timeline stays whole.
+ */
+inline bool hudShownDemand(bool sessionLogs, bool configVisible, bool panelShown) {
+    return sessionLogs ? configVisible : panelShown;
+}
+
+/**
+ * #20: the HUD redraw follows what OpenVR shows (PanelPresentationState::shown), not config.visible: no redraws or
+ * uploads while the wrist fade, lost tracking or alpha 0 hides the panel, in both session-log modes.
+ */
+class PanelRedrawGate {
+public:
+    /**
+     * Call once per loop pass, before the redraw deadline is checked.
+     * @param shown the panel is shown now (VrOverlay::panelShown)
+     * @param now monotonic seconds
+     * @param nextPanel the next redraw's deadline: pulled to now when the panel has just been shown again
+     * @return shown (the redraw and its wake-up happen only then)
+     */
+    bool update(bool shown, double now, double& nextPanel) {
+        if (shown && !wasShown_ && nextPanel > now) nextPanel = now;
+        wasShown_ = shown;
+        return shown;
+    }
+
+private:
+    bool wasShown_ = false;
+};

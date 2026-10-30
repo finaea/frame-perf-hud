@@ -93,6 +93,13 @@ public:
      */
     double nextDue(double now) const;
 
+    /**
+     * Makes the source due now, so the next runDue reads it, if it is wanted (a widget on the panel uses it and
+     * someone is looking, or it's pinned). Does nothing otherwise: the read then happens when it becomes wanted, as
+     * usual. For events that say a value changed (the scene app).
+     */
+    void requestRead(SourceId source);
+
     /** @return the source's reference count (0 when nobody is looking) */
     uint32_t refCount(SourceId source) const;
     /** @return how many times the source has been read since start */

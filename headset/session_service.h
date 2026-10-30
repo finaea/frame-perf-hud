@@ -37,13 +37,26 @@ public:
     void tickAt(double now, int64_t unixNow, bool looking, const fph::SessionInfo& session,
                 const fph::MetricStore& store);
 
-    /** Record on / off (Record also counts as someone looking: the caller puts it in the demand). */
+    /**
+     * Direct Record on / off (it also counts as someone looking: the caller puts it in the demand). Off writes
+     * <file>_record.json, the recorded window's summary (summaryJson), next to the CSV.
+     */
     void setRecord(bool on, const fph::SessionInfo& session, double now);
     bool recording() const { return record_.isOpen(); }
 
-    /** Save: the last 10 minutes + the session's summary to saves/, now. */
+    /**
+     * Direct Save: the last 10 minutes to saves/, now: the timeline, and in the JSON that window's own summary, plus
+     * "session_so_far" (the open session's summary) while Session Record is on.
+     */
     void save(const fph::SessionInfo& session, double now);
 
+    /**
+     * Session logs on / off (the config's session_logs; off until called). Off: no session is followed, written or
+     * shown (no end card); Save keeps the last 10 minutes without a session summary; Record and the crash recorder
+     * are unaffected. Turning it off drops the open session unsaved.
+     */
+    void setSessionLogs(bool on);
+    bool sessionLogs() const { return sessionLogs_; }
     /** The crash recorder on / off (the config's crash_recorder). */
     void setCrashRecorder(bool on);
     /** @return the sources the scheduler must keep reading for the crash recorder (empty when it's off) */
@@ -65,6 +78,7 @@ private:
     fph::slog::RecentRing ring_;
     fph::slog::RecordWriter record_;
     int64_t recordStartUnix_ = 0;
+    fph::slog::SessionData recordSummary_;  ///< Direct Record's window, written as <file>_record.json when it stops
     crashrec::CrashRecorder crash_;
     LogsUiState ui_;
     int64_t lastUnix_ = 0;
@@ -72,7 +86,10 @@ private:
     double hudCardUntil_ = 0;
     uint64_t sessionsWritten_ = 0;
     uint64_t sessionsSkipped_ = 0;
+    bool sessionLogs_ = false;
 
     void writeEnded(double now);
+    /** Direct Record off (or exit): closes the CSV and writes the window's summary next to it. */
+    void closeRecord();
     void changed() { ++ui_.revision; }
 };

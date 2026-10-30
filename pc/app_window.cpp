@@ -756,7 +756,7 @@ void App::showMenu(POINT screen, bool fromTray) {
     AppendMenuW(menu, MF_STRING | (settings_.onTop ? MF_CHECKED : 0), kMenuOnTop, L"On top");
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"Settings...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kMenuSave, L"Save Logs");  // T11
+    AppendMenuW(menu, MF_STRING, kMenuSave, L"Direct Save");  // T11
     AppendMenuW(menu, MF_STRING, kMenuOpenLogs, L"Open logs folder");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     if (!fromTray) AppendMenuW(menu, MF_STRING, kMenuHide, L"Hide to tray");

@@ -484,7 +484,7 @@ struct ControlState {
     std::vector<ControlProfile> profiles;  ///< by id number, ≤ kMaxControlProfiles
     std::string status;          ///< the last profile action's result (≤ 127 bytes)
     std::string recordStatus;    ///< "Recording 3:12 to …" (≤ 127)
-    std::string crashStatus;     ///< "Crash log saved (12:55)" (≤ 63)
+    std::string crashStatus;     ///< "Crash log kept (12:55)" (≤ 63)
     std::string powerOff;        ///< the last power-off reason (≤ 31)
 
     /** Equal apart from the revision. */

@@ -459,8 +459,7 @@ fph::ProcessListsView SensorBridge::processListsView() const {
         out.reserve(rows.size());
         for (const ProcessRow& r : rows) {
             fph::ProcessItem item;
-            // comm is the main thread's name ("vrlinkrunthread"); the exe basename ("vrlink") reads better
-            item.name = r.exe.empty() ? r.name : r.exe;
+            item.name = r.name;  // displayName: comm, or the exe when comm is cut off ("vrlinkrunthread" -> "vrlink")
             item.pid = r.pid;
             item.count = r.count;
             item.cpuCorePct = r.cpuCorePct;
@@ -474,6 +473,7 @@ fph::ProcessListsView SensorBridge::processListsView() const {
     view.byRam = convert(l.byRam);
     view.cpuValid = l.cpuValid;
     view.generation = processScans_;
+    view.hideRulesBroken = processes_.hideRulesBroken();
     return view;
 }
 

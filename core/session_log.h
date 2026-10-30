@@ -137,6 +137,16 @@ struct SessionData {
     Timeline timeline;
 };
 
+/**
+ * A summary with no samples yet: stats and histograms for these columns, an empty timeline. Direct Record and Direct
+ * Save summarise their own window with it (addToSummary), in the same format as a session (summaryJson).
+ */
+SessionData emptySummary(const SessionInfo& info, const std::vector<LogColumn>& columns, const std::string& source);
+
+/** Adds one 1 s sample to the stats, histograms, dataSeconds and lastUnix (not the timeline). NaN values are skipped. */
+void addToSummary(SessionData& s, const std::vector<LogColumn>& columns, int64_t unixTime,
+                  const std::vector<float>& values);
+
 /** Follows one stream of sessions. Single-threaded. */
 class SessionLog {
 public:
@@ -224,6 +234,12 @@ std::string gzip(const std::string& text);
 
 /** The end-of-session card, a few short lines (duration, fps, power, battery, temps, streaming). */
 std::vector<std::string> endCard(const SessionData& s, const std::vector<LogColumn>& columns);
+
+/**
+ * The last session on the headset's Logs tab, at most 3 lines: "Last: VRChat · 1 h 05 min", "fps avg 71.8 · 12 dropped
+ * · 9.4 W", "Battery 82% to 61% · peak CPU 71 °C" (the bundled font has no arrow). A part with no samples is left out (and a line with none).
+ */
+std::vector<std::string> shortCard(const SessionData& s, const std::vector<LogColumn>& columns);
 
 /**
  * Writes <dir>/<stem>.json and <stem>.csv.gz atomically, then keeps the newest `keep` stems in dir.

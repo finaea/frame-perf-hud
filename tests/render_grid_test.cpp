@@ -3,6 +3,7 @@
 #include "atomic_file.h"
 #include "grid_renderer.h"
 #include "stream_metrics.h"
+#include "utf8.h"
 
 #include <cairo.h>
 
@@ -1263,6 +1264,68 @@ void testProcessListWithCutName() {
     }
 }
 
+// A broken hide_rules.json takes the process list's last row, only when Hide system is actually on
+void testHideRulesBrokenHint() {
+    MetricStore store;
+    store.setI32(metric::kCpuItemsRows, 3, 1.0);
+    ProcessListsView ok = makeRows(3);
+    ProcessListsView broken = makeRows(3);
+    broken.hideRulesBroken = true;
+
+    WidgetInstance hideOn = inst(W::CpuItems, 3);
+    hideOn.hideSystem = true;
+    const Layout layoutOn = oneWidget(hideOn);
+    CHECK(renderPx(layoutOn, store, &ok) != renderPx(layoutOn, store, &broken));
+
+    WidgetInstance hideOff = inst(W::CpuItems, 3);
+    hideOff.hideSystem = false;
+    const Layout layoutOff = oneWidget(hideOff);
+    CHECK(renderPx(layoutOff, store, &ok) == renderPx(layoutOff, store, &broken));
+}
+
+// popUtf8Char: removes exactly one whole UTF-8 character at the end, not just the last byte
+void testPopUtf8Char() {
+    std::string s = "abc";
+    popUtf8Char(s);
+    CHECK(s == "ab");
+
+    s = "a\xC3\xA9";  // "aé"
+    popUtf8Char(s);
+    CHECK(s == "a");
+
+    s = "\xC3\xA9"
+        "a";  // "éa"
+    popUtf8Char(s);
+    CHECK(s == "\xC3\xA9");  // keeps é whole (the old bug removed é too)
+
+    s = "a\xE6\x97\xA5";  // "a日"
+    popUtf8Char(s);
+    CHECK(s == "a");
+
+    s = "a\xF0\x9F\x98\x80";  // "a😀"
+    popUtf8Char(s);
+    CHECK(s == "a");
+
+    s = "";
+    popUtf8Char(s);
+    CHECK(s.empty());
+}
+
+// ellipsize cuts whole UTF-8 characters at every width, never leaving a torn multi-byte tail
+void testEllipsizeKeepsWholeUtf8() {
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 10, 10);
+    cairo_t* cr = cairo_create(surface);
+    const Pen pen {cr, &fonts()};
+    const std::string text = "...x\xC3\xA9\xE2\x80\xA6";  // "...xé…"
+    const double full = pen.measure(text, 14, false);
+    for (double w = full; w >= 0; w -= 2) {
+        const std::string cut = ellipsize(pen, text, 14, w, false);
+        CHECK(isValidUtf8(cut));
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}
+
 }  // namespace
 
 int main() {
@@ -1283,6 +1346,9 @@ int main() {
     testNetworkMissingAdapterIsNotConnected();
     testInvalidUtf8Text();
     testProcessListWithCutName();
+    testHideRulesBrokenHint();
+    testPopUtf8Char();
+    testEllipsizeKeepsWholeUtf8();
     testListAndCameraHeightsIgnoreContext();
     testCpuClusterRowsShrinkWhenSensorsMissing();
     testPlaceholders();

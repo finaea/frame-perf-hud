@@ -68,7 +68,7 @@ struct PagesView {
 };
 
 /**
- * The status bar's "Save Logs" button, top right, as wide as its label (shared by the window and the
+ * The status bar's "Direct Save" button, top right, as wide as its label (shared by the window and the
  * preview tool so both draw the same).
  * @param width the window's width (px)
  * @param barH the status bar's height
@@ -142,6 +142,8 @@ private:
                 bool primary);
     void drawProfiles(const Pen& pen, const PageBox& area, double s, const PagesView& view);
     void drawLogs(const Pen& pen, const PageBox& area, double s, const PagesView& view);
+    /** The Logs page at text scale s. @return the lowest baseline drawn (drawLogs shrinks s until it fits) */
+    double drawLogsAt(const Pen& pen, const PageBox& area, double cardS, double s, const PagesView& view);
 };
 
 }  // namespace pc

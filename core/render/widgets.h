@@ -32,6 +32,7 @@ struct ProcessListsView {
     std::vector<ProcessItem> byRam;
     bool cpuValid = false;  ///< byCpu has a real interval behind it
     uint64_t generation = 0;  ///< bumped on every scan (the list widgets redraw only when it moves)
+    bool hideRulesBroken = false;  ///< hide_rules.json doesn't parse: a Hide system card says so (headset only)
 };
 
 /** What every widget gets to draw with. */

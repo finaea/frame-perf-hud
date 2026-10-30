@@ -58,6 +58,15 @@ private:
     std::string root_;
 };
 
+/** Symlinks dir/<pid>/exe (writeProc below doesn't write one). */
+void symlinkExe(const TempDir& dir, int pid, const std::string& target) {
+    const fs::path path = fs::path(dir.root()) / std::to_string(pid) / "exe";
+    fs::create_directories(path.parent_path());
+    std::error_code ec;
+    fs::remove(path, ec);
+    fs::create_symlink(target, path);
+}
+
 std::string slurp(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     std::ostringstream ss;
@@ -136,6 +145,130 @@ void testSeedAndParse() {
     CHECK(!parseHideRules("{\"hide\": 5}", parsed, error));
     CHECK(!parseHideRules("{\"hide\": [{\"note\": \"x\"}]}", parsed, error));  // neither name nor cgroup
     CHECK(!parseHideRules("{\"hide\": [{\"name\": 3}]}", parsed, error));
+}
+
+void testParseVersionOutParam() {
+    std::vector<HideRule> parsed;
+    std::string error;
+    uint32_t version = 0;
+    CHECK(parseHideRules("{\"version\": 3, \"hide\": [{\"name\": \"a\"}]}", parsed, error, &version));
+    CHECK(version == 3);
+    version = 0;
+    CHECK(parseHideRules("{\"hide\": [{\"name\": \"a\"}]}", parsed, error, &version));  // no "version" key: 1
+    CHECK(version == 1);
+}
+
+void testAddNewBuiltIns() {
+    HideRule a, b, c, d;
+    a.name = "a";
+    a.since = 1;
+    b.name = "b";
+    b.since = 1;
+    c.name = "c";
+    c.since = 2;
+    d.name = "d";
+    d.since = 2;
+    const std::vector<HideRule> builtIns = {a, b, c, d};
+
+    // file v1 has "a"; the user already added "d" by hand; "b" (since 1) was deleted by the user and doesn't come back
+    std::vector<HideRule> rules = {a, d};
+    CHECK(addNewBuiltIns(rules, 1, builtIns) == 1);
+    CHECK(rules.size() == 3);
+    CHECK(rules[0].name == "a" && rules[1].name == "d");
+    CHECK(rules[2].name == "c");  // the only since-2 rule the user doesn't already have, appended at the end
+
+    // fileVersion at or past every since: nothing to add
+    std::vector<HideRule> upToDate = {a};
+    CHECK(addNewBuiltIns(upToDate, 2, builtIns) == 0);
+    CHECK(upToDate.size() == 1);
+}
+
+void testSeedIfMissingVersioning() {
+    const std::vector<HideRule> builtIns = [] {
+        HideRule a, b;
+        a.name = "a";
+        a.since = 1;
+        b.name = "b";
+        b.since = 2;
+        return std::vector<HideRule> {a, b};
+    }();
+    std::string error;
+
+    // missing: written with the given version and built-ins
+    {
+        TempDir dir;
+        const std::string path = dir.root() + "/hide_rules.json";
+        HideRules rules(path, 0);
+        CHECK(rules.seedIfMissing(error, builtIns, 2));
+        std::vector<HideRule> parsed;
+        uint32_t version = 0;
+        CHECK(parseHideRules(slurp(path), parsed, error, &version));
+        CHECK(version == 2);
+        CHECK(parsed.size() == 2);
+    }
+
+    // existing v1 file with a user-edited rule list: gets the current version and the since-2 built-ins it lacks,
+    // in order, appended at the end; the user's rules (including one matching a built-in) are kept as they are
+    std::string path2;
+    {
+        TempDir dir;
+        path2 = dir.root() + "/hide_rules.json";
+        dir.write("hide_rules.json", "{\"version\": 1, \"hide\": [{\"name\": \"user-added\"}, {\"name\": \"a\"}]}");
+        HideRules rules(path2, 0);
+        CHECK(rules.seedIfMissing(error, builtIns, 2));
+        const std::string text = slurp(path2);
+        CHECK(text.find("\"version\": 2") != std::string::npos);
+        std::vector<HideRule> parsed;
+        CHECK(parseHideRules(text, parsed, error));
+        CHECK(parsed.size() == 3);
+        CHECK(parsed[0].name == "user-added" && parsed[1].name == "a" && parsed[2].name == "b");
+
+        // running it again: the file is already at the version, so nothing is written (byte-identical)
+        const std::string before = slurp(path2);
+        CHECK(rules.seedIfMissing(error, builtIns, 2));
+        CHECK(slurp(path2) == before);
+    }
+
+    // a broken (unparseable) file is left byte-identical
+    {
+        TempDir dir;
+        const std::string path = dir.root() + "/hide_rules.json";
+        dir.write("hide_rules.json", "{ not json");
+        HideRules rules(path, 0);
+        CHECK(rules.seedIfMissing(error, builtIns, 2));
+        CHECK(slurp(path) == "{ not json");
+    }
+
+    // a file already at the version is untouched
+    {
+        TempDir dir;
+        const std::string path = dir.root() + "/hide_rules.json";
+        dir.write("hide_rules.json", "{\"version\": 2, \"hide\": [{\"name\": \"x\"}]}");
+        const std::string original = slurp(path);
+        HideRules rules(path, 0);
+        CHECK(rules.seedIfMissing(error, builtIns, 2));
+        CHECK(slurp(path) == original);
+    }
+}
+
+void testBrokenFlag() {
+    TempDir dir;
+    const std::string path = dir.root() + "/rules.json";
+    dir.write("rules.json", "{\"hide\": [{\"name\": \"a\"}]}");
+    HideRules rules(path, 0);
+    CHECK(rules.refresh(1));
+    CHECK(!rules.broken());
+
+    // a differently-sized rewrite so the mtime/size check sees it even within the same second (checkSeconds 0)
+    dir.write("rules.json", "{ not json at all, more bytes than before");
+    CHECK(!rules.refresh(2));
+    CHECK(rules.broken());
+    CHECK(rules.rules().size() == 1 && rules.hides("a", "", ""));  // the last good rules are still in use
+
+    dir.write("rules.json", "{\"hide\": [{\"name\": \"beta-rule\"}]}");
+    CHECK(rules.refresh(3));
+    CHECK(!rules.broken());
+    CHECK(rules.hides("beta-rule", "", ""));
 }
 
 void testRefresh() {
@@ -290,6 +423,28 @@ void testScannerHidesSystem() {
     CHECK(cpuHidden.byRam[0].name == "weirdsvc");  // RAM list not hiding
 }
 
+// A rule naming the exe still hides a process whose comm is the renamed main thread; a rule naming comm still works
+void testHideMatchesExeOrComm() {
+    TempDir proc;
+    TempDir rulesDir;
+    writeProc(proc, 10, "vrlinkrunthread", 256, "/user.slice/x");  // comm renamed; exe resolves to "vrlink"
+    symlinkExe(proc, 10, "/usr/bin/vrlink");
+    writeProc(proc, 20, "vrlink", 256, "/user.slice/x");           // comm itself is "vrlink", no exe link
+
+    rulesDir.write("hide_rules.json", "{\"hide\": [{\"name\": \"vrlink\"}]}");
+    HideRules rules(rulesDir.root() + "/hide_rules.json", 0);
+    CHECK(rules.refresh(0));
+
+    ProcessScanner scanner(proc.root(), 100, 4096);
+    scanner.setHideRules(&rules);
+    ProcessListOptions opts;
+    opts.ramHideSystem = true;
+    opts.ramMax = 5;
+    const ProcessLists& l = scanner.scan(10.0, opts);
+    CHECK(l.scanned == 2);
+    CHECK(l.byRam.empty());  // pid 10 hidden by its exe, pid 20 hidden by comm directly
+}
+
 // A hidden launcher that execs the game keeps its pid and starttime: the game must still show (review must-fix)
 void testExecKeepsPidButNotVerdict() {
     TempDir proc;
@@ -336,10 +491,15 @@ int main(int argc, char** argv) {
     testRuleMatches();
     testSeedAndParse();
     testEscapedFieldsRoundTrip();
+    testParseVersionOutParam();
+    testAddNewBuiltIns();
+    testSeedIfMissingVersioning();
+    testBrokenFlag();
     testRefresh();
     testRefreshThrottle();
     testDefaultsAgainstFrameList(fixtures);
     testScannerHidesSystem();
+    testHideMatchesExeOrComm();
     testExecKeepsPidButNotVerdict();
     if (failures == 0) std::printf("hide-rules-test: all passed\n");
     return failures == 0 ? 0 : 1;

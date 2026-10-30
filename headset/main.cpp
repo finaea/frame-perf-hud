@@ -550,7 +550,7 @@ void storeFakeWarnings(fph::MetricStore& st, double now) {
     st.setF32(kCpuCluster0MaxMhz + 3, 2400.0, now);  // a Playtime cap on the prime cluster
     st.setF32(kCpuCluster0HwMaxMhz + 3, 3052.8, now);
     st.setText(kLastPowerOff, "Normal restart", now);  // T11: General's extra rows
-    st.setText(kCrashLogNote, "Crash log saved (12:55)", now);
+    st.setText(kCrashLogNote, "Crash log kept (12:55)", now);
     for (uint16_t base : {kNetDongleBase, kNetHomeBase}) {
         st.setEnum(base + kNetAdapterPresent, 1, now);
         st.setEnum(base + kNetAdapterConnected, 1, now);
@@ -832,14 +832,18 @@ int runDumpSettingsPng(const Options& options) {
     if (options.previewPage == "logs") {
         panel.showPage(SettingsPage::Logs);
         logs.recording = true;
-        logs.recordStatus = "Recording 3:12 to saves/2026-10-17_130509_VRChat_record.csv";
+        logs.recordLine = "Recording 3:12";
+        logs.recordPath = "saves/2026-10-17_130509_VRChat_record.csv";
+        logs.recordStatus = logs.recordLine + " to " + logs.recordPath;
+        logs.saveLine = "Saved 13:05:09 (600 s)";
+        logs.savePath = "saves/2026-10-17_130509_VRChat_save";
         logs.saveStatus = "Saved 13:05:09: saves/2026-10-17_130509_VRChat_save (600 s)";
         logs.crashRecorderOn = true;
-        logs.crashStatus = "Crash log saved (12:55)";
+        config.sessionLogs = true;  // the last session, not "Session Record is off" (only this preview's copy)
+        logs.crashStatus = "Crash log kept (12:55)";
         logs.powerOff = "Normal restart";
-        logs.lastCard = {"VRChat · 1 h 05 min", "fps avg 71.8 · 12 dropped", "Power avg 9.4 W · peak 12.1 W",
-                         "Battery 82% to 61% (-21 points)", "Peak CPU 71 °C · GPU 68 °C · battery 39 °C",
-                         "Stream latency avg 45.2 ms · min slack 3.2 ms · 2 link resets"};
+        logs.lastCard = {"Last: VRChat · 1 h 05 min", "fps avg 71.8 · 12 dropped · 9.4 W",
+                         "Battery 82% to 61% · peak CPU 71 °C"};  // slog::shortCard's form
     }
     LinkUiState link;
     if (!options.previewPc.empty()) {
@@ -1183,6 +1187,10 @@ int runOverlay(const Options& options) {
     sessions.start(config.crashRecorder, store, nowSeconds());
     scheduler.setPinnedSources(sessions.pinnedSources());
     bool crashRecorderApplied = config.crashRecorder;
+    // Session logs (off by default): the logger, and the session LINK_STATE gives the PCs
+    sessions.setSessionLogs(config.sessionLogs);
+    bridge.setSessionLogs(config.sessionLogs);
+    bool sessionLogsApplied = config.sessionLogs;
     // R2: layout profiles, in profiles/ next to the config file. Read once here; written only on a button press
     const size_t configSlash = watcher.path().find_last_of('/');  // "--config config.json" has no folder: "."
     const std::string configDir = configSlash == std::string::npos ? "." : watcher.path().substr(0, configSlash);
@@ -1372,7 +1380,7 @@ int runOverlay(const Options& options) {
                 sessions.setCrashRecorder(on);
                 scheduler.setPinnedSources(sessions.pinnedSources());
                 ok = sessions.ui().crashRecorderOn == on;
-                r.message = ok ? (on ? "Crash recorder on" : "Crash recorder off") : sessions.ui().crashStatus;
+                r.message = ok ? (on ? "Crash Record on" : "Crash Record off") : sessions.ui().crashStatus;
                 break;
             }
             default:
@@ -1441,7 +1449,8 @@ int runOverlay(const Options& options) {
         return 0;
     }
     std::fprintf(stderr, "[VR] Connected to SteamVR\n");
-    bridge.refreshSceneApp(nowSeconds());  // T03: starting mid-game opens that game's session at once
+    // T03: starting mid-game opens that game's session at once (session logs off: the SceneApp source, if wanted)
+    if (config.sessionLogs) bridge.refreshSceneApp(nowSeconds());
     linkService.start(nowSeconds());       // T06
     vr.applyConfig(config);
     if (vr.hasSettings()) {
@@ -1451,6 +1460,7 @@ int runOverlay(const Options& options) {
     }
 
     double nextPanel = nowSeconds();
+    PanelRedrawGate redrawGate;  // #20
     double nextMetricsTick = 0.0;
     double lastVerbose = 0.0;
     bool settingsDirty = true;
@@ -1469,6 +1479,19 @@ int runOverlay(const Options& options) {
     uint64_t linkUiRevision = ~0ull;  // T05: LinkUiState::revision last drawn
     uint64_t logsUiRevision = ~0ull;  // T11: LogsUiState::revision last drawn
     int scrollEventsLogged = 0;       // T05: scroll events logged since the dashboard opened
+    /**
+     * Session logs follow config.sessionLogs at once: the logger, LINK_STATE's session, and on turning on one scene-app
+     * read so the running game opens its session. Called right where the config changes (the dashboard switch, a
+     * reload), so a Save, Record or exit later in the same pass already sees the new mode. The demand and #21's
+     * consumer read config.sessionLogs directly.
+     */
+    const auto applySessionLogs = [&](double now) {
+        if (config.sessionLogs == sessionLogsApplied) return;
+        sessionLogsApplied = config.sessionLogs;
+        sessions.setSessionLogs(config.sessionLogs);
+        bridge.setSessionLogs(config.sessionLogs);
+        if (config.sessionLogs) bridge.refreshSceneApp(now);
+    };
     /** T05: ends a grab (laser released, dashboard closed, attach point changed) and saves where the HUD is. */
     const auto releaseGrab = [&](const char* why) {
         if (!grab.active()) return;
@@ -1498,6 +1521,7 @@ int runOverlay(const Options& options) {
         if (metricsTick) {
             nextMetricsTick = loopStart + kMetricsTickSec;
             if (watcher.reloadIfChanged(config)) {
+                applySessionLogs(loopStart);  // a hand edit of session_logs
                 vr.applyConfig(config);
                 loadFonts(fonts, config);
                 renderer.invalidateStatic();  // the fonts may have changed
@@ -1524,7 +1548,12 @@ int runOverlay(const Options& options) {
         // SteamVR itself quitting (VREvent_Quit) exits with 0. Close on the dashboard icon (VREvent_OverlayClosed)
         // is the user quitting, like Quit on the tab: exit code 3, so systemd doesn't restart us
         if (events.quit) break;
-        if (events.sceneAppChanged) bridge.refreshSceneApp(loopStart);  // T03
+        // T03 / #21: with session logs on, the session follows the game whoever looks, so a game change starts or
+        // switches its session at once. Off, only General's App row wants it: read if the SceneApp source is wanted
+        if (events.sceneAppChanged) {
+            if (config.sessionLogs) bridge.refreshSceneApp(loopStart);
+            else scheduler.requestRead(fph::SourceId::SceneApp);
+        }
         // R2: the keyboard opened by Rename on the Profiles page
         if (events.keyboardDone && !pendingRename.empty()) {
             std::string error;
@@ -1635,6 +1664,7 @@ int runOverlay(const Options& options) {
                         nextPanel = std::min(nextPanel, nowSeconds());  // a new layout shows on the HUD now
                     } else {
                         handleSettingsAction(action, config, watcher, vr, settings.angleStepDeg());
+                        applySessionLogs(nowSeconds());  // Session logs On / Off: before any Save or exit
                     }
                     settingsDirty = true;
                     break;
@@ -1757,7 +1787,7 @@ int runOverlay(const Options& options) {
                 activityLevel = level;
             }
             fph::DemandInputs demand;
-            demand.hudShown = config.visible;
+            demand.hudShown = hudShownDemand(config.sessionLogs, config.visible, vr.panelShown());  // #20
             demand.hmdInUse = hmdInUse(level);
             demand.editorOpen = settingsVisible;
             demand.pcLease = linkService.hasLease();  // T06
@@ -1797,6 +1827,13 @@ int runOverlay(const Options& options) {
         }
         settingsWasVisible = settingsVisible;
 
+        // #20, session logs off: the wrist panel faded in or out between metrics ticks. Follow it now, so a raised
+        // wrist reads its sources on this pass and the redraw below shows fresh values
+        if (!config.sessionLogs && scheduler.demand().hudShown != vr.panelShown()) {
+            fph::DemandInputs demand = scheduler.demand();
+            demand.hudShown = vr.panelShown();
+            scheduler.setDemand(demand);
+        }
         // ---- Sources: only the due ones, and only while someone is looking ----
         const double c0 = cpuSeconds();
         scheduler.runDue(nowSeconds());
@@ -1808,12 +1845,16 @@ int runOverlay(const Options& options) {
         bridge.expireSession(nowSeconds());
         sessions.tick(nowSeconds(), someoneLooking(scheduler.demand()), bridge.session(), store);
 
-        // ---- HUD redraw (2 Hz at most). Only while it's shown and the headset is in use: nobody sees it
-        // otherwise. The texture is converted and uploaded only when a pixel changed ----
+        // ---- HUD redraw (2 Hz at most). Only while OpenVR shows the panel (#20: not faded out on the wrist) and the
+        // headset is in use: nobody sees it otherwise. The texture is converted and uploaded only when a pixel
+        // changed ----
         double now = nowSeconds();
+        // #20: redraws follow what the panel really shows (not while the wrist fade, lost tracking or alpha 0 hides
+        // it), in both session-log modes. Shown again: fresh pixels now, not at the old deadline
+        const bool panelShown = redrawGate.update(vr.panelShown(), now, nextPanel);
         const double panelInterval = std::max(kMinPanelIntervalSec, config.updateIntervalMs / 1000.0);
         if (now >= nextPanel) {
-            if (config.visible && scheduler.demand().hmdInUse) {
+            if (panelShown && scheduler.demand().hmdInUse) {
                 const double c2 = cpuSeconds();
                 const double w2 = nowSeconds();
                 const fph::ProcessListsView lists = bridge.processListsView();
@@ -1921,7 +1962,7 @@ int runOverlay(const Options& options) {
         // ---- Sleep until the earliest deadline ----
         now = nowSeconds();
         double wakeAt = std::min(nextMetricsTick, scheduler.nextDue(now));
-        if (config.visible) wakeAt = std::min(wakeAt, nextPanel);
+        if (panelShown) wakeAt = std::min(wakeAt, nextPanel);  // #20: no redraw wakes while it's hidden
         if (settingsVisible) {
             const double pollSec =
                 now - lastPointerEvent < kSettingsActiveHoldSec ? kSettingsPollSec : kSettingsIdlePollSec;

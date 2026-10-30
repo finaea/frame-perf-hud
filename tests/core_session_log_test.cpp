@@ -831,6 +831,94 @@ void endCardLines() {
     CHECK(endCard(blank, cols).size() == 1);
 }
 
+// ---- Direct Record / Direct Save summaries: emptySummary + addToSummary ----
+
+void emptySummaryAndAddToSummary() {
+    const std::vector<LogColumn> cols = {
+        {metric::kFrameAppFps, LogKind::Gauge, 0, 150, 150, true},
+        {metric::kFrameDropped, LogKind::Count, 0, 0, 0, false},
+    };
+    const SessionInfo a = info(1, "k1", "A", 1000);
+    SessionData s = emptySummary(a, cols, "headset");
+    CHECK(s.info.id == 1 && s.source == "headset");
+    CHECK(s.stats.size() == cols.size());
+    CHECK(s.hist.size() == cols.size());
+    CHECK(s.dataSeconds == 0 && s.lastUnix == 0);
+    CHECK(s.timeline.rows() == 0);
+
+    addToSummary(s, cols, 1000, {60.0f, 1.0f});
+    CHECK(s.dataSeconds == 1 && s.lastUnix == 1000);
+    CHECK(s.stats[0].samples == 1 && near(s.stats[0].avg(), 60.0));
+    CHECK(s.stats[1].counted == 1.0);
+    CHECK(s.hist[0].total() == 1);
+
+    // NaN values are skipped (stats/hist untouched), but dataSeconds and lastUnix still move
+    addToSummary(s, cols, 1001, {kNaN, kNaN});
+    CHECK(s.dataSeconds == 2 && s.lastUnix == 1001);
+    CHECK(s.stats[0].samples == 1);
+    CHECK(s.hist[0].total() == 1);
+
+    addToSummary(s, cols, 1002, {90.0f, 0.0f});
+    CHECK(s.dataSeconds == 3 && s.lastUnix == 1002);
+    CHECK(s.stats[0].samples == 2 && near(s.stats[0].avg(), 75.0));  // (60 + 90) / 2
+    CHECK(s.hist[0].total() == 2);
+
+    CHECK(s.timeline.rows() == 0);  // addToSummary never touches the timeline
+}
+
+// ---- shortCard: the Logs tab's "last session" line, at most 3 lines ----
+
+void shortCardLines() {
+    const std::vector<LogColumn> cols = {
+        {metric::kFrameAppFps, LogKind::Gauge, 0, 150, 150, true},
+        {metric::kFrameDropped, LogKind::Count, 0, 0, 0, false},
+        {metric::kPowerVphW, LogKind::Gauge, 0, 30, 300, false},
+        {metric::kBatteryPct, LogKind::Gauge, 0, 100, 100, false},
+        {metric::kTempCpuC, LogKind::Gauge, 0, 120, 240, false},
+    };
+    SessionLog log(cols, "headset");
+    const SessionInfo a = info(1, "steam.app.1", "Game", 1000);
+    for (int i = 0; i < 100; ++i) {
+        const int64_t t = 1000 + i;
+        log.observe(a, t);
+        log.add(t, {60.0f, i < 3 ? 1.0f : 0.0f, 5.0f + (i == 50 ? 3.0f : 0.0f), 80.0f - 0.05f * static_cast<float>(i),
+                    60.0f + (i == 10 ? 10.0f : 0.0f)});
+    }
+    log.endAll();
+    auto ended = log.takeEnded();
+    CHECK(ended.size() == 1);
+    if (ended.empty()) return;
+    const std::vector<std::string> lines = shortCard(*ended[0], cols);
+    CHECK(lines.size() == 3);
+    if (lines.size() == 3) {
+        CHECK(lines[0] == "Last: Game · 1 min 39 s");
+        CHECK(lines[1] == "fps avg 60.0 · 3 dropped · 5.0 W");
+        CHECK(lines[2] == "Battery 80% to 75% · peak CPU 70 °C");
+        if (lines[2] != "Battery 80% to 75% · peak CPU 70 °C") std::printf("line2: %s\n", lines[2].c_str());
+    }
+
+    // only fps: 2 lines; dropped defaults to 0 when its own column is absent (same convention as endCard)
+    const std::vector<LogColumn> fpsOnly = {cols[0]};
+    SessionLog small(fpsOnly, "headset");
+    for (int64_t t = 1000; t < 1005; ++t) {
+        small.observe(a, t);
+        small.add(t, {60.0f});
+    }
+    small.endAll();
+    auto e2 = small.takeEnded();
+    CHECK(e2.size() == 1);
+    if (!e2.empty()) {
+        const auto l2 = shortCard(*e2[0], fpsOnly);
+        CHECK(l2.size() == 2);
+        CHECK(l2.size() == 2 && l2[1] == "fps avg 60.0 · 0 dropped");
+    }
+
+    // no samples at all: just the title
+    SessionData blank;
+    blank.info = a;
+    CHECK(shortCard(blank, cols).size() == 1);
+}
+
 // ---- sampleColumns ----
 
 void sampleColumnsFreshness() {
@@ -1369,6 +1457,8 @@ int main() {
     pruneLeavesForeignFiles();
     recordWriterFlushesOnBoundary();
     endCardLines();
+    emptySummaryAndAddToSummary();
+    shortCardLines();
     sampleColumnsFreshness();
     noAppEndsTheSessionWhereTheAppLeft();
     backFromNoAppIsOneSessionWithAGap();

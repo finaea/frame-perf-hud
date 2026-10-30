@@ -89,8 +89,8 @@ const std::vector<HideRule>& defaultHideRules() {
     return kRules;
 }
 
-std::string hideRulesToJson(const std::vector<HideRule>& rules) {
-    std::string out = "{\n  \"version\": 1,\n  \"hide\": [\n";
+std::string hideRulesToJson(const std::vector<HideRule>& rules, uint32_t version) {
+    std::string out = "{\n  \"version\": " + std::to_string(version) + ",\n  \"hide\": [\n";
     for (size_t i = 0; i < rules.size(); ++i) {
         const HideRule& r = rules[i];
         std::string line;
@@ -102,7 +102,7 @@ std::string hideRulesToJson(const std::vector<HideRule>& rules) {
     return out + "  ]\n}\n";
 }
 
-bool parseHideRules(const std::string& text, std::vector<HideRule>& out, std::string& error) {
+bool parseHideRules(const std::string& text, std::vector<HideRule>& out, std::string& error, uint32_t* version) {
     JsonValue root;
     if (!parseJson(text, root, error)) return false;
     const JsonValue* hide = root.isObject() ? root.get("hide") : nullptr;
@@ -138,7 +138,26 @@ bool parseHideRules(const std::string& text, std::vector<HideRule>& out, std::st
         rules.push_back(std::move(rule));
     }
     out = std::move(rules);
+    if (version != nullptr) {
+        const JsonValue* v = root.get("version");
+        // a file without one is from version 1 (the first to write the file)
+        *version = v != nullptr && v->isNumber() && v->number >= 1 && v->number < 1e9 ? static_cast<uint32_t>(v->number)
+                                                                                     : 1;
+    }
     return true;
+}
+
+size_t addNewBuiltIns(std::vector<HideRule>& rules, uint32_t fileVersion, const std::vector<HideRule>& builtIns) {
+    size_t added = 0;
+    for (const HideRule& b : builtIns) {
+        if (b.since <= fileVersion) continue;
+        bool present = false;
+        for (const HideRule& r : rules) present = present || (r.name == b.name && r.cgroup == b.cgroup);
+        if (present) continue;
+        rules.push_back(b);
+        ++added;
+    }
+    return added;
 }
 
 std::string cgroupV2Path(const std::string& text) {
@@ -155,11 +174,24 @@ std::string cgroupV2Path(const std::string& text) {
 HideRules::HideRules(std::string path, double checkSeconds)
     : path_(std::move(path)), checkSeconds_(checkSeconds), rules_(defaultHideRules()) {}
 
-bool HideRules::seedIfMissing(std::string& error) {
+bool HideRules::seedIfMissing(std::string& error, const std::vector<HideRule>& builtIns, uint32_t version) {
     struct stat st {};
-    if (::stat(path_.c_str(), &st) == 0) return true;
-    if (!fph::atomicWriteFile(path_, hideRulesToJson(defaultHideRules()), error)) return false;
-    std::fprintf(stderr, "[hide] Wrote the default Hide system rules to %s\n", path_.c_str());
+    if (::stat(path_.c_str(), &st) != 0) {
+        if (!fph::atomicWriteFile(path_, hideRulesToJson(builtIns, version), error)) return false;
+        std::fprintf(stderr, "[hide] Wrote the default Hide system rules to %s\n", path_.c_str());
+        return true;
+    }
+    // An older file gets the built-ins added since, once. One that doesn't parse is left for the user to fix
+    std::ifstream file(path_, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    std::vector<HideRule> rules;
+    uint32_t fileVersion = 0;
+    std::string parseError;
+    if (!file || !parseHideRules(text, rules, parseError, &fileVersion) || fileVersion >= version) return true;
+    const size_t added = addNewBuiltIns(rules, fileVersion, builtIns);
+    if (!fph::atomicWriteFile(path_, hideRulesToJson(rules, version), error)) return true;  // the old file still works
+    std::fprintf(stderr, "[hide] %s: version %u -> %u, %zu new built-in rule(s) added\n", path_.c_str(), fileVersion,
+                 version, added);
     return true;
 }
 
@@ -170,6 +202,7 @@ bool HideRules::refresh(double now) {
     if (::stat(path_.c_str(), &st) != 0) {
         if (seen_) std::fprintf(stderr, "[hide] %s is gone: keeping the rules in use\n", path_.c_str());
         seen_ = false;
+        broken_ = false;
         return false;
     }
     const int64_t mtime = static_cast<int64_t>(st.st_mtim.tv_sec) * 1000000000 + st.st_mtim.tv_nsec;
@@ -184,8 +217,10 @@ bool HideRules::refresh(double now) {
     if (!file || !parseHideRules(text, rules, error)) {
         std::fprintf(stderr, "[hide] Can't use %s (%s): keeping the last good rules\n", path_.c_str(),
                      error.empty() ? "can't read it" : error.c_str());
+        broken_ = true;
         return false;
     }
+    broken_ = false;
     if (rules.size() == rules_.size()) {
         bool same = true;
         for (size_t i = 0; i < rules.size() && same; ++i)

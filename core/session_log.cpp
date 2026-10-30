@@ -444,14 +444,29 @@ void SessionLog::add(int64_t nowUnix, const std::vector<float>& values) {
     if (current_->info.leftUnix != 0) return;  // T11: its app is gone: these seconds aren't the game's
     SessionData& s = *current_;
     if (s.dataSeconds > 0 && nowUnix <= s.lastUnix) return;  // once per second
-    for (size_t c = 0; c < columns_.size(); ++c) {
+    addToSummary(s, columns_, nowUnix, values);
+    s.timeline.add(std::max<int64_t>(0, nowUnix - s.info.startUnix), values);
+}
+
+SessionData emptySummary(const SessionInfo& info, const std::vector<LogColumn>& columns, const std::string& source) {
+    SessionData s;
+    s.info = info;
+    s.source = source;
+    s.stats.resize(columns.size());
+    for (const LogColumn& c : columns) s.hist.emplace_back(c.histMin, c.histMax, c.bins);
+    return s;
+}
+
+void addToSummary(SessionData& s, const std::vector<LogColumn>& columns, int64_t unixTime,
+                  const std::vector<float>& values) {
+    const size_t n = std::min({columns.size(), values.size(), s.stats.size(), s.hist.size()});
+    for (size_t c = 0; c < n; ++c) {
         if (!isNum(values[c])) continue;
-        s.stats[c].add(kinds_[c], values[c]);
+        s.stats[c].add(columns[c].kind, values[c]);
         s.hist[c].add(values[c]);
     }
-    s.timeline.add(std::max<int64_t>(0, nowUnix - s.info.startUnix), values);
     ++s.dataSeconds;
-    s.lastUnix = nowUnix;
+    s.lastUnix = unixTime;
 }
 
 void SessionLog::endAll() {
@@ -691,6 +706,43 @@ std::vector<std::string> endCard(const SessionData& s, const std::vector<LogColu
         }
         lines.push_back(stream);
     }
+    return lines;
+}
+
+std::vector<std::string> shortCard(const SessionData& s, const std::vector<LogColumn>& columns) {
+    std::vector<std::string> lines;
+    const auto stat = [&](uint16_t id) -> const ColumnStats* {
+        const int i = columnIndex(columns, id);
+        return i >= 0 && static_cast<size_t>(i) < s.stats.size() && s.stats[static_cast<size_t>(i)].samples > 0
+                   ? &s.stats[static_cast<size_t>(i)]
+                   : nullptr;
+    };
+    char part[96];
+    const std::string app = s.info.appName.empty() ? s.info.appKey : s.info.appName;
+    lines.push_back("Last: " + app + " · " + durationText(endUnix(s) - s.info.startUnix));
+    std::string line;
+    const auto join = [&](const char* text) { line += (line.empty() ? "" : " · ") + std::string(text); };
+    if (const ColumnStats* fps = stat(metric::kFrameAppFps)) {
+        const ColumnStats* dropped = stat(metric::kFrameDropped);
+        std::snprintf(part, sizeof(part), "fps avg %.1f · %.0f dropped", fps->avg(), dropped ? dropped->counted : 0.0);
+        join(part);
+    }
+    if (const ColumnStats* w = stat(metric::kPowerVphW)) {
+        std::snprintf(part, sizeof(part), "%.1f W", w->avg());
+        join(part);
+    }
+    if (!line.empty()) lines.push_back(line);
+    line.clear();
+    if (const ColumnStats* b = stat(metric::kBatteryPct)) {
+        std::snprintf(part, sizeof(part), "Battery %.0f%% to %.0f%%", static_cast<double>(b->first),
+                      static_cast<double>(b->last));
+        join(part);
+    }
+    if (const ColumnStats* t = stat(metric::kTempCpuC)) {
+        std::snprintf(part, sizeof(part), "peak CPU %.0f °C", static_cast<double>(t->max));
+        join(part);
+    }
+    if (!line.empty()) lines.push_back(line);
     return lines;
 }
 

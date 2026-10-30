@@ -80,6 +80,7 @@ struct WidgetText {
     const char* pctOfCore;  ///< CPU column header: % of one core
     const char* rss;        ///< RAM column header
     const char* measuring;  ///< first scan, no CPU interval yet
+    const char* hideRulesBroken;  ///< Hide system on, hide_rules.json doesn't parse
     // Network
     const char* notConnected;
     const char* link;  ///< PHY rate, followed by tx/rx

@@ -160,12 +160,16 @@ double fitSize(const Pen& pen, const std::string& text, double size, double minS
     return size;
 }
 
+void popUtf8Char(std::string& text) {
+    while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0x80) text.pop_back();
+    if (!text.empty()) text.pop_back();  // the character's lead byte
+}
+
 std::string ellipsize(const Pen& pen, const std::string& text, double size, double maxWidth, bool bold) {
     if (pen.measure(text, size, bold) <= maxWidth) return text;
     std::string cut = text;
     while (!cut.empty()) {
-        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) cut.pop_back();
-        if (!cut.empty()) cut.pop_back();  // the character's lead byte
+        popUtf8Char(cut);
         if (pen.measure(cut + "...", size, bold) <= maxWidth) return cut + "...";
     }
     return "...";

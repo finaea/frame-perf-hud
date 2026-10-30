@@ -89,6 +89,8 @@ enum class SettingsAction {
     SaveNow,           ///< save the last 10 minutes + this session's summary (the caller does it)
     CrashRecorderOn,   ///< config.crashRecorder (saved)
     CrashRecorderOff,
+    SessionLogsOn,     ///< config.sessionLogs (saved)
+    SessionLogsOff,
     // R2: the Profiles page. The caller does them on selectedProfileId(); Use / Reset with unsaved changes and Delete
     // only come back on the second tap
     PageProfiles,     ///< show the Profiles page (handled inside the panel)
@@ -361,7 +363,7 @@ private:
      * @param usable 押せるか（押せないときは枠なし・薄い文字）
      */
     void drawSegmented(const Pen& pen, const UiText& text, std::initializer_list<SettingsAction> actions, int selected,
-                       bool usable) const;
+                       bool usable, double size = 24) const;
 
     /**
      * 1 つのボタン（位置・微調整・− / ＋・既定に戻す）を描く。
@@ -397,7 +399,7 @@ private:
      */
     void drawPairingBanner(const Pen& pen, const UiText& text, const LinkUiState::Pending& pc, double left, double right);
 
-    /** T11: the Logs page's three cards (Save and Record, Crash recorder, Last session). */
+    /** The Logs page: what the logs are on the left, the 4 ways to log (2×2 cards) on the right. */
     void drawLogsPage(const Pen& pen, const UiText& text, const Config& config, const LogsUiState& logs) const;
 
     /** R2: the Profiles page: the list (left) and the selected profile's actions (right). Places its buttons. */

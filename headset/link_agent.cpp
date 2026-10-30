@@ -69,8 +69,9 @@ std::vector<fph::link::LocalAddress> AgentLinkEnv::localAddresses() {
 }
 
 fph::link::LinkState AgentLinkEnv::linkState() {
-    const fph::SessionInfo& s = bridge_.session();
     fph::link::LinkState state;
+    if (!bridge_.sessionLogs()) return state;  // session logs off: no session for the PC's copy either
+    const fph::SessionInfo& s = bridge_.session();
     state.sessionId = s.id;
     state.sessionStartUnix = s.startUnix;
     // T11: LINK_STATE has no room for leftUnix (values follow it), so a session whose app is gone goes with an empty

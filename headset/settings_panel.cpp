@@ -65,13 +65,26 @@ constexpr double kEditorCardW = 1000;
 constexpr double kPaletteCardX = kPad + kEditorCardW + kCardGap;
 constexpr double kPageSwitchW = 560;  // T11, R2: four pages
 constexpr double kForgetW = 260;
-// T11: the Logs page: Save and Record | Crash recorder | Last session
-constexpr double kLogCard1W = 500;
-constexpr double kLogCard2X = kPad + kLogCard1W + kCardGap;
-constexpr double kLogCard2W = 470;
-constexpr double kLogCard3X = kLogCard2X + kLogCard2W + kCardGap;
-constexpr double kLogCard3W = kWidth - kPad - kLogCard3X;
-constexpr double kLogLabelW = 150;  // row label left of the On / Off switch
+// The Logs page: the explanation on the left (no card), then a 2×2 grid of cards, one per way to log:
+// Session Record | Direct Record / Direct Save | Crash Record. Each card: name + control, description, status
+constexpr double kLogLeftW = 410;
+constexpr double kLogGridX = kPad + kLogLeftW + kCardGap + 2;  // 464
+constexpr double kLogCardW = (kWidth - kPad - kLogGridX - kCardGap) / 2;
+constexpr double kLogCardH = (kCardH - kCardGap) / 2;
+constexpr double kLogCtlW = 230;  // the On / Off pill or Save now, top right in its card
+constexpr double kLogCtlH = 52;
+constexpr double kLogCtlTop = 16;  // from the card's top
+
+/** @return the top-left corner of Logs card i (0 Session Record, 1 Direct Record, 2 Direct Save, 3 Crash Record) */
+constexpr double logCardX(int i) {
+    return kLogGridX + (i % 2) * (kLogCardW + kCardGap);
+}
+constexpr double logCardY(int i) {
+    return kCardY + (i / 2) * (kLogCardH + kCardGap);
+}
+constexpr double logCtlX(int i) {
+    return logCardX(i) + kLogCardW - kCardPad - kLogCtlW;
+}
 // R2: the Profiles page: the list (left), the selected profile's actions (right)
 constexpr double kProfListW = 640;
 constexpr double kProfRowH = 44;
@@ -298,7 +311,7 @@ bool sameDisplaySettings(const Config& a, const Config& b) {
            a.wristFade == b.wristFade && a.wristFadeEndDeg == b.wristFadeEndDeg && a.clockFormat == b.clockFormat &&
            a.widthM == b.widthM && a.alpha == b.alpha && a.detachedPose == b.detachedPose &&
            a.detachedCurveDeg == b.detachedCurveDeg &&  // R3
-           a.crashRecorder == b.crashRecorder;  // T11
+           a.crashRecorder == b.crashRecorder && a.sessionLogs == b.sessionLogs;  // T11
 }
 
 /** T11: splits text into lines no wider than maxW (greedy, at spaces). */
@@ -529,6 +542,8 @@ bool applySettingsAction(SettingsAction action, Config& config, double angleStep
         case SettingsAction::None: break;
         case SettingsAction::CrashRecorderOn: config.crashRecorder = true; break;
         case SettingsAction::CrashRecorderOff: config.crashRecorder = false; break;
+        case SettingsAction::SessionLogsOn: config.sessionLogs = true; break;
+        case SettingsAction::SessionLogsOff: config.sessionLogs = false; break;
     }
     return !sameDisplaySettings(config, before);
 }
@@ -574,12 +589,15 @@ void SettingsPanel::layoutButtons() {
     // T05: the Layout page's cards are the editor's; only the header and the footer have buttons here
     if (mode_ == ButtonMode::Layout) return;
     if (mode_ == ButtonMode::Profiles) return;  // R2: its rows and buttons are placed as they're drawn
-    if (mode_ == ButtonMode::Logs) {  // T11
-        const double inner1 = kPad + kCardPad;
-        segmented(inner1 + kLogLabelW, rowY(0), kSegmentW, {SettingsAction::RecordOn, SettingsAction::RecordOff});
-        add(SettingsAction::SaveNow, inner1, rowY(2), kLogCard1W - 2 * kCardPad, kButtonH);  // row 1: Record's hint
-        segmented(kLogCard2X + kCardPad + kLogLabelW, rowY(0), kSegmentW,
-                  {SettingsAction::CrashRecorderOn, SettingsAction::CrashRecorderOff});
+    if (mode_ == ButtonMode::Logs) {  // the four cards' controls, top right in each
+        const auto pill = [&](int card, SettingsAction on, SettingsAction off) {
+            add(on, logCtlX(card), logCardY(card) + kLogCtlTop, kLogCtlW / 2, kLogCtlH);
+            add(off, logCtlX(card) + kLogCtlW / 2, logCardY(card) + kLogCtlTop, kLogCtlW / 2, kLogCtlH);
+        };
+        pill(0, SettingsAction::SessionLogsOn, SettingsAction::SessionLogsOff);
+        pill(1, SettingsAction::RecordOn, SettingsAction::RecordOff);
+        add(SettingsAction::SaveNow, logCtlX(2), logCardY(2) + kLogCtlTop, kLogCtlW, kLogCtlH);
+        pill(3, SettingsAction::CrashRecorderOn, SettingsAction::CrashRecorderOff);
         return;
     }
     const bool wristLayout = mode_ == ButtonMode::Wrist;
@@ -718,9 +736,11 @@ std::string SettingsPanel::labelOf(SettingsAction action, const UiText& text) co
         case SettingsAction::PcForgetAll: return "";  // drawn with its count in drawFooter
         case SettingsAction::PageLogs: return text.pageLogs;  // T11
         case SettingsAction::RecordOn:
-        case SettingsAction::CrashRecorderOn: return text.on;
+        case SettingsAction::CrashRecorderOn:
+        case SettingsAction::SessionLogsOn: return text.on;
         case SettingsAction::RecordOff:
-        case SettingsAction::CrashRecorderOff: return text.off;
+        case SettingsAction::CrashRecorderOff:
+        case SettingsAction::SessionLogsOff: return text.off;
         case SettingsAction::SaveNow: return text.saveNow;
         case SettingsAction::PageProfiles: return text.pageProfiles;  // R2
         case SettingsAction::ProfileNew: return text.profileNew;
@@ -896,7 +916,7 @@ void SettingsPanel::placeFooterButton(SettingsAction action, double x, double y,
 }
 
 void SettingsPanel::drawSegmented(const Pen& pen, const UiText& text, std::initializer_list<SettingsAction> actions,
-                                  int selected, bool usable) const {
+                                  int selected, bool usable, double size) const {
     std::vector<const Button*> parts;
     for (const SettingsAction action : actions) {
         const Button* b = findButton(action);
@@ -909,7 +929,7 @@ void SettingsPanel::drawSegmented(const Pen& pen, const UiText& text, std::initi
     for (const Button* b : parts) pill.push_back({labelOf(b->action, text), pressed_ == b->action, hover_ == b->action});
     const double x = parts.front()->x;
     drawSegmentedPill(pen, x, parts.front()->y, parts.back()->x + parts.back()->w - x, parts.front()->h, pill, selected,
-                      usable);
+                      usable, size);
 }
 
 void SettingsPanel::drawButton(const Pen& pen, const UiText& text, SettingsAction action, bool selected,
@@ -1525,69 +1545,157 @@ void SettingsPanel::drawProfilesPage(const Pen& pen, const UiText& text, const P
     pen.text(x, kCardY + kCardH - kCardPad, text.profileHint, fitSize(pen, text.profileHint, 16, 11, w, false), kTextMuted);
 }
 
-void SettingsPanel::drawLogsPage(const Pen& pen, const UiText& text, const Config& /*config*/,
+void SettingsPanel::drawLogsPage(const Pen& pen, const UiText& text, const Config& config,
                                  const LogsUiState& logs) const {
-    double bottom = kCardY + kCardH - kCardPad;  // the last card lowers it for the folder hint
-    /** Wrapped lines from baseline y down, never past the card's bottom. @return the next line's baseline */
-    const auto paragraph = [&](double x, double y, double w, const std::string& body, double size, Color c, bool bold) {
-        for (const std::string& line : wrapText(pen, body, size, w, bold)) {
-            if (y > bottom) break;
-            pen.text(x, y, line, fitSize(pen, line, size, size * 0.7, w, bold), c, bold);
-            y += size * 1.35;
+    // ---- Left: what the logs are and where they go (no card). Shrinks as a whole until it fits the cards' height ----
+    {
+        const double x = kPad, w = kLogLeftW, top = kCardY + 30, bottom = kCardY + kCardH - 4;
+        struct Folder {
+            const char* dir;
+            const char* what;
+        };
+        const Folder folders[] = {{text.logsSessionsDir, text.logsSessionsWhat},
+                                  {text.logsSavesDir, text.logsSavesWhat},
+                                  {text.logsCrashesDir, text.logsCrashesWhat}};
+        const std::vector<const char*> intro = {text.logsIntro, text.logsSummary, text.logsTimeline};
+        double size = 18;
+        // lines at this size: the title, the intro paragraphs, a gap, "saved in" + the folder, 3 folders, a gap, the end
+        const auto height = [&](double sz) {
+            const double line = sz * 1.4;
+            double lines = 0;
+            for (const char* t : intro) lines += static_cast<double>(wrapText(pen, t, sz, w - 16, false).size());
+            lines += static_cast<double>(wrapText(pen, text.logsWhere, sz, w, false).size()) + 1 + 3;
+            lines += static_cast<double>(wrapText(pen, text.logsFourWays, sz, w, false).size());
+            return 26 * 1.6 + lines * line + 2 * line * 0.6;
+        };
+        while (size > 12 && top + height(size) > bottom) size -= 0.5;
+        const double line = size * 1.4;
+        pen.text(x, top, text.logsTitle, 26, kText, true);
+        double y = top + 26 * 1.6;
+        const auto para = [&](const char* body, double indent, Color c) {
+            for (const std::string& l : wrapText(pen, body, size, w - indent, false)) {
+                pen.text(x + indent, y, l, size, c);
+                y += line;
+            }
+        };
+        para(text.logsIntro, 0, kTextMuted);
+        para(text.logsSummary, 16, kTextMuted);
+        para(text.logsTimeline, 16, kTextMuted);
+        y += line * 0.6;
+        para(text.logsWhere, 0, kTextMuted);
+        pen.text(x, y, text.logsDir, fitSize(pen, text.logsDir, size, size * 0.7, w, false), kText);
+        y += line;
+        const double dirW = std::max({pen.measure(folders[0].dir, size, false), pen.measure(folders[1].dir, size, false),
+                                      pen.measure(folders[2].dir, size, false)}) + 12;
+        for (const Folder& f : folders) {
+            pen.text(x + 16, y, f.dir, size, kText);
+            const double wx = x + 16 + dirW;
+            pen.text(wx, y, f.what, fitSize(pen, f.what, size, size * 0.7, x + w - wx, false), kTextMuted);
+            y += line;
         }
-        return y;
+        y += line * 0.6;
+        para(text.logsFourWays, 0, kTextMuted);
+    }
+
+    // ---- Right: the four cards. Each status line is (text, colour, bold); paths are cut with "…" rather than wrapped
+    struct Line {
+        std::string text;
+        Color color;
+        bool bold;
+        bool path;
+        bool dot = false;  ///< a filled dot before it (Direct Record's "● Recording": the font has no ●)
     };
-    const double labelSize = 22;
-    // Record and Save, each with its hint underneath, then their status lines (red edge while recording)
-    {
-        const double x = kPad + kCardPad;
-        const double w = kLogCard1W - 2 * kCardPad;
-        drawCard(pen, kPad, kCardY, kLogCard1W, kCardH, 20, kCard, logs.recording ? kDanger : kCard, logs.recording ? 2 : 0);
-        pen.text(x, kCardY + 42, text.cardRecord, 24, kText, true);
-        pen.text(x, centerBaseline(rowY(0), kButtonH, labelSize), text.rowRecord, labelSize, kTextMuted);
-        drawSegmented(pen, text, {SettingsAction::RecordOn, SettingsAction::RecordOff}, logs.recording ? 0 : 1, true);
-        paragraph(x, rowY(0) + kButtonH + 26, w, text.recordHint, 16, kTextMuted, false);
-        drawButton(pen, text, SettingsAction::SaveNow, false, 24);
-        double y = paragraph(x, rowY(2) + kButtonH + 26, w, text.saveHint, 16, kTextMuted, false) + 10;
-        if (!logs.recordStatus.empty()) {
-            y = paragraph(x, y, w, logs.recordStatus, 18, logs.recording ? kDanger : kText, logs.recording);
+    const auto card = [&](int i, const char* name, const char* hint, const std::vector<Line>& status, bool outline) {
+        const double cx = logCardX(i), cy = logCardY(i);
+        drawCard(pen, cx, cy, kLogCardW, kLogCardH, 20, kCard, outline ? kDanger : kCard, outline ? 2 : 0);
+        const double x = cx + kCardPad, w = kLogCardW - 2 * kCardPad;
+        const double nameW = logCtlX(i) - 12 - x;
+        const double nameSize = fitSize(pen, name, 24, 16, nameW, true);
+        pen.text(x, centerBaseline(cy + kLogCtlTop, kLogCtlH, nameSize), name, nameSize, kText, true);
+        // The description, then the status, shrunk together until they fit under the control
+        const double top = cy + kLogCtlTop + kLogCtlH + 10, bottom = cy + kLogCardH - 14;
+        double hs = 17, ss = 18;
+        const auto lines = [&](const char* body, double sz) { return wrapText(pen, body, sz, w, false).size(); };
+        const auto statusLines = [&](double sz) {
+            size_t n = 0;
+            for (const Line& l : status) n += l.path ? 1 : wrapText(pen, l.text, sz, w, l.bold).size();
+            return static_cast<double>(n);
+        };
+        const auto fits = [&] {
+            return top + hs * 0.9 + static_cast<double>(lines(hint, hs)) * hs * 1.35 + 6 +
+                       statusLines(ss) * ss * 1.35 - ss * 0.35 <= bottom;
+        };
+        while ((hs > 12 || ss > 12) && !fits()) {
+            if (ss > hs) ss -= 0.5;
+            else hs -= 0.5;
         }
-        if (!logs.saveStatus.empty()) paragraph(x, y, w, logs.saveStatus, 18, kText, false);
-    }
-    // Crash recorder and the last power-off
-    {
-        const double x = kLogCard2X + kCardPad;
-        const double w = kLogCard2W - 2 * kCardPad;
-        drawCard(pen, kLogCard2X, kCardY, kLogCard2W, kCardH, 20, kCard, kCard, 0);
-        pen.text(x, kCardY + 42, text.cardCrash, 24, kText, true);
-        pen.text(x, centerBaseline(rowY(0), kButtonH, labelSize), text.rowCrashRecorder, labelSize, kTextMuted);
-        drawSegmented(pen, text, {SettingsAction::CrashRecorderOn, SettingsAction::CrashRecorderOff},
-                      logs.crashRecorderOn ? 0 : 1, true);
-        double y = rowY(1) + 26;
-        y = paragraph(x, y, w, text.crashHint, 17, kTextMuted, false);
-        if (!logs.crashStatus.empty()) y = paragraph(x, y + 8, w, logs.crashStatus, 19, kWarn, true);
-        y += 14;
-        pen.text(x, y, text.rowPowerOff, 18, kTextMuted);
-        paragraph(x, y + 28, w, logs.powerOff.empty() ? "unknown" : logs.powerOff, 20, kText, true);
-    }
-    // The last session's end card
-    {
-        const double x = kLogCard3X + kCardPad;
-        const double w = kLogCard3W - 2 * kCardPad;
-        drawCard(pen, kLogCard3X, kCardY, kLogCard3W, kCardH, 20, kCard, kCard, 0);
-        pen.text(x, kCardY + 42, text.cardLastSession, 24, kText, true);
-        bottom -= 24;  // the last line is the folder hint
-        double y = kCardY + 90;
-        if (logs.lastCard.empty()) {
-            paragraph(x, y, w, text.noSessionYet, 18, kTextMuted, false);
-        } else {
-            for (size_t i = 0; i < logs.lastCard.size(); ++i) {
-                y = paragraph(x, y, w, logs.lastCard[i], i == 0 ? 22 : 19, kText, i == 0) + 4;
+        double y = top + hs * 0.9;
+        for (const std::string& l : wrapText(pen, hint, hs, w, false)) {
+            pen.text(x, y, l, hs, kTextMuted);
+            y += hs * 1.35;
+        }
+        y += 6 - hs * 1.35 + ss * 1.35;
+        for (const Line& l : status) {
+            if (l.path) {
+                const double ps = ss * 0.9;
+                pen.text(x, y, pen.measure(l.text, ps, false) <= w ? l.text : withEllipsis(pen, l.text, ps, w, false), ps,
+                         l.color, false);
+                y += ss * 1.35;
+                continue;
+            }
+            double lx = x;
+            if (l.dot) {
+                pen.color(l.color);
+                cairo_arc(pen.cr, x + ss * 0.3, y - ss * 0.35, ss * 0.3, 0, 2 * M_PI);
+                cairo_fill(pen.cr);
+                lx += ss * 0.85;
+            }
+            for (const std::string& part : wrapText(pen, l.text, ss, x + w - lx, l.bold)) {
+                pen.text(lx, y, part, ss, l.color, l.bold);
+                y += ss * 1.35;
             }
         }
-        pen.text(x, kCardY + kCardH - kCardPad, text.logsFolder, fitSize(pen, text.logsFolder, 15, 11, w, false),
-                 kTextMuted);
+    };
+    const double ctlText = 21;
+
+    // Session Record: the last session (3 lines), or why there's none
+    std::vector<Line> session;
+    if (!config.sessionLogs) {
+        session.push_back({text.sessionRecordOff, kTextMuted, false, false});
+    } else if (logs.lastCard.empty()) {
+        session.push_back({text.noSessionYet, kTextMuted, false, false});
+    } else {
+        for (size_t k = 0; k < logs.lastCard.size() && k < 3; ++k) session.push_back({logs.lastCard[k], kText, k == 0, false});
     }
+    card(0, text.cardSessionRecord, text.sessionRecordHint, session, false);
+    drawSegmented(pen, text, {SettingsAction::SessionLogsOn, SettingsAction::SessionLogsOff}, config.sessionLogs ? 0 : 1,
+                  true, ctlText);
+
+    // Direct Record: "● Recording m:ss" in red and the file (the card outlined in red meanwhile)
+    std::vector<Line> record;
+    if (!logs.recordLine.empty()) {
+        record.push_back({logs.recordLine, logs.recording ? kDanger : kText, logs.recording, false, logs.recording});
+    }
+    if (!logs.recordPath.empty()) record.push_back({logs.recordPath, kTextMuted, false, true});
+    card(1, text.cardDirectRecord, text.directRecordHint, record, logs.recording);
+    drawSegmented(pen, text, {SettingsAction::RecordOn, SettingsAction::RecordOff}, logs.recording ? 0 : 1, true,
+                  ctlText);
+
+    // Direct Save: when, how many seconds, and the files
+    std::vector<Line> save;
+    if (!logs.saveLine.empty()) save.push_back({logs.saveLine, kText, false, false});
+    if (!logs.savePath.empty()) save.push_back({logs.savePath, kTextMuted, false, true});
+    card(2, text.cardDirectSave, text.directSaveHint, save, false);
+    drawButton(pen, text, SettingsAction::SaveNow, false, ctlText);
+
+    // Crash Record: a crash log kept at start (amber), and the last power-off
+    std::vector<Line> crash;
+    if (!logs.crashStatus.empty()) crash.push_back({logs.crashStatus, kWarn, true, false});
+    crash.push_back({std::string(text.rowPowerOff) + (logs.powerOff.empty() ? "unknown" : logs.powerOff), kText, false,
+                     false});
+    card(3, text.cardCrashRecord, text.crashRecordHint, crash, false);
+    drawSegmented(pen, text, {SettingsAction::CrashRecorderOn, SettingsAction::CrashRecorderOff},
+                  logs.crashRecorderOn ? 0 : 1, true, ctlText);
 }
 
 void SettingsPanel::drawPairingBanner(const Pen& pen, const UiText& text, const LinkUiState::Pending& pc, double left,

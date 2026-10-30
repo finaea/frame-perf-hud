@@ -5,6 +5,7 @@
 #include "draw.h"
 #include "paths.h"
 #include "placement.h"
+#include "scheduler.h"
 #include "settings_panel.h"
 #include "theme.h"
 
@@ -390,6 +391,86 @@ void placementRecovery() {
     NEAR(backend.alpha, 0.9);
 }
 
+/** #20: the redraw gate pulls the deadline to now exactly when a faded-out panel comes back shown. */
+void panelRedrawGate() {
+    // alpha 0 (wrist faded): not shown; update leaves nextPanel alone and says so
+    {
+        PanelPresentationState state;
+        PanelRedrawGate gate;
+        double nextPanel = 10.0;
+        CHECK(!state.apply(0.0, [](double) { return true; }, [](bool) { return true; }));
+        CHECK(!state.shown());
+        CHECK(!gate.update(state.shown(), 5.0, nextPanel));
+        NEAR(nextPanel, 10.0);
+
+        // alpha 0.5: shown now; update pulls a future nextPanel to now
+        CHECK(!state.apply(0.5, [](double) { return true; }, [](bool) { return true; }));
+        CHECK(state.shown());
+        CHECK(gate.update(state.shown(), 6.0, nextPanel));
+        NEAR(nextPanel, 6.0);
+
+        // a second update while still shown doesn't pull again
+        nextPanel = 20.0;
+        CHECK(gate.update(state.shown(), 7.0, nextPanel));
+        NEAR(nextPanel, 20.0);
+    }
+
+    // a nextPanel already in the past, right when the panel comes back shown, stays
+    {
+        PanelRedrawGate gate;
+        double nextPanel = 2.0;
+        CHECK(!gate.update(false, 1.0, nextPanel));
+        CHECK(gate.update(true, 5.0, nextPanel));
+        NEAR(nextPanel, 2.0);
+    }
+
+    // a refused ShowOverlay: setVisible() declined, so the panel isn't shown and nothing is pulled
+    {
+        PanelPresentationState refused;
+        PanelRedrawGate gate;
+        double nextPanel = 50.0;
+        CHECK(refused.apply(0.9, [](double) { return true; }, [](bool) { return false; }));
+        CHECK(!refused.shown());
+        CHECK(!gate.update(refused.shown(), 9.0, nextPanel));
+        NEAR(nextPanel, 50.0);
+    }
+}
+
+/** #20: hudShownDemand (the demand's "HUD shown" input) and its effect on the scheduler's reads. */
+void hudShownDemandCases() {
+    // off: follows panelShown, whatever configVisible says
+    CHECK(!hudShownDemand(false, true, false));
+    CHECK(hudShownDemand(false, false, true));
+    // on: follows configVisible, whatever panelShown says
+    CHECK(hudShownDemand(true, true, false));
+    CHECK(!hudShownDemand(true, false, true));
+
+    // wired into the scheduler: the wrist is hidden (panelShown false), configVisible true throughout
+    fph::Scheduler sched;
+    int reads = 0;
+    sched.addSource(fph::SourceId::CpuLoad, [&](double, bool) { ++reads; });
+    sched.setEnabledWidgets({fph::WidgetType::Cpu});
+    fph::DemandInputs demand;
+    demand.hmdInUse = true;
+    const bool configVisible = true, panelShown = false;
+
+    demand.hudShown = hudShownDemand(false, configVisible, panelShown);  // logs off: hidden -> not shown
+    sched.setDemand(demand);
+    sched.runDue(0.0);
+    CHECK(reads == 0);  // nobody looking: the panel is hidden and logs are off
+
+    demand.hudShown = hudShownDemand(true, configVisible, panelShown);  // logs on: follows configVisible (true)
+    sched.setDemand(demand);
+    sched.runDue(0.0);
+    CHECK(reads == 1);  // reads continue even though the panel itself is still hidden
+
+    demand.hudShown = hudShownDemand(false, configVisible, panelShown);  // toggled back off: stops again
+    sched.setDemand(demand);
+    const int frozen = reads;
+    sched.runDue(1.0);
+    CHECK(reads == frozen);
+}
+
 /** 時計の文字列。 */
 void clockCases() {
     std::tm t {};
@@ -767,6 +848,8 @@ int main() {
         panelAxisNudges();
         pollScheduling();
         placementRecovery();
+        panelRedrawGate();
+        hudShownDemandCases();
         clockCases();
         configuration(std::string(directory) + "/config.json");
         // T04: upstream's fixed panel (and its 460 / 434 heights) is gone; the grid has its own test

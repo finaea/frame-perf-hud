@@ -1,6 +1,8 @@
 // R2: the "Hide system" rules for the CPU / RAM usage-items widgets, kept in a file Jack can edit
 // (~/.config/frame-perf-hud/hide_rules.json). The HUD writes the built-in list there once, at start, if the file is
-// missing; from then on the file is the source of truth and is re-read when its mtime changes.
+// missing; from then on the file is the source of truth and is re-read when its mtime changes. Each built-in rule
+// records the version it came in: a file with an older "version" gets only the newer built-ins it lacks, once, at start
+// (rules the user deleted from an older version don't come back, edits stay).
 //
 //   { "version": 1, "hide": [ {"name": "vrserver", "note": "SteamVR server"}, {"cgroup": "/system.slice/*"} ] }
 //
@@ -19,7 +21,11 @@ struct HideRule {
     std::string name;    ///< glob on comm or the exe basename
     std::string cgroup;  ///< glob on the cgroup v2 path
     std::string note;    ///< free text, ignored
+    uint32_t since = 1;  ///< built-ins: the rules-file version that added it (not written to the file)
 };
+
+/** The built-in list's version: the highest HideRule::since in defaultHideRules(). */
+constexpr uint32_t kHideRulesVersion = 1;
 
 /**
  * @param pattern a glob: '*' matches any run of characters ('/' included), '?' one character, the rest itself
@@ -40,16 +46,27 @@ bool hideRuleMatches(const HideRule& rule, const std::string& comm, const std::s
 /** @return the list written on first run (SteamOS, Steam and SteamVR as seen on Jack's Frame, 2026-10-17) */
 const std::vector<HideRule>& defaultHideRules();
 
-/** @return the file's text for these rules (version 1, one rule per line) */
-std::string hideRulesToJson(const std::vector<HideRule>& rules);
+/** @return the file's text for these rules (one rule per line) */
+std::string hideRulesToJson(const std::vector<HideRule>& rules, uint32_t version = kHideRulesVersion);
 
 /**
  * Reads a rules file's text.
  * @param out the rules (unchanged on failure)
  * @param error why it failed
+ * @param version the file's "version" (1 when it has none; unchanged on failure)
  * @return false if it isn't { "hide": [ {...}, ... ] } with every rule an object of strings naming name or cgroup
  */
-bool parseHideRules(const std::string& text, std::vector<HideRule>& out, std::string& error);
+bool parseHideRules(const std::string& text, std::vector<HideRule>& out, std::string& error,
+                    uint32_t* version = nullptr);
+
+/**
+ * Appends the built-ins added after fileVersion that the rules don't already have (same name and cgroup).
+ * @param rules the file's rules, in their order; new ones go at the end
+ * @param fileVersion the file's "version"
+ * @param builtIns defaultHideRules() (tests pass their own)
+ * @return how many were added
+ */
+size_t addNewBuiltIns(std::vector<HideRule>& rules, uint32_t fileVersion, const std::vector<HideRule>& builtIns);
 
 /**
  * @param text /proc/<pid>/cgroup's contents
@@ -67,12 +84,16 @@ public:
     explicit HideRules(std::string path, double checkSeconds = 5.0);
 
     /**
-     * Writes the built-in list to the file if there's no file there (an existing file, even a broken one, is never
-     * touched). Call once at start.
+     * Writes the built-in list to the file if there's no file there. A file with an older "version" gets the newer
+     * built-ins it lacks (addNewBuiltIns) and the current version, saved atomically. A broken file is never touched.
+     * Call once at start.
      * @param error why the write failed
+     * @param builtIns the built-in list (tests pass their own)
+     * @param version its version
      * @return true if the file exists afterwards
      */
-    bool seedIfMissing(std::string& error);
+    bool seedIfMissing(std::string& error, const std::vector<HideRule>& builtIns = defaultHideRules(),
+                       uint32_t version = kHideRulesVersion);
 
     /**
      * Re-reads the file if its mtime or size changed since the last look (a stat at most every checkSeconds).
@@ -86,6 +107,8 @@ public:
     bool hides(const std::string& comm, const std::string& exe, const std::string& cgroup) const;
 
     const std::vector<HideRule>& rules() const { return rules_; }
+    /** @return true while the file fails to parse (the last good rules are in use): the list cards say so */
+    bool broken() const { return broken_; }
     /** @return bumped every time the rules in use change (cached verdicts compare against it) */
     uint64_t generation() const { return generation_; }
     const std::string& path() const { return path_; }
@@ -99,4 +122,5 @@ private:
     int64_t size_ = -1;
     std::vector<HideRule> rules_;
     uint64_t generation_ = 1;
+    bool broken_ = false;
 };

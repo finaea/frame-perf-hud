@@ -138,7 +138,7 @@ std::string CrashRecorder::recover(std::string& log) {
         std::string error;
         if (fph::atomicWriteFile(path, kitCsv(records), error)) {
             fph::slog::pruneByCount(crashesDir(), fph::slog::kKeepCrashLogs);
-            note = "Crash log saved (" + fph::slog::clockTime(lastUnix).substr(0, 5) + ")";
+            note = "Crash log kept (" + fph::slog::clockTime(lastUnix).substr(0, 5) + ")";
             log = "the last run didn't end cleanly: its crash ring went to " + path;
         } else {
             log = "the last run didn't end cleanly, but its crash ring couldn't be kept: " + error;

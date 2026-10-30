@@ -370,6 +370,47 @@ void testPinRecomputeAndUnusedSource() {
     CHECK(r.sched.refCount(S::CpuLoad) == 0);
 }
 
+// requestRead: pulls a wanted source's deadline to now; does nothing to one that isn't wanted; invalid ids are
+// ignored; a pinned source (nobody looking) is still wanted.
+void testRequestRead() {
+    Rig r;
+    r.look();
+    r.sched.setEnabledWidgets({W::Cpu});  // CpuLoad wanted, 500 ms interval
+    r.sched.runDue(0.0);
+    CHECK(r.c.cpu == 1);
+    r.sched.requestRead(S::CpuLoad);
+    r.sched.runDue(0.1);  // well before the 0.5 s deadline
+    CHECK(r.c.cpu == 2);
+
+    // not wanted: the widget is off
+    r.sched.setEnabledWidgets({});
+    CHECK(r.sched.refCount(S::CpuLoad) == 0);
+    r.sched.requestRead(S::CpuLoad);
+    r.sched.runDue(0.2);
+    CHECK(r.c.cpu == 2);
+
+    // not wanted: nobody looking
+    r.sched.setEnabledWidgets({W::Cpu});
+    r.sched.setDemand(DemandInputs {});
+    CHECK(r.sched.refCount(S::CpuLoad) == 0);
+    r.sched.requestRead(S::CpuLoad);
+    r.sched.runDue(0.3);
+    CHECK(r.c.cpu == 2);
+
+    // invalid ids are ignored (no crash)
+    r.sched.requestRead(S::None);
+    r.sched.requestRead(S::Count);
+
+    // a pinned source is wanted even with nobody looking
+    Rig r2;
+    r2.sched.setPinnedSources({S::CpuLoad});
+    r2.sched.runDue(0.0);
+    CHECK(r2.c.cpu == 1);
+    r2.sched.requestRead(S::CpuLoad);
+    r2.sched.runDue(0.05);
+    CHECK(r2.c.cpu == 2);
+}
+
 }  // namespace
 
 // quickRefill: one extra read 0.25 s after a resumed one, then back on the resumed read's own grid (it doesn't drift
@@ -438,6 +479,7 @@ int main() {
     testUnpinStopsReading();
     testPinDoesNotMakeAnyoneLooking();
     testPinRecomputeAndUnusedSource();
+    testRequestRead();
     if (failures) std::printf("%d check(s) failed\n", failures);
     return failures ? 1 : 0;
 }

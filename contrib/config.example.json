@@ -2,6 +2,7 @@
   "visible": true,
   "update_check": true,
   "crash_recorder": false,
+  "session_logs": false,
   "active_profile": "",
   "language": "en",
   "attachment": "head",

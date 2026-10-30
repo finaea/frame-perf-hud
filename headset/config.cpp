@@ -222,12 +222,13 @@ bool loadConfig(const std::string& path, Config& out, std::vector<std::string>& 
                     {"visible", "update_check", "language", "attachment", "position", "rotation", "left_wrist",
                      "right_wrist", "wrist_fade", "wrist_fade_end_deg", "clock_format", "width_m", "alpha",
                      "update_interval_ms", "graph_seconds", "font", "font_bold", "thresholds", "layout",
-                     "detached_pose", "link", "crash_recorder", "active_profile", "detached_curve_deg",
-                     "detached_curve"},  // T05, T06, T11, R2, R3 (R2's detached_curve: ignored, gone on the next save)
+                     "detached_pose", "link", "crash_recorder", "session_logs", "active_profile",
+                     "detached_curve_deg", "detached_curve"},  // T05, T06, T11, R2, R3 (R2's detached_curve: ignored, gone on the next save)
                     "", warnings);
     readBool(root, "visible", config.visible, warnings);
     readBool(root, "update_check", config.updateCheck, warnings);
     readBool(root, "crash_recorder", config.crashRecorder, warnings);  // T11
+    readBool(root, "session_logs", config.sessionLogs, warnings);
     readString(root, "active_profile", config.activeProfile, warnings);  // R2
     std::string language = languageCode(config.language);
     readString(root, "language", language, warnings);
@@ -414,6 +415,7 @@ bool saveConfig(const std::string& path, const Config& config, std::string& erro
         << "  \"visible\": " << (config.visible ? "true" : "false") << ",\n"
         << "  \"update_check\": " << (config.updateCheck ? "true" : "false") << ",\n"
         << "  \"crash_recorder\": " << (config.crashRecorder ? "true" : "false") << ",\n"  // T11
+        << "  \"session_logs\": " << (config.sessionLogs ? "true" : "false") << ",\n"
         << "  \"active_profile\": " << jsonString(config.activeProfile) << ",\n"            // R2
         << "  \"language\":\"" << languageCode(config.language) << "\",\n"
         << "  \"attachment\": " << jsonString(attachmentName(config.attachment)) << ",\n"

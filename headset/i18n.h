@@ -174,19 +174,34 @@ struct UiText {
     const char* rowHideSystem;       ///< R2 process lists: leave SteamOS / Steam / SteamVR out (hide_rules.json)
     const char* hiddenSuffix;        ///< R2: card detail after rowsFormat when Hide system is on
     // ---- T11: the Logs page ----
-    const char* pageLogs;            ///< page switch: session logs, Save / Record, crash recorder
-    const char* cardRecord;          ///< card title: Save and Record
-    const char* rowRecord;           ///< Record On / Off
-    const char* saveNow;             ///< Save button
-    const char* recordHint;          ///< under Record: what it writes
-    const char* saveHint;            ///< under Save: what it writes
-    const char* cardCrash;           ///< card title: crash recorder
-    const char* rowCrashRecorder;    ///< crash recorder On / Off
-    const char* crashHint;           ///< what the crash recorder does
-    const char* rowPowerOff;         ///< "Last power-off"
-    const char* cardLastSession;     ///< card title: the last session's card
+    const char* pageLogs;            ///< page switch
+    // the left column: what the logs are and where they go
+    const char* logsTitle;           ///< "Logs"
+    const char* logsIntro;           ///< "The HUD can keep a log of everything it reads:"
+    const char* logsSummary;         ///< the summary (.json) bullet
+    const char* logsTimeline;        ///< the timeline (.csv) bullet
+    const char* logsWhere;           ///< "Logs are saved on the Frame in"
+    const char* logsDir;             ///< "~/.local/state/frame-perf-hud/"
+    const char* logsSessionsDir;     ///< "sessions/", then what goes there
+    const char* logsSessionsWhat;
+    const char* logsSavesDir;        ///< "saves/"
+    const char* logsSavesWhat;
+    const char* logsCrashesDir;      ///< "crashes/"
+    const char* logsCrashesWhat;
+    const char* logsFourWays;        ///< "There are 4 ways to log, on the right. ..."
+    // the four cards: name, description, status texts
+    const char* cardSessionRecord;   ///< On / Off: config.sessionLogs
+    const char* sessionRecordHint;
+    const char* sessionRecordOff;    ///< in place of the last session while it's off
     const char* noSessionYet;        ///< no session ended since start
-    const char* logsFolder;          ///< where the files are
+    const char* cardDirectRecord;    ///< On / Off: Record
+    const char* directRecordHint;
+    const char* cardDirectSave;      ///< the Save now button
+    const char* saveNow;
+    const char* directSaveHint;
+    const char* cardCrashRecord;     ///< On / Off: config.crashRecorder
+    const char* crashRecordHint;
+    const char* rowPowerOff;         ///< "Last power-off: "
     // ---- R2: the Profiles page ----
     const char* pageProfiles;        ///< page switch
     const char* cardProfiles;        ///< the list's title
