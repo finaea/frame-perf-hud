@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.3 — 2026-10-30
+
+- **A clearer Logs tab** on the headset and in the Windows app. A short explanation on the left says what a log is
+  (a summary in `.json`, a timeline in `.csv`) and where it's saved, and four ways to log sit next to it:
+  **Session Record**, **Direct Record** (was Record), **Direct Save** (was Save Logs) and **Crash Record** (was the
+  crash recorder).
+- **Session Record is a setting now, and it's off by default.** Game sessions are no longer logged on their own:
+  turn Session Record on in the Logs tab to keep them. This applies to existing installs too. While it's off, no
+  session is tracked, written or sent to the Windows app.
+- **Direct Record writes a summary** (`.json`) next to its `.csv` when it stops, and **Direct Save always summarises
+  the 10 minutes it saves**, plus the game session so far while Session Record is on.
+- **On the wrist, the HUD stops redrawing while it's faded out** (or tracking is lost). With Session Record off it
+  also stops reading the sensors; with it on, it keeps reading so the session's timeline stays whole.
+- **Process lists show the process's own name**, so scripts and Android apps no longer all show as `bash` or
+  `app_process64`. A name Linux cut at 15 characters is completed from the program's name.
+- **hide_rules.json:** while it has an error, the process lists with Hide system on say so (and keep the last good
+  rules). New built-in rules in later versions are added to an existing file once; your own rules stay.
+- **Streaming (Windows app): the latency rows recover after a refresh-rate change.** After switching, say, from 72 to
+  90 Hz mid-stream, they used to stay N/A for the rest of the session.
+- **Sturdier against bad data:**
+  - a layout that can't be read is kept as `config.json.bad` before the default replaces it
+  - a missing Wi-Fi adapter says "Not connected" instead of "N/A: sensor not found"
+  - loaded layouts drop empty columns and repeated widgets
+  - a broken character in a name can no longer stop the HUD or the dashboard tab from drawing
+- **CPU and network values come back within 0.25 s** after the HUD is shown again, instead of up to 2 s.
+- Update the headset and the Windows app together: the Windows app's Logs tab uses the new names.
+
 ## 0.4.2 — 2026-10-21
 
 - **New widget: HTTP camera.** It shows any MJPEG camera stream over HTTP, live, in the headset and the Windows
