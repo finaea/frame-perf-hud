@@ -28,9 +28,10 @@ struct ProcStat {
 bool parseProcStat(const char* text, size_t length, ProcStat& out);
 
 /**
- * The name a row shows: comm, or the exe basename when one is a cut-off start of the other ("vrlinkrunthread" with
- * exe "vrlink" -> "vrlink", "at-spi-bus-laun" -> "at-spi-bus-launcher"). Scripts keep their name ("run_vrlink.sh",
- * not "bash"), and so do Android apps (not "app_process64").
+ * The name a row shows: comm, or the exe basename when comm fills all 15 characters and one is a cut-off start of the
+ * other ("vrlinkrunthread" with exe "vrlink" -> "vrlink", "at-spi-bus-laun" -> "at-spi-bus-launcher"). Scripts keep
+ * their name ("run_vrlink.sh", not "bash"), and so do Android apps (not "app_process64") and programs started through
+ * a link ("pipewire-pulse", not "pipewire").
  * @param comm /proc/[pid]/stat's comm
  * @param exe basename of /proc/[pid]/exe ("" when unreadable)
  */

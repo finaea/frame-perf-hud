@@ -136,6 +136,9 @@ void displayNameCases() {
     CHECK(displayName("at-spi-bus-laun", "at-spi-bus-launcher") == "at-spi-bus-launcher");
     CHECK(displayName("run_vrlink.sh", "bash") == "run_vrlink.sh");
     CHECK(displayName("com.vrchat.oculus", "app_process64") == "com.vrchat.oculus");
+    // A comm under 15 characters isn't cut: started through a link, the exe is the link's target
+    CHECK(displayName("pipewire-pulse", "pipewire") == "pipewire-pulse");
+    CHECK(displayName("python3", "python3.13") == "python3");
     CHECK(displayName("comm", "") == "comm");
     CHECK(displayName("same", "same") == "same");
 }

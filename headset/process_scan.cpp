@@ -55,7 +55,10 @@ bool parseProcStat(const char* text, size_t length, ProcStat& out) {
 }
 
 std::string displayName(const std::string& comm, const std::string& exe) {
-    if (exe.empty() || comm.empty() || exe == comm) return comm;
+    // Only a comm that fills all 15 characters (TASK_COMM_LEN - 1) can be cut off or be a thread name. A shorter comm
+    // is its own name: pipewire-pulse runs the pipewire binary through a link, and should stay pipewire-pulse
+    constexpr size_t kCommMax = 15;
+    if (exe.empty() || comm.size() != kCommMax || exe == comm) return comm;
     const bool cut = exe.size() > comm.size() ? exe.compare(0, comm.size(), comm) == 0
                                               : comm.compare(0, exe.size(), exe) == 0;
     return cut ? exe : comm;
