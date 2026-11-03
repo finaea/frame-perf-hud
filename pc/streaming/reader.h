@@ -11,9 +11,18 @@ namespace fph {
 namespace pc {
 namespace streaming {
 constexpr uint32_t kKnownBuild = 1791581198;
-constexpr size_t kFrameStride = 0x78, kFrameSlots = 4096, kTailFrames = 144;
+constexpr size_t kFrameStride = 0x78, kFrameSlots = 4096, kTailFrames = 144; // legacy stride
 extern const char kCsvHeader[];
 extern const char kCsvRow[];
+struct FrameLayout {
+    const char* name;
+    const char* header;
+    const char* row;
+    uint32_t stride, fileOffset, indexOffset;
+    std::array<uint32_t, 12> stamps; // WGP through Decode Query, omitting GPU stamps
+    uint32_t pingOffset;
+};
+extern const FrameLayout kFrameLayouts[2];
 class Memory {
 public:
     virtual ~Memory() = default;
@@ -26,11 +35,12 @@ struct Anchors {
     uint32_t timestamp = 0, imageSize = 0;
     uint32_t serverGlobal = 0, mapOffset = 0, aftmOffset = 0, linkPingOffset = 0, uberPingOffset = 0;
     uint32_t stride = 0, fileOffset = 0;
+    const FrameLayout* layout = &kFrameLayouts[0];
     uint32_t remoteAddressOffset = 0, remoteGetterRva = 0;
     bool l1 = false, l2 = false, l3 = false;
     std::string l1Note, l2Note, l3Note;
 };
-Anchors findAnchors(const std::vector<uint8_t>& dll, const std::string& expectedHeader = kCsvHeader);
+Anchors findAnchors(const std::vector<uint8_t>& dll);
 bool sameLoadedBuild(Memory& memory, uint64_t module, const Anchors& anchors);
 bool rttiIs(Memory& memory, uint64_t obj, uint64_t module, uint32_t imageSize, const char* expected);
 std::string readLinkEndpoint(Memory& memory, uint64_t link, uint64_t module, const Anchors& anchors);
@@ -41,11 +51,11 @@ struct Frame {
     bool split = false; // hold and display are valid; Decode Query is 0 on startup records
     double ping = 0;
 };
-bool parseFrame(const uint8_t* bytes, Frame& frame);
+bool parseFrame(const uint8_t* bytes, Frame& frame, const FrameLayout& layout = kFrameLayouts[0]);
 class FrameWindow {
 public:
     // Re-read the complete 144-record tail every tick; incomplete records never enter the dedupe set.
-    void add(const std::vector<uint8_t>& tail, double now);
+    void add(const std::vector<uint8_t>& tail, double now, const FrameLayout& layout = kFrameLayouts[0]);
     void clear();
     std::vector<Frame> recent(double now) const;
     uint64_t published() const {
@@ -86,6 +96,7 @@ private:
     uint64_t resets_ = 0;
     std::map<std::string, uint64_t> nodes_;
     FrameWindow frames_;
+    std::deque<std::pair<double, double>> encodeSamples_; // received time, named encode ms
     double retry1_ = 0, retry2_ = 0, retry3_ = 0, check2_ = 0, check3_ = 0;
     bool enabled2_ = false, enabled3_ = false;
     bool walkMap(uint64_t head);

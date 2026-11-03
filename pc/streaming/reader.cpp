@@ -13,6 +13,18 @@ const char kCsvHeader[] =
     "Send Start,Upstream Ping At Send Start,WGP Release (realtime),Receive (remote realtime),Receive (remote),Decode "
     "Start (remote),Decode End (remote),Submit Illumination (remote),Decode Query (remote),TX ID\n";
 const char kCsvRow[] = "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%d,%d,%llu,%llu,%u,%u,%u,%u,%u,%d\n";
+const FrameLayout kFrameLayouts[2] = {
+    {"legacy", kCsvHeader, kCsvRow, 0x78, 0x88030, 0x88000,
+     {0x04, 0x08, 0x0c, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x24, 0x28, 0x2c, 0x30}, 0x38},
+    {"gpu-stamps",
+     "Present ID,WGP Release,App Submit,VrCompositor GPU Done,VrLink GPU Done,Encode Start,Encode End,Send "
+     "Start,Send End,Receive,Decode Start,Decode End,Submit Illumination,Predicted Display,Decode Query,Run Start "
+     "At WGP Degate,Ping At Send Start,Filter Ping At Send Start,Upstream Ping At Send Start,WGP Release "
+     "(realtime),Receive (remote realtime),Receive (remote),Decode Start (remote),Decode End (remote),Submit "
+     "Illumination (remote),Decode Query (remote),TX ID,Problem Flags\n",
+     "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%d,%d,%llu,%llu,%u,%u,%u,%u,%u,%d,%llx\n",
+     0x98, 0xa8080, 0xa8050,
+     {0x14, 0x18, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40, 0x44, 0x48}, 0x50}};
 namespace {
 template <class T> T at(const uint8_t* data, size_t offset) {
     T v;
@@ -126,8 +138,9 @@ void naRange(MetricStore& s, uint16_t first, uint16_t last, Reason r, double now
             s.setNa(d.id, r, now);
 }
 } // namespace
-Anchors findAnchors(const std::vector<uint8_t>& dll, const std::string& expectedHeader) {
+Anchors findAnchors(const std::vector<uint8_t>& dll) {
     Anchors a;
+    a.layout = nullptr;
     Pe p(dll);
     a.timestamp = p.timestamp;
     a.imageSize = p.imageSize;
@@ -180,16 +193,31 @@ Anchors findAnchors(const std::vector<uint8_t>& dll, const std::string& expected
             if (ref >= 3 && b[ref - 3] == 0x8b && b[ref - 2] == 0x46)
                 linkPings.insert(b[ref - 1]);
         }
-    for (auto str : p.strings(kCsvRow))
-        for (auto ref : p.refs(str)) {
-            const size_t begin = ref >= p.text + 0x1a0 ? ref - 0x1a0 : p.text;
-            for (size_t j = begin; j + 7 <= ref; ++j) {
-                if (std::memcmp(b + j, "\x48\x6b\xd0", 3) == 0)
-                    strides.insert(b[j + 3]);
-                if (std::memcmp(b + j, "\x4c\x8b\x91", 3) == 0)
-                    files.insert(at<uint32_t>(b, j + 3));
+    size_t headers = 0;
+    for (const auto& layout : kFrameLayouts) {
+        const auto matches = p.strings(layout.header).size();
+        headers += matches;
+        if (matches == 1)
+            a.layout = &layout;
+    }
+    if (headers != 1)
+        a.layout = nullptr;
+    if (a.layout) {
+        for (auto str : p.strings(a.layout->row))
+            for (auto ref : p.refs(str)) {
+                const size_t begin = ref >= p.text + 0x1a0 ? ref - 0x1a0 : p.text;
+                const size_t end = std::min(ref + 0x20, static_cast<size_t>(p.text + p.textSize));
+                for (size_t j = begin; j + 7 <= end; ++j) {
+                    if (j + 7 <= ref && std::memcmp(b + j, "\x48\x6b\xd0", 3) == 0)
+                        strides.insert(b[j + 3]);
+                    if (j + 7 <= ref && std::memcmp(b + j, "\x48\x69\xf8", 3) == 0)
+                        strides.insert(at<uint32_t>(b, j + 3));
+                    if ((j + 7 <= ref && std::memcmp(b + j, "\x4c\x8b\x91", 3) == 0) ||
+                        (j >= ref && std::memcmp(b + j, "\x48\x8b\x8e", 3) == 0))
+                        files.insert(at<uint32_t>(b, j + 3));
+                }
             }
-        }
+    }
     if (globals.size() == 1)
         a.serverGlobal = *globals.begin();
     if (maps.size() == 1)
@@ -207,7 +235,7 @@ Anchors findAnchors(const std::vector<uint8_t>& dll, const std::string& expected
     a.l1 = a.serverGlobal && a.mapOffset && p.strings(".?AVSVLServer@@").size() == 1;
     a.l2 = a.linkPingOffset && a.uberPingOffset && p.strings(".?AVSVLDataLinkUber@@").size() == 1 &&
            p.strings(".?AVSVLDataLinkTransferUDP@@").size() == 1;
-    a.l3 = a.aftmOffset && a.stride == kFrameStride && a.fileOffset == 0x88030 && p.strings(expectedHeader).size() == 1;
+    a.l3 = a.layout && a.aftmOffset && a.stride == a.layout->stride && a.fileOffset == a.layout->fileOffset;
     // Locate the primary UDP vtable via x64 RTTI. Its remote-address getter (slot 0x50)
     // takes a sockaddr from this+offset, checks AF_INET/AF_INET6, then formats it.
     std::set<std::pair<uint32_t, uint32_t>> endpoints;
@@ -298,9 +326,11 @@ std::string readLinkEndpoint(Memory& memory, uint64_t linkObject, uint64_t modul
                         static_cast<uint32_t>(address[6]) << 8 | address[7];
     return link::ipv4ToText(ip);
 }
-bool parseFrame(const uint8_t* b, Frame& f) {
+bool parseFrame(const uint8_t* b, Frame& f, const FrameLayout& layout) {
     uint32_t t[13];
-    std::memcpy(t, b, sizeof(t));
+    t[0] = at<uint32_t>(b, 0);
+    for (size_t j = 0; j < layout.stamps.size(); ++j)
+        t[j + 1] = at<uint32_t>(b, layout.stamps[j]);
     if (!t[10] || !t[9] || !t[4] || !t[7])
         return false;
     f.id = t[0];
@@ -319,7 +349,7 @@ bool parseFrame(const uint8_t* b, Frame& f) {
     f.split = t[12] && hold > -500000 && hold < 500000 && display <= 500000;
     f.ms[7] = f.split ? hold / 1000.0 : 0;
     f.ms[8] = f.split ? display / 1000.0 : 0;
-    const int32_t ping = at<int32_t>(b, 0x38);
+    const int32_t ping = at<int32_t>(b, layout.pingOffset);
     if (ping < 0 || ping > 500000)
         return false;
     f.ping = ping / 1000.0;
@@ -333,14 +363,14 @@ void FrameWindow::clear() {
     newestIllum_ = 0;
     haveNewest_ = false;
 }
-void FrameWindow::add(const std::vector<uint8_t>& tail, double now) {
-    if (tail.size() != kTailFrames * kFrameStride)
+void FrameWindow::add(const std::vector<uint8_t>& tail, double now, const FrameLayout& layout) {
+    if (tail.size() != kTailFrames * layout.stride)
         return;
     // Completion order can differ from record order. An older record finishing late must never move
     // the cutoff backwards, including when the u32 illumination clock wraps.
     for (size_t j = 0; j < kTailFrames; ++j) {
         Frame f;
-        if (!parseFrame(tail.data() + j * kFrameStride, f))
+        if (!parseFrame(tail.data() + j * layout.stride, f, layout))
             continue;
         const uint32_t advance = f.illum - newestIllum_;
         if (!haveNewest_ || (advance != 0 && advance < 0x80000000u)) {
@@ -352,7 +382,7 @@ void FrameWindow::add(const std::vector<uint8_t>& tail, double now) {
         return;
     for (size_t j = 0; j < kTailFrames; ++j) {
         Frame f;
-        if (!parseFrame(tail.data() + j * kFrameStride, f) ||
+        if (!parseFrame(tail.data() + j * layout.stride, f, layout) ||
             static_cast<uint32_t>(newestIllum_ - f.illum) >= 1000000 || !seen_.insert(f.id).second)
             continue;
         ids_.push_back(f.id);
@@ -483,7 +513,9 @@ void Reader::tick(double now, MetricStore& out) {
     const bool haveUber = memory_.get(srv + 0x188, uber) && pointer(uber);
     const bool haveLinks = haveUber && memory_.read(uber + 0x388, links.data(), sizeof(links));
     const bool haveBw = memory_.get(srv + 0x1f0, bw) && pointer(bw);
-    const bool haveIndex = anchors_.l3 && memory_.get(srv + anchors_.aftmOffset + 0x88000, index) && index < 4096;
+    const auto* layout = anchors_.layout;
+    const bool haveIndex = anchors_.l3 && layout &&
+                           memory_.get(srv + anchors_.aftmOffset + layout->indexOffset, index) && index < kFrameSlots;
     const unsigned advance = haveIndex_ ? (index - index_) & 0xfff : 0;
     const bool changed = server_ && (server_ != srv || head_ != head || root_ != root || uber_ != uber || bw_ != bw ||
                                      links_ != links || (haveIndex_ && haveIndex && advance > 2048));
@@ -491,6 +523,7 @@ void Reader::tick(double now, MetricStore& out) {
         ++resets_;
         nodes_.clear();
         frames_.clear();
+        encodeSamples_.clear();
         enabled2_ = enabled3_ = false;
         check2_ = check3_ = retry1_ = retry2_ = retry3_ = 0;
         awaitAdvance_ = anchors_.l3;
@@ -545,11 +578,17 @@ void Reader::tick(double now, MetricStore& out) {
     if (!live) {
         naRange(out, 1030, 1067, Reason::NoFrames, now);
         frames_.clear();
+        encodeSamples_.clear();
         enabled2_ = enabled3_ = false;
         out.setText(kPcStreamL2Note, "no frames", now);
         out.setText(kPcStreamL3Note, "no frames", now);
         return;
     }
+    while (!encodeSamples_.empty() && now - encodeSamples_.front().first >= 5.0)
+        encodeSamples_.pop_front();
+    const auto encode = values.find("dbgEncTimeMS");
+    if (encode != values.end())
+        encodeSamples_.push_back({now, encode->second});
     if (anchors_.l2 && now >= retry2_) {
         bool valid = haveLinks && rttiIs(memory_, uber, module_, anchors_.imageSize, ".?AVSVLDataLinkUber@@");
         struct Link {
@@ -596,7 +635,7 @@ void Reader::tick(double now, MetricStore& out) {
         }
     } else if (anchors_.l2)
         out.setText(kPcStreamL2Note, "link validation retry pending", now);
-    if (!anchors_.l3 || now < retry3_) {
+    if (!anchors_.l3 || !layout || now < retry3_) {
         if (anchors_.l3)
             out.setText(kPcStreamL3Note, "frame validation retry pending", now);
         return;
@@ -614,18 +653,19 @@ void Reader::tick(double now, MetricStore& out) {
         out.setText(kPcStreamL3Note, "ring owner/index mismatch", now);
         return;
     }
-    std::vector<uint8_t> tail(kTailFrames * kFrameStride);
+    const size_t frameStride = layout->stride;
+    std::vector<uint8_t> tail(kTailFrames * frameStride);
     const size_t start = (index - kTailFrames) & 0xfff, first = std::min(kTailFrames, kFrameSlots - start);
-    if (!memory_.read(srv + anchors_.aftmOffset + start * kFrameStride, tail.data(), first * kFrameStride) ||
-        (first < kTailFrames && !memory_.read(srv + anchors_.aftmOffset, tail.data() + first * kFrameStride,
-                                              (kTailFrames - first) * kFrameStride))) {
+    if (!memory_.read(srv + anchors_.aftmOffset + start * frameStride, tail.data(), first * frameStride) ||
+        (first < kTailFrames && !memory_.read(srv + anchors_.aftmOffset, tail.data() + first * frameStride,
+                                              (kTailFrames - first) * frameStride))) {
         retry3_ = now + 10;
         enabled3_ = false;
         frames_.clear();
         out.setText(kPcStreamL3Note, "frame read failed", now);
         return;
     }
-    frames_.add(tail, now);
+    frames_.add(tail, now, *layout);
     auto window = frames_.recent(now);
     if (window.empty()) {
         naRange(out, 1030, 1059, Reason::NoFrames, now);
@@ -682,9 +722,13 @@ void Reader::tick(double now, MetricStore& out) {
     }
     bool valid = sane && rate > 0;
     if (!enabled3_ || now >= check3_) {
+        // Service ticks every 0.5 s. Five seconds smooths named-encode jitter; a sustained shift can cost one retry.
+        double namedEncode = 0;
+        for (const auto& sample : encodeSamples_)
+            namedEncode += sample.second;
         valid = valid && values.count("sPingMS") && values.count("dbgEncTimeMS") &&
                 std::abs(average(pings) - values["sPingMS"]) <= 0.5 &&
-                std::abs(average(stages[1]) - values["dbgEncTimeMS"]) <= 1.0;
+                !encodeSamples_.empty() && std::abs(average(stages[1]) - namedEncode / encodeSamples_.size()) <= 1.0;
         // No HMD display-Hz term: OpenVR's display frequency lags a mid-session refresh change (72 -> 90 Hz on
         // 2026-10-29 kept L3 off for the whole session), so the frame ring is checked against the bandwidth ring only.
         valid = valid && std::abs(static_cast<double>(rate) - window.size()) <= std::max(2.0, rate * 0.1);

@@ -225,6 +225,117 @@ void testParseFrameHoldDisplayU32Wrap() {
     CHECK(std::fabs(g.ms[8] - 39.0) < 1e-9);
 }
 
+// ==================== parseFrame: gpu-stamps layout ====================
+
+/** gpu-stamps record with the offsets written out as literals here, deliberately NOT read from
+ *  kFrameLayouts[1], so a wrong table entry makes parseFrame disagree with this fixture instead of
+ *  agreeing with itself. Stride 0x98, ping 0x50. The two GPU-done stamps (0x1c, 0x20) and the problem flags
+ *  (0x90) get nonzero junk: parseFrame must ignore them. */
+std::vector<uint8_t> gpuFrameBytes(const uint32_t (&t)[13], int32_t pingUs) {
+    static const uint32_t offsets[12] = {0x14, 0x18, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40, 0x44, 0x48};
+    std::vector<uint8_t> raw(0x98, 0);
+    std::memcpy(raw.data(), &t[0], sizeof(t[0]));
+    for (size_t j = 0; j < 12; ++j)
+        std::memcpy(raw.data() + offsets[j], &t[j + 1], sizeof(t[j + 1]));
+    std::memcpy(raw.data() + 0x50, &pingUs, sizeof(pingUs));
+    const uint32_t junk = 0x12345678u;
+    std::memcpy(raw.data() + 0x1c, &junk, sizeof(junk));
+    std::memcpy(raw.data() + 0x20, &junk, sizeof(junk));
+    std::memcpy(raw.data() + 0x90, &junk, sizeof(junk));
+    return raw;
+}
+
+/** Record bytes for either known layout, built from literal offsets (frameBytes() for legacy, gpuFrameBytes()
+ *  for gpu-stamps), never from the FrameLayout table under test. */
+std::vector<uint8_t> frameBytesForLayout(const FrameLayout& layout, const uint32_t (&t)[13], int32_t pingUs) {
+    return &layout == &kFrameLayouts[1] ? gpuFrameBytes(t, pingUs) : frameBytes(t, pingUs);
+}
+
+/** The table itself, checked against the known values (independent of any fixture). */
+void testFrameLayoutTableValues() {
+    const FrameLayout& legacy = kFrameLayouts[0];
+    CHECK(legacy.stride == 0x78 && legacy.fileOffset == 0x88030 && legacy.indexOffset == 0x88000);
+    CHECK(legacy.pingOffset == 0x38);
+    const uint32_t legacyStamps[12] = {0x04, 0x08, 0x0c, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x24, 0x28, 0x2c, 0x30};
+    for (size_t j = 0; j < 12; ++j)
+        CHECK(legacy.stamps[j] == legacyStamps[j]);
+
+    const FrameLayout& gpu = kFrameLayouts[1];
+    CHECK(gpu.stride == 0x98 && gpu.fileOffset == 0xa8080 && gpu.indexOffset == 0xa8050);
+    CHECK(gpu.pingOffset == 0x50);
+    const uint32_t gpuStamps[12] = {0x14, 0x18, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40, 0x44, 0x48};
+    for (size_t j = 0; j < 12; ++j)
+        CHECK(gpu.stamps[j] == gpuStamps[j]);
+    // 0x1c/0x20 (GPU-done stamps) and 0x90 (flags) are intentionally not mapped
+    for (size_t j = 0; j < 12; ++j)
+        CHECK(gpu.stamps[j] != 0x1c && gpu.stamps[j] != 0x20 && gpu.stamps[j] != 0x90);
+}
+
+void testParseFrameFieldMappingGpuStamps() {
+    const auto& layout = kFrameLayouts[1];
+    uint32_t t[13] = {};
+    baseFields(t);
+    const auto raw = frameBytesForLayout(layout, t, 2470);
+    Frame f;
+    CHECK(parseFrame(raw.data(), f, layout));
+    CHECK(f.id == t[0] && f.illum == t[10]);
+    const unsigned pairs[7][2] = {{1, 2}, {3, 4}, {5, 6}, {6, 7}, {7, 9}, {9, 10}, {1, 10}};
+    for (unsigned j = 0; j < 7; ++j) {
+        const double expected = (t[pairs[j][1]] - t[pairs[j][0]]) / 1000.0;
+        CHECK(std::fabs(f.ms[j] - expected) < 1e-9);
+    }
+    CHECK(std::fabs(f.ping - 2.47) < 1e-9);
+}
+
+void testParseFrameIncompleteGpuStamps() {
+    const auto& layout = kFrameLayouts[1];
+    // same "not done yet" fields as the legacy case, just at the gpu-stamps byte offsets
+    for (int idx : {10, 9, 4, 7}) {
+        uint32_t t[13] = {};
+        baseFields(t);
+        t[idx] = 0;
+        Frame f;
+        CHECK(!parseFrame(frameBytesForLayout(layout, t, 2000).data(), f, layout));
+    }
+    uint32_t t[13] = {};
+    baseFields(t);
+    Frame f;
+    CHECK(parseFrame(frameBytesForLayout(layout, t, 2000).data(), f, layout));
+}
+
+void testParseFrameBoundsGpuStamps() {
+    const auto& layout = kFrameLayouts[1];
+    {
+        uint32_t t[13] = {};
+        baseFields(t);
+        t[9] = t[8] + 600000;
+        t[10] = t[9] + 1000;
+        t[11] = t[10] + 500;
+        Frame f;
+        CHECK(!parseFrame(frameBytesForLayout(layout, t, 2000).data(), f, layout));
+    }
+    {
+        uint32_t t[13] = {};
+        baseFields(t);
+        Frame f;
+        CHECK(!parseFrame(frameBytesForLayout(layout, t, -1).data(), f, layout));
+        CHECK(!parseFrame(frameBytesForLayout(layout, t, 600000).data(), f, layout));
+        CHECK(parseFrame(frameBytesForLayout(layout, t, 500000).data(), f, layout)); // the bound itself is inclusive
+    }
+}
+
+void testParseFrameU32WrapGpuStamps() {
+    const auto& layout = kFrameLayouts[1];
+    uint32_t t[13] = {};
+    baseFields(t, /*wgpRelease=*/0xFFFFFF9Cu);
+    CHECK(t[2] < t[1]); // confirms the fixture actually wrapped
+
+    Frame f;
+    CHECK(parseFrame(frameBytesForLayout(layout, t, 2000).data(), f, layout));
+    CHECK(std::fabs(f.ms[0] - 1.0) < 1e-9);
+    CHECK(std::fabs(f.ms[6] - 53.32) < 1e-6);
+}
+
 // ==================== FrameWindow ====================
 
 /** A full 144-slot tail: slots [0, validCount) are complete, distinct, closely-spaced records; the rest
@@ -953,6 +1064,244 @@ void testReaderL3Valid90HzStream() {
     CHECK(isOkF32(store, metric::kPcStreamEncodeAvg, 2.6, 1e-6));
 }
 
+// ==================== Reader: gpu-stamps layout, and named-encode averaging ====================
+
+constexpr uint32_t kLayoutAftmOffset = 0xffe0; // keep wrapped slot 0 clear of the server's fields
+
+/** Generalized buildWorld: takes an arbitrary FrameLayout (stride + indexOffset) and wraps the frame-ring
+ *  slot index through kFrameSlots, so an index near the wrap boundary exercises the real two-piece read
+ *  Reader::tick performs (buildWorld() above never wraps: every index it's given is well under 4096). */
+World buildWorldLayout(FakeMemory& mem, uint64_t base, const FrameLayout& layout, uint32_t index, uint32_t extraTail,
+                      uint32_t idStart) {
+    World w;
+    w.srv = kModuleBase + base;
+    const uint64_t head = kModuleBase + base + 0x90000;
+    const uint64_t root = kModuleBase + base + 0x90100;
+    w.uber = kModuleBase + base + 0xA0000;
+    w.link0 = kModuleBase + base + 0xA1000;
+    w.link1 = kModuleBase + base + 0xA2000;
+    w.bw = kModuleBase + base + 0xB0000;
+
+    setObjectRtti(mem, w.srv, kVtServer);
+    setObjectRtti(mem, w.uber, kVtUber);
+    setObjectRtti(mem, w.link0, kVtLink);
+    setObjectRtti(mem, w.link1, kVtLink);
+
+    mem.poke<uint64_t>(w.srv + 0x188, w.uber);
+    mem.poke<uint64_t>(w.srv + 0x1f0, w.bw);
+    mem.poke<uint32_t>(w.srv + 0x1e8, 8192);
+    mem.poke<uint32_t>(w.srv + 0x1ec, 144);
+
+    uint64_t linksArr[16] = {};
+    linksArr[0] = w.link0;
+    linksArr[1] = w.link1;
+    mem.write(w.uber + 0x388, linksArr, sizeof(linksArr));
+    mem.poke<uint32_t>(w.link0 + 0x24, 434);
+    mem.poke<uint32_t>(w.link0 + 0x2c, 11700); // us
+    mem.poke<uint32_t>(w.link1 + 0x24, 625);
+    mem.poke<uint32_t>(w.link1 + 0x2c, 9200); // 434 + 625 = 1059 = sRXpps below
+
+    writeMap(mem, w.srv, head, root,
+             {{"sPingMS", 2.0},
+              {"dbgEncTimeMS", 2.6},
+              {"txTimeMS", 0.18},
+              {"dEstLinkBW", 232.0},
+              {"rexmitReq", 4670},
+              {"rexmitSent", 4013},
+              {"nFramesSkippedPS", 0},
+              {"dFrmsLate", 0},
+              {"encResets", 3},
+              {"sRXpps", 1059}});
+
+    const uint32_t start = (index - kTailFrames) & 0xfff;
+    const uint32_t count = kTailFrames + extraTail;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t slot = (start + i) & 0xfff; // wraps through the 4096-slot ring
+        uint32_t t[13] = {};
+        baseFields(t, i * gFixtureStepUs, idStart + i);
+        if (gFixtureDecodeQueryUs != 0)
+            t[12] = t[9] + gFixtureDecodeQueryUs;
+        const auto raw = frameBytesForLayout(layout, t, 2000);
+        mem.write(w.srv + kLayoutAftmOffset + static_cast<uint64_t>(slot) * layout.stride, raw.data(), raw.size());
+        writeBandwidthRecord(mem, w.bw + static_cast<uint64_t>(i) * 0xa8, i * gFixtureStepUs);
+    }
+    mem.poke<uint16_t>(w.srv + kLayoutAftmOffset + layout.indexOffset, static_cast<uint16_t>(index));
+    return w;
+}
+
+Anchors anchorsForLayout(uint32_t timestamp, const FrameLayout& layout) {
+    Anchors a = goldenAnchors(timestamp);
+    a.layout = &layout;
+    a.aftmOffset = kLayoutAftmOffset;
+    a.stride = layout.stride;
+    a.fileOffset = layout.fileOffset;
+    return a;
+}
+
+/** Reader::tick's own golden path, but on the gpu-stamps layout (stride 0x98, index at aftmOffset+0xa8050)
+ *  and with the frame ring wrapped: index=100 puts the 144-record tail's start at (100-144)&0xfff=4052, so
+ *  44 records come from the top of the ring and the other 100 wrap to slot 0 -- the two-piece read. Using the
+ *  wrong stride or index offset here would misread every record (parseFrame would see garbage, not merely
+ *  shifted-but-valid data), so a clean pass is real evidence the layout's fields are honored. */
+void testReaderGpuStampsGoldenPathWithRingWrap() {
+    const auto& layout = kFrameLayouts[1];
+    FakeMemory mem;
+    constexpr uint32_t kBuild = kKnownBuild;
+    setupModule(mem, kBuild);
+    setActiveServer(mem, buildWorldLayout(mem, 0x10000, layout, /*index=*/100, /*extraTail=*/0, /*idStart=*/0).srv);
+
+    Reader reader(mem, kModuleBase, anchorsForLayout(kBuild, layout));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store);
+
+    CHECK(reader.resets() == 0);
+    CHECK(noteOf(store, metric::kPcStreamL1Note).empty());
+    CHECK(noteOf(store, metric::kPcStreamL2Note).empty());
+    CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
+    CHECK(isOkF32(store, metric::kPcStreamNamedPing, 2.0, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamLink0Ping, 11.7, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamEncodeAvg, 2.6, 1e-6));
+    CHECK(isOkF32(store, metric::kPcStreamTotalAvg, 53.32, 1e-3));
+}
+
+/** The "dbgEncTimeMS" map node's value field, for a world buildWorldLayout()/buildWorld() built: root
+ *  (srv+0x90100) + node index 1 (insertion order: sPingMS, dbgEncTimeMS, ...) * 0x100 + 0x40 (the double
+ *  value, per writeMapNode). Rewriting it in place changes what the *next* tick's named() read returns,
+ *  without touching the node's address or key -- exactly how a real value update behaves. */
+constexpr uint64_t kEncodeNodeValueOffset = 0x90100 + 0x100 + 0x40;
+
+void setEncodeNamedValue(FakeMemory& mem, uint64_t srv, double value) {
+    mem.poke<double>(srv + kEncodeNodeValueOffset, value);
+}
+
+/** Rewrites a world's frame-ring tail and bandwidth tail as the stream would look `generation` Service ticks
+ *  (0.5 s each = 36 new records at the fixture's 14 ms cadence) after the initial build: the ring index
+ *  advances by 36, and record n (global, = generation*36 + position) keeps the SAME Present ID and the SAME
+ *  stamps in every generation that still contains it. So overlapping ids dedupe, only 36 are new per tick,
+ *  and the recent window stays at kFixtureRecentCount instead of expiring (FrameWindow drops every record
+ *  1 s after it was received) or doubling. Generation 0 is identical to buildWorldLayout()'s tail. */
+void writeCadenceTail(FakeMemory& mem, const World& w, const FrameLayout& layout, uint32_t initialIndex,
+                      uint32_t idStart, uint32_t generation) {
+    const uint32_t index = (initialIndex + generation * 36) & 0xfff;
+    const uint32_t start = (index - kTailFrames) & 0xfff;
+    for (uint32_t i = 0; i < kTailFrames; ++i) {
+        const uint32_t n = generation * 36 + i;
+        uint32_t t[13] = {};
+        baseFields(t, n * gFixtureStepUs, idStart + n);
+        const auto raw = frameBytesForLayout(layout, t, 2000);
+        mem.write(w.srv + kLayoutAftmOffset + static_cast<uint64_t>((start + i) & 0xfff) * layout.stride,
+                  raw.data(), raw.size());
+        writeBandwidthRecord(mem, w.bw + static_cast<uint64_t>(i) * 0xa8, n * gFixtureStepUs);
+    }
+    mem.poke<uint16_t>(w.srv + kLayoutAftmOffset + layout.indexOffset, static_cast<uint16_t>(index));
+}
+
+/** One world driven at the 0.5 s Service cadence: before every tick, the ring is advanced to that tick's
+ *  generation (t * 2) and the named encode value is set. */
+struct CadenceRun {
+    FakeMemory mem;
+    World w;
+    const FrameLayout& layout;
+    uint32_t initialIndex, idStart;
+    Reader reader;
+    MetricStore store;
+
+    explicit CadenceRun(const FrameLayout& l, uint32_t index = 300, uint32_t ids = 0)
+        : layout(l), initialIndex(index), idStart(ids), reader(mem, kModuleBase, anchorsForLayout(kKnownBuild, l)),
+          store(readerMetricDefs()) {
+        setupModule(mem, kKnownBuild);
+        w = buildWorldLayout(mem, 0x10000, l, index, 0, ids);
+        setActiveServer(mem, w.srv);
+    }
+    void tick(double t, double encodeMs) {
+        writeCadenceTail(mem, w, layout, initialIndex, idStart, static_cast<uint32_t>(std::lround(t * 2)));
+        setEncodeNamedValue(mem, w.srv, encodeMs);
+        reader.tick(t, store);
+    }
+};
+
+/** Named-encode (dbgEncTimeMS) oscillating +-1.5 ms around the true, AFTM-measured mean (2.6 ms, fixed by
+ *  baseFields on every record) must still pass the L3 cross-check at the next periodic (10 s) recheck: the
+ *  check averages the whole 5 s window, not the single latest sample. The very first tick gets exactly the
+ *  true mean -- there's no warmup period, the check runs on tick 1 regardless of how few samples exist.
+ *  Three-tick high/low bursts leave the last two samples high at the recheck: a one-second window or the
+ *  latest sample would be 1.5 ms off and fail, while the five-second mean is exactly right. */
+void runEncodeOscillationPassesAtPeriodicCheck(const FrameLayout& layout) {
+    CadenceRun r(layout);
+    r.tick(0.0, 2.6);
+    CHECK(noteOf(r.store, metric::kPcStreamL3Note).empty());
+    CHECK(isOkF32(r.store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+
+    // 0.5 s ticks oscillating +-1.5 ms; the t=0 check armed a 10 s cooldown, so none are validated before t=10.
+    for (int k = 1; k <= 20; ++k) {
+        const double t = k * 0.5;
+        r.tick(t, ((k - 1) / 3) % 2 ? 2.6 - 1.5 : 2.6 + 1.5);
+        CHECK(noteOf(r.store, metric::kPcStreamL3Note).empty());
+        CHECK(isOkF32(r.store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6)); // frames stay live, not "no frames"
+    }
+    CHECK(isOkF32(r.store, metric::kPcStreamEncodeAvg, 2.6, 1e-6)); // the *measured* average, unaffected by this
+}
+
+/** A consistent +2 ms bias (not oscillation) on dbgEncTimeMS must fail the same periodic check: the window
+ *  average then sits 2 ms off the true mean, beyond the +-1 ms tolerance. */
+void runEncodeConsistentOffsetFailsAtPeriodicCheck(const FrameLayout& layout) {
+    CadenceRun r(layout);
+    r.tick(0.0, 2.6);
+    CHECK(noteOf(r.store, metric::kPcStreamL3Note).empty()); // first tick: the lone sample is exactly the mean
+
+    for (int k = 1; k <= 19; ++k) {
+        r.tick(k * 0.5, 2.6 + 2.0); // consistently 2 ms high, every tick in the window
+        CHECK(isOkF32(r.store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6)); // still enabled, frames live
+    }
+    r.tick(10.0, 2.6 + 2.0); // the recheck: frames are live (72), so the failure is the encode average
+    CHECK(noteOf(r.store, metric::kPcStreamL3Note) == "frame/bandwidth cross-check");
+    CHECK(notOk(r.store, metric::kPcStreamFps));
+}
+
+/** Samples more than 5 s stale must not count toward the window average: a wildly-off burst that fully ages
+ *  out before the next periodic check leaves that check passing on the clean, recent samples alone. */
+void runStaleEncodeSamplesExpire(const FrameLayout& layout) {
+    CadenceRun r(layout);
+    r.tick(0.0, 2.6);
+    CHECK(noteOf(r.store, metric::kPcStreamL3Note).empty());
+
+    for (int k = 1; k <= 9; ++k)
+        r.tick(k * 0.5, 50.0); // wildly poisoned (t=0.5..4.5), but all >= 5 s stale by the t=10 recheck
+    for (int k = 10; k <= 20; ++k)
+        r.tick(k * 0.5, 2.6); // clean, inside the 5 s window at t=10
+    CHECK(noteOf(r.store, metric::kPcStreamL3Note).empty());
+    CHECK(isOkF32(r.store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+}
+
+/** An owner change (stream reset) clears encodeSamples_ outright: a heavily poisoned history from the old
+ *  SVLServer must not haunt the new one. Once the new baseline's ring advances, L3 resumes immediately on the
+ *  fresh (2-sample) window -- the same "no warmup" rule as the very first tick of the reader's life. */
+void runOwnerChangeClearsEncodeSamples(const FrameLayout& layout) {
+    CadenceRun r(layout, 300, 1000);
+    const World w2 = buildWorldLayout(r.mem, 0x300000, layout, 500, /*extraTail=*/1, 5000);
+
+    r.tick(0.0, 2.6);
+    CHECK(noteOf(r.store, metric::kPcStreamL3Note).empty());
+
+    for (int k = 1; k <= 4; ++k) {
+        r.tick(k * 0.5, 500.0); // badly poison world 1 (its ring keeps advancing) right before the swap
+        CHECK(isOkF32(r.store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+    }
+
+    setActiveServer(r.mem, w2.srv);
+    setEncodeNamedValue(r.mem, w2.srv, 2.6);
+    r.reader.tick(2.5, r.store);
+    CHECK(r.reader.resets() == 1);
+    CHECK(noteOf(r.store, metric::kPcStreamL3Note) == "stream reset; waiting"); // ring hasn't advanced yet
+
+    r.mem.poke<uint16_t>(w2.srv + kLayoutAftmOffset + layout.indexOffset, static_cast<uint16_t>(501));
+    setEncodeNamedValue(r.mem, w2.srv, 2.6);
+    r.reader.tick(3.0, r.store);
+    CHECK(noteOf(r.store, metric::kPcStreamL3Note).empty()); // passes on 2 fresh samples, not poisoned by w1's 500 ms
+    CHECK(isOkF32(r.store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+}
+
 // ==================== readLinkEndpoint ====================
 
 void testReadLinkEndpointValid() {
@@ -1076,6 +1425,11 @@ int main() {
     testParseFrameNoDecodeQuery();
     testParseFrameNegativeHold();
     testParseFrameHoldDisplayU32Wrap();
+    testFrameLayoutTableValues();
+    testParseFrameFieldMappingGpuStamps();
+    testParseFrameIncompleteGpuStamps();
+    testParseFrameBoundsGpuStamps();
+    testParseFrameU32WrapGpuStamps();
     testFrameWindowDedupeAndLateCompletion();
     testFrameWindowWrongSizeIgnored();
     testFrameWindowStallReadsAsNoFrames();
@@ -1091,6 +1445,13 @@ int main() {
     testReaderIdleAudioAboveWireKeepsL3();
     testReaderNonAudioAboveWireFailsL3();
     testReaderL3Valid90HzStream();
+    testReaderGpuStampsGoldenPathWithRingWrap();
+    for (const auto& layout : kFrameLayouts) {
+        runEncodeOscillationPassesAtPeriodicCheck(layout);
+        runEncodeConsistentOffsetFailsAtPeriodicCheck(layout);
+        runStaleEncodeSamplesExpire(layout);
+        runOwnerChangeClearsEncodeSamples(layout);
+    }
     testReadLinkEndpointValid();
     testReadLinkEndpointGetterShapeChanged();
     testReadLinkEndpointBadFamily();

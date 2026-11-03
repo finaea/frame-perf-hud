@@ -16,10 +16,10 @@ int main(int argc, char** argv) {
         std::vector<uint8_t> dll((std::istreambuf_iterator<char>(in)), {});
         const auto a = fph::pc::streaming::findAnchors(dll);
         std::printf("build=%u image=%x global=%x map=%x aftm=%x link_ping=%x uber_ping=%x stride=%x file=%x "
-                    "remote_getter=%x remote_address=%x L1=%d L2=%d L3=%d\n",
+                    "remote_getter=%x remote_address=%x layout=%s L1=%d L2=%d L3=%d\n",
                     a.timestamp, a.imageSize, a.serverGlobal, a.mapOffset, a.aftmOffset, a.linkPingOffset,
-                    a.uberPingOffset, a.stride, a.fileOffset, a.remoteGetterRva, a.remoteAddressOffset, a.l1, a.l2,
-                    a.l3);
+                    a.uberPingOffset, a.stride, a.fileOffset, a.remoteGetterRva, a.remoteAddressOffset,
+                    a.layout ? a.layout->name : "unknown", a.l1, a.l2, a.l3);
         return a.l1 && a.l2 && a.l3 ? 0 : 1;
     }
     int seconds = 15;

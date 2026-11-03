@@ -383,8 +383,11 @@ struct Service::Runtime {
                             std::memcpy(&stamp, bytes.data() + pe + 8, 4);
                     }
                     if (cachedSize != bytes.size() || cachedStamp != stamp) {
-                        cachedAnchors =
-                            findAnchors(bytes, mismatch ? std::string(kCsvHeader) + "forced mismatch" : kCsvHeader);
+                        cachedAnchors = findAnchors(bytes);
+                        if (mismatch) {
+                            cachedAnchors.l3 = false;
+                            cachedAnchors.l3Note = "CSV header/stride mismatch";
+                        }
                         cachedSize = bytes.size();
                         cachedStamp = stamp;
                     }
