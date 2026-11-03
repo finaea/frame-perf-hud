@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.4 — 2026-11-03
+
+- **Streaming (Windows app): works with the SteamVR beta of 2026-11-03.** That beta changed how SteamVR keeps each
+  frame's timings, so the latency, its breakdown, fps and Mbps went N/A. The Windows app now reads both the new and
+  the old format, so stable SteamVR keeps working as before.
+- **Streaming (Windows app): the latency rows blank less often.** Before showing them, the app checks its encode time
+  against SteamVR's own. It now compares with SteamVR's average over the last few seconds, because on the new beta
+  that value jumps by several milliseconds from one moment to the next.
+- **Room: moving the HUD with the laser is more reliable.**
+  - Closing the dashboard mid-move drops the HUD at once, instead of letting it follow the hand for up to half a
+    second.
+  - Pressing the other controller's grip mid-move no longer leaves the HUD stuck to the hand. The move ends when the
+    dashboard laser goes to the other controller.
+  - **Bring it in front of me**, **Face me** or a different **Attach to** during a move ends the move and keeps the
+    new position, with no snap back or flicker.
+- **Process lists show pipewire-pulse as pipewire-pulse** again, not as pipewire. Only a name Linux cut at 15
+  characters is completed from the program's name.
+- The streaming fix is in the Windows app; the Room and process list fixes are on the headset.
+
 ## 0.4.3 — 2026-10-30
 
 - **A clearer Logs tab** on the headset and in the Windows app. A short explanation on the left says what a log is
