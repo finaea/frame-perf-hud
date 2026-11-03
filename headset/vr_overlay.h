@@ -3,6 +3,7 @@
 
 #include "camera_overlay.h"  // T10
 #include "config.h"
+#include "detached.h"  // T05 / #24: GrabInput, DetachedPose
 #include "history.h"
 #include "placement.h"
 #include "vk_texture.h"
@@ -20,12 +21,6 @@ struct PointerInput {
     double x = 0.0;
     double y = 0.0;
     double scrollDy = 0.0;  ///< T05: Scroll's ydelta
-};
-
-/** T05: the laser pressing / releasing on the HUD itself (only while it takes mouse input: Detached + dashboard open). */
-struct GrabInput {
-    bool down = false;     ///< true = press, false = release
-    uint32_t device = 0;   ///< the pointing device (vr::TrackedDeviceIndex_t)
 };
 
 /**
@@ -277,6 +272,12 @@ public:
      * @return false if not connected or the pose isn't valid
      */
     bool devicePose(uint32_t device, vr::HmdMatrix34_t& pose) const;
+
+    /**
+     * #24: the controller with the dashboard's laser now (IVROverlay::GetPrimaryDashboardDevice, one IPC).
+     * @return its tracked device index, or vr::k_unTrackedDeviceIndexInvalid (not connected, none)
+     */
+    uint32_t dashboardLaserDevice() const;
 
     /**
      * T05: moves the Detached HUD at once (while a grab is held), without waiting for updatePlacement.

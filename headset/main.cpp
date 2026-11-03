@@ -908,15 +908,17 @@ bool applyDetachedAction(SettingsAction action, Config& config, const VrOverlay&
     return config.detachedPose != before;
 }
 
-void handleSettingsAction(SettingsAction action, Config& config, ConfigWatcher& watcher, VrOverlay& vr,
+/** @return true if a setting changed (#24: that ends a Detached drag in progress) */
+bool handleSettingsAction(SettingsAction action, Config& config, ConfigWatcher& watcher, VrOverlay& vr,
                           double angleStepDeg = 1.0) {
     bool changed = applySettingsAction(action, config, angleStepDeg);
     changed |= applyDetachedAction(action, config, vr);  // T05
-    if (!changed) return;
+    if (!changed) return false;
     vr.applyConfig(config);
     std::string error;
     // T04: through the watcher, so an unreadable file is kept as config.json.bad instead of being overwritten
     if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
+    return true;
 }
 
 /** @return the single-instance lock file path */
@@ -1492,18 +1494,21 @@ int runOverlay(const Options& options) {
         bridge.setSessionLogs(config.sessionLogs);
         if (config.sessionLogs) bridge.refreshSceneApp(now);
     };
-    /** T05: ends a grab (laser released, dashboard closed, attach point changed) and saves where the HUD is. */
-    const auto releaseGrab = [&](const char* why) {
-        if (!grab.active()) return;
-        vr::HmdMatrix34_t device {};
-        if (vr.devicePose(grab.device(), device)) config.detachedPose = grab.follow(device);
-        grab.end();
+    const auto devicePose = [&vr](uint32_t device, vr::HmdMatrix34_t& pose) { return vr.devicePose(device, pose); };
+    /** T05 / #24: after a grab ended, saves where the HUD was last shown (not a later controller pose). */
+    const auto saveReleasedPose = [&](const char* why) {
         vr.applyConfig(config);
         std::string error;
         if (!watcher.save(config, error)) std::fprintf(stderr, "[config] Saving failed: %s\n", error.c_str());
         std::fprintf(stderr, "[detached] released (%s): saved at (%.3f, %.3f, %.3f)\n", why, config.detachedPose.m[0][3],
                      config.detachedPose.m[1][3], config.detachedPose.m[2][3]);
         settingsDirty = true;
+    };
+    /** T05: ends a grab the dashboard can't end itself (attach point changed, HUD off) and saves the pose. */
+    const auto releaseGrab = [&](const char* why) {
+        if (!grab.active()) return;
+        grab.end();
+        saveReleasedPose(why);
     };
     while (!gStopRequested && !userQuit) {
         ++loopCount;
@@ -1542,9 +1547,11 @@ int runOverlay(const Options& options) {
             }
         }
         // ---- Input deadline: dashboard events only while the tab is visible; SteamVR events on the tick ----
-        // T05: also while the HUD takes the laser (Detached, dashboard open)
-        const VrEvents events =
-            metricsTick || settingsVisible || vr.panelInteractive() ? vr.pollEvents(metricsTick) : VrEvents {};
+        // T05: also while the HUD takes the laser (Detached, dashboard open). #24: SteamVR's events included then, so
+        // a dashboard close ends a grab at once
+        const VrEvents events = metricsTick || settingsVisible || vr.panelInteractive()
+                                    ? vr.pollEvents(metricsTick || vr.panelInteractive())
+                                    : VrEvents {};
         // SteamVR itself quitting (VREvent_Quit) exits with 0. Close on the dashboard icon (VREvent_OverlayClosed)
         // is the user quitting, like Quit on the tab: exit code 3, so systemd doesn't restart us
         if (events.quit) break;
@@ -1607,6 +1614,7 @@ int runOverlay(const Options& options) {
         }
 
         // Pointer on the dashboard tab
+        bool settingChanged = false;  // #24: a setting changed in this pass ends a Detached drag (the setting wins)
         if (!events.pointer.empty()) {
             lastPointerEvent = loopStart;
             // T05: a press works on the layout as it is now (a PC may have changed it)
@@ -1663,7 +1671,7 @@ int runOverlay(const Options& options) {
                         refreshProfilesUi();
                         nextPanel = std::min(nextPanel, nowSeconds());  // a new layout shows on the HUD now
                     } else {
-                        handleSettingsAction(action, config, watcher, vr, settings.angleStepDeg());
+                        settingChanged |= handleSettingsAction(action, config, watcher, vr, settings.angleStepDeg());
                         applySessionLogs(nowSeconds());  // Session logs On / Off: before any Save or exit
                     }
                     settingsDirty = true;
@@ -1704,31 +1712,31 @@ int runOverlay(const Options& options) {
         if (userQuit) break;
 
         // ---- T05: Detached grab. Press on the HUD = grab; it follows the laser until release ----
-        for (const GrabInput& g : events.grab) {
-            if (g.down && !grab.active() && vr.panelInteractive() && config.attachment == Attachment::Detached) {
-                vr::HmdMatrix34_t device {};
-                if (vr.devicePose(g.device, device) && grab.begin(g.device, device, config.detachedPose)) {
-                    std::fprintf(stderr, "[detached] grabbed with device %u\n", g.device);
-                }
-            } else if (!g.down) {
-                releaseGrab("laser released");
-            }
-        }
+        // #24: a setting changed this pass (Bring it in front, Face me, a nudge, the attach point, Reset, ...) ends a
+        // drag with the setting's result, and so does a dashboard close. So does the laser going to the other
+        // controller (its grip): SteamVR then never sends the mouse-up
+        const bool wasGrabbing = grab.active();
+        const uint32_t laserDevice = wasGrabbing ? vr.dashboardLaserDevice() : vr::k_unTrackedDeviceIndexInvalid;
+        const GrabStep step = stepGrab(grab, events.grab, events.dashboardClosed || settingChanged,
+                                       vr.panelInteractive() && config.attachment == Attachment::Detached, devicePose,
+                                       config.detachedPose, laserDevice);  // in memory; saved on release
+        if (!wasGrabbing && grab.active()) std::fprintf(stderr, "[detached] grabbed with device %u\n", grab.device());
         if (events.dashboardClosed) {
-            // Closing the dashboard mid-drag counts as a release; then the HUD stops taking the laser at once
-            releaseGrab("dashboard closed");
+            // The HUD stops taking the laser at once, before the release below is applied and saved
             vr.setPanelInteractive(false);
             dashboardOpen = false;
             scrollEventsLogged = 0;
             settingsDirty |= settings.pointerLeave();  // an editor drag in progress is cancelled
         }
-        if (grab.active()) {
-            vr::HmdMatrix34_t device {};
-            if (vr.devicePose(grab.device(), device)) {
-                config.detachedPose = grab.follow(device);  // in memory; saved on release
-                vr.setDetachedTransform(config.detachedPose);
-            }
+        if (step.released) {
+            char why[48] = "laser released";
+            if (events.dashboardClosed) std::snprintf(why, sizeof(why), "dashboard closed");
+            else if (settingChanged) std::snprintf(why, sizeof(why), "setting changed");
+            else if (step.laserMoved) std::snprintf(why, sizeof(why), "laser moved to device %u", laserDevice);
+            saveReleasedPose(why);
         }
+        // #24: only a Detached HUD goes to room space (an attach change mid-drag must not put it back there)
+        if (step.moved && config.attachment == Attachment::Detached) vr.setDetachedTransform(config.detachedPose);
         if (metricsTick) {
             settingsDirty |= settings.tick(loopStart);  // "press again to quit" expiry
             settingsDirty |= autostart.poll();          // reap systemctl if it finished

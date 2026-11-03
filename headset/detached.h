@@ -6,6 +6,8 @@
 #include "openvr.h"
 
 #include <cstdint>
+#include <functional>
+#include <vector>
 
 /** Distance "Bring it in front of me" puts the HUD at (m). */
 constexpr double kDetachedFrontDistanceM = 1.0;
@@ -97,6 +99,12 @@ DetachedPose nudgeDetached(const DetachedPose& pose, int axis, double meters);
  */
 DetachedPose rotateDetached(const DetachedPose& pose, int axis, double degrees);
 
+/** The laser pressing / releasing on the HUD itself (only while it takes mouse input: Detached + dashboard open). */
+struct GrabInput {
+    bool down = false;    ///< true = press, false = release
+    uint32_t device = 0;  ///< the pointing device (vr::TrackedDeviceIndex_t)
+};
+
 /**
  * One laser grab of the Detached HUD: on press it remembers the HUD's pose relative to the pointing device, and while
  * held the HUD follows the device rigidly (device pose × grab offset).
@@ -132,3 +140,32 @@ private:
     uint32_t device_ = vr::k_unTrackedDeviceIndexInvalid;
     vr::HmdMatrix34_t offset_ {};  ///< device → HUD
 };
+
+/** #24: what one stepGrab pass did. */
+struct GrabStep {
+    bool released = false;    ///< a grab ended: save pose (it's where the HUD was last shown)
+    bool laserMoved = false;  ///< ...because the dashboard's laser went to another controller
+    bool moved = false;       ///< pose follows the laser: show it there now
+};
+
+/**
+ * #24: one main-loop pass of laser input on the Detached HUD, in this order: endGrab ends the grab first (so nothing
+ * after it is followed, and pose stays as it is), then presses and releases as they came, then the laser check, then
+ * the follow.
+ *
+ * The laser check ends the grab when the dashboard's laser is on another controller than the grabbing one (its grip
+ * moves the laser, even for a moment, and then SteamVR never sends the mouse-up). An invalid laserDevice is ignored.
+ * @param grab the grab (changed)
+ * @param inputs this pass's presses / releases on the HUD
+ * @param endGrab end any grab now: the dashboard closed (VREvent_DashboardDeactivated), or a dashboard setting
+ *                changed this pass (its pose / attach point is already in pose / the config)
+ * @param interactive the HUD takes the laser now (a press starts a grab only then)
+ * @param devicePose a device's standing-space pose now (false = not tracked)
+ * @param pose the room pose (changed while a grab follows; kept as it is on release)
+ * @param laserDevice the controller with the dashboard's laser now (IVROverlay::GetPrimaryDashboardDevice;
+ *                    vr::k_unTrackedDeviceIndexInvalid = unknown, no check)
+ * @return what happened
+ */
+GrabStep stepGrab(DetachedGrab& grab, const std::vector<GrabInput>& inputs, bool endGrab, bool interactive,
+                  const std::function<bool(uint32_t, vr::HmdMatrix34_t&)>& devicePose, DetachedPose& pose,
+                  uint32_t laserDevice = vr::k_unTrackedDeviceIndexInvalid);

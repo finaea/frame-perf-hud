@@ -206,7 +206,7 @@ The HUD shows up whenever SteamVR runs. Its settings are in the SteamVR dashboar
 | Top L / Top R / Bottom L / Bottom C / Bottom R (head) | Move it to that corner of the view |
 | Default wrist position (hand) | Put that hand's HUD back to the standard place and facing |
 | Bring it in front of me (room) | Put it 1 m ahead at eye height, facing the viewer. The first switch to Room does this too |
-| Moving it (room) | While the dashboard is open, point the laser at the HUD itself, hold the trigger and move it. Letting go leaves it there |
+| Moving it (room) | While the dashboard is open, point the laser at the HUD itself, hold the trigger and move it. Letting go leaves it there. Moving the laser to the other controller (for example with its grip), closing the dashboard or changing a setting while moving it also lets go |
 | Curve − / + (room) | Wrap the HUD around the viewer, from flat to 90° of arc in 10° steps |
 | Nudge: Left / Right / Up / Down, Closer / Farther | Head: 2 cm (5 cm for closer / farther). Hand: 1 cm along the HUD's own axes. Room: 2 cm (5 cm) along the HUD's own axes |
 | Facing: Left / Right / Up / Down, Rotate L / R | Turn or spin the HUD by the chosen step (By 1° / By 5°) |
