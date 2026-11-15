@@ -4,6 +4,7 @@
 #include <array>
 #include <deque>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -18,11 +19,30 @@ struct FrameLayout {
     const char* name;
     const char* header;
     const char* row;
-    uint32_t stride, fileOffset, indexOffset;
-    std::array<uint32_t, 12> stamps; // WGP through Decode Query, omitting GPU stamps
+    uint32_t stride, fileOffset, indexOffset; // indexOffset 0: found at runtime (derived layouts)
+    std::array<uint32_t, 12> stamps;          // WGP through Decode Query, omitting GPU stamps
     uint32_t pingOffset;
 };
 extern const FrameLayout kFrameLayouts[2];
+// A layout read off the DLL's CSV writer when the header is not a known one. Owns the strings it points at.
+struct DerivedLayout {
+    std::string header, row;
+    FrameLayout layout{};
+};
+// What the CSV writer does with one record: the ring stride, the FILE* offset in its owner, and the record offset
+// behind each printf argument after the format string (-1 when it isn't a plain record field).
+struct WriterShape {
+    uint32_t stride = 0, fileOffset = 0;
+    std::vector<int32_t> args;
+};
+// Decodes the MSVC writer shape only: imul for the stride, movups/movaps stack copies of the record, then u32 loads
+// into r8/r9 and [rsp+0x20+8k]. `lea` is the offset of the format string's lea inside `code`; decoding stops at the
+// first call after it.
+bool decodeCsvWriter(const uint8_t* code, size_t size, size_t lea, WriterShape& out);
+// Maps the writer's arguments to parseFrame's fields by column name. False, with a note naming the problem, when a
+// needed column is missing, not a plain 32-bit field, or the counts disagree.
+bool deriveLayout(const std::string& header, const std::string& row, const WriterShape& writer, DerivedLayout& out,
+                  std::string& note);
 class Memory {
 public:
     virtual ~Memory() = default;
@@ -36,11 +56,17 @@ struct Anchors {
     uint32_t serverGlobal = 0, mapOffset = 0, aftmOffset = 0, linkPingOffset = 0, uberPingOffset = 0;
     uint32_t stride = 0, fileOffset = 0;
     const FrameLayout* layout = &kFrameLayouts[0];
+    std::shared_ptr<const DerivedLayout> derived; // owns *layout when the layout was derived
     uint32_t remoteAddressOffset = 0, remoteGetterRva = 0;
+    // SVLServer vtable RVAs (from RTTI) and the .data range the reader scans for globals pointing at one.
+    std::vector<uint32_t> serverVtables;
+    uint32_t dataRva = 0, dataSize = 0;
     bool l1 = false, l2 = false, l3 = false;
     std::string l1Note, l2Note, l3Note;
+    std::string serverHow, layoutHow; // for the log: how the server global and the frame layout were found
 };
-Anchors findAnchors(const std::vector<uint8_t>& dll);
+// forceDerive skips the known headers and derives the layout from the CSV writer (probe check).
+Anchors findAnchors(const std::vector<uint8_t>& dll, bool forceDerive = false);
 bool sameLoadedBuild(Memory& memory, uint64_t module, const Anchors& anchors);
 bool rttiIs(Memory& memory, uint64_t obj, uint64_t module, uint32_t imageSize, const char* expected);
 std::string readLinkEndpoint(Memory& memory, uint64_t link, uint64_t module, const Anchors& anchors);
@@ -84,11 +110,30 @@ public:
     uint64_t published() const {
         return frames_.published();
     }
+    // Which global the server is read through and how it was found; empty until found.
+    const std::string& serverHow() const {
+        return serverHow_;
+    }
+    // Write index offset from the ring start; for a derived layout 0 until found at runtime.
+    uint32_t indexOffset() const;
 
 private:
     Memory& memory_;
     uint64_t module_;
     Anchors anchors_;
+    uint32_t global_ = 0, foundIndex_ = 0;
+    double scanAt_ = 0;
+    std::string serverHow_, serverNote_;
+    struct IndexCandidate {
+        uint32_t offset;
+        uint16_t value;
+    };
+    std::vector<IndexCandidate> indexCandidates_;
+    uint16_t candidateExpected_ = 0;
+    bool serverAt(uint32_t global, uint64_t& srv);
+    bool locateServer(double now, uint64_t& srv);
+    bool findIndex(uint64_t ring);
+    bool readLarge(uint64_t address, uint8_t* dest, size_t bytes);
     uint64_t server_ = 0, head_ = 0, root_ = 0, uber_ = 0, bw_ = 0, mapSize_ = 0, walkedSize_ = 0;
     std::array<uint64_t, 16> links_{};
     uint16_t index_ = 0;

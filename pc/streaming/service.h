@@ -8,10 +8,14 @@
 namespace fph {
 namespace pc {
 namespace streaming {
+// Probe-only switches that force the fallback paths on a build the fast paths still handle.
+struct ServiceProbe {
+    bool headerMismatch = false, derive = false, noCodePair = false;
+};
 // Owns all OpenVR and process handles on one worker. UI only transfers immutable snapshots.
 class Service {
 public:
-    explicit Service(bool forceHeaderMismatch = false);
+    explicit Service(ServiceProbe probe = {});
     ~Service();
     void setDemand(bool enabled);
     bool take(MetricStore& store, double now);

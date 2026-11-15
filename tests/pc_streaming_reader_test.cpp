@@ -18,6 +18,7 @@
 #include "stream_metrics.h"
 #include "streaming/reader.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -1414,6 +1415,806 @@ void testReaderEndpointFailureDoesNotAffectL2Timing() {
     CHECK(notOk(store, metric::kPcStreamLink1Address));
 }
 
+// ==================== Reader: SVLServer found by an RTTI scan of .data ====================
+
+constexpr uint32_t kScanDataRva = 0x3000, kScanDataSize = 0x200; // 64 qwords of fake .data
+constexpr uint64_t kBogusObject = kModuleBase + 0x4000;          // an object whose RTTI name is "bogus"
+
+/** Anchors with the code-pair global dropped (or kept) and the scan inputs a real findAnchors would fill. */
+Anchors scanAnchors(uint32_t timestamp, bool codePair) {
+    Anchors a = goldenAnchors(timestamp);
+    if (!codePair)
+        a.serverGlobal = 0;
+    a.serverVtables = {static_cast<uint32_t>(kVtServer - kModuleBase)};
+    a.dataRva = kScanDataRva;
+    a.dataSize = kScanDataSize;
+    return a;
+}
+
+void setDataGlobal(FakeMemory& mem, unsigned slot, uint64_t pointerValue) {
+    mem.poke<uint64_t>(kModuleBase + kScanDataRva + slot * 8ull, pointerValue);
+}
+
+/** L1 fully live: no note, and a named value actually published. */
+bool l1Live(const MetricStore& s) {
+    return noteOf(s, metric::kPcStreamL1Note).empty() && isOkF32(s, metric::kPcStreamNamedPing, 2.0, 1e-6);
+}
+
+void testScanAgreeingGlobalsPublish() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    setObjectRtti(mem, kBogusObject, kVtBogus);
+    // three globals at the same server (lowest is slot 1), plus two pointers that are not an SVLServer
+    setDataGlobal(mem, 32, w.srv);
+    setDataGlobal(mem, 8, w.srv);
+    setDataGlobal(mem, 1, w.srv);
+    setDataGlobal(mem, 5, kBogusObject);
+    setDataGlobal(mem, 6, w.uber);
+
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, false));
+    MetricStore store(readerMetricDefs());
+    CHECK(reader.serverHow().empty()); // nothing chosen before the first tick
+    reader.tick(10.0, store);
+    CHECK(reader.serverHow() == "RTTI scan (rva 3008)"); // the scan ran and the lowest hit was taken
+    CHECK(l1Live(store));
+    CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
+    CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+}
+
+void testScanDisagreeingGlobalsFailL1() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w1 = buildWorld(mem, 0x10000, 300, 0, 1000);
+    const World w2 = buildWorld(mem, 0x300000, 500, 0, 5000);
+    setDataGlobal(mem, 2, w1.srv);
+    setDataGlobal(mem, 9, w2.srv);
+
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, false));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store);
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server globals disagree");
+    CHECK(reader.serverHow().empty());
+    CHECK(notOk(store, metric::kPcStreamNamedPing));
+    CHECK(notOk(store, metric::kPcStreamFps));
+}
+
+void testScanNoHitFailsL1() {
+    // only non-servers in .data: a bogus-RTTI object and the Uber
+    {
+        FakeMemory mem;
+        setupModule(mem, kKnownBuild);
+        const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+        setObjectRtti(mem, kBogusObject, kVtBogus);
+        setDataGlobal(mem, 3, kBogusObject);
+        setDataGlobal(mem, 4, w.uber);
+        Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, false));
+        MetricStore store(readerMetricDefs());
+        reader.tick(10.0, store);
+        CHECK(noteOf(store, metric::kPcStreamL1Note) == "server RTTI/map mismatch");
+        CHECK(reader.serverHow().empty());
+        CHECK(notOk(store, metric::kPcStreamNamedPing));
+    }
+    // a real server, but its vtable is not in the SVLServer vtable list
+    {
+        FakeMemory mem;
+        setupModule(mem, kKnownBuild);
+        const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+        setDataGlobal(mem, 3, w.srv);
+        Anchors a = scanAnchors(kKnownBuild, false);
+        a.serverVtables = {static_cast<uint32_t>(kVtLink - kModuleBase)};
+        Reader reader(mem, kModuleBase, a);
+        MetricStore store(readerMetricDefs());
+        reader.tick(10.0, store);
+        CHECK(noteOf(store, metric::kPcStreamL1Note) == "server RTTI/map mismatch");
+        CHECK(notOk(store, metric::kPcStreamNamedPing));
+    }
+    // a listed vtable whose RTTI name is not SVLServer is still refused
+    {
+        FakeMemory mem;
+        setupModule(mem, kKnownBuild);
+        buildWorld(mem, 0x10000, 300, 0, 0);
+        setObjectRtti(mem, kBogusObject, kVtBogus);
+        setDataGlobal(mem, 3, kBogusObject);
+        Anchors a = scanAnchors(kKnownBuild, false);
+        a.serverVtables.push_back(static_cast<uint32_t>(kVtBogus - kModuleBase));
+        Reader reader(mem, kModuleBase, a);
+        MetricStore store(readerMetricDefs());
+        reader.tick(10.0, store);
+        CHECK(noteOf(store, metric::kPcStreamL1Note) == "server RTTI/map mismatch");
+    }
+}
+
+/** The chosen global goes stale and another one points at a new server. The scan only runs every 10 s, so the
+ *  ticks before the gate stay N/A; the first one past it recovers and counts the owner change. */
+void testScanStalePointerRecoversAfterGate() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w1 = buildWorld(mem, 0x10000, 300, 0, 1000);
+    const World w2 = buildWorld(mem, 0x300000, 500, /*extraTail=*/1, 5000);
+    setObjectRtti(mem, kBogusObject, kVtBogus);
+    setDataGlobal(mem, 0, w1.srv);
+
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, false));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store); // scan, gate now 20
+    CHECK(reader.serverHow() == "RTTI scan (rva 3000)");
+    CHECK(l1Live(store));
+
+    setDataGlobal(mem, 0, kBogusObject); // the chosen global goes stale
+    setDataGlobal(mem, 1, w2.srv);       // another global already points at the new server
+    for (const double now : {11.0, 15.0, 19.5}) {
+        reader.tick(now, store);
+        CHECK(noteOf(store, metric::kPcStreamL1Note) == "server RTTI/map mismatch"); // gated: no scan yet
+        CHECK(reader.serverHow().empty());
+        CHECK(notOk(store, metric::kPcStreamNamedPing));
+    }
+    CHECK(reader.resets() == 0);
+
+    reader.tick(20.0, store); // gate open
+    CHECK(reader.serverHow() == "RTTI scan (rva 3008)");
+    CHECK(l1Live(store));
+    CHECK(reader.resets() == 1);
+    CHECK(noteOf(store, metric::kPcStreamL2Note).empty());
+    CHECK(noteOf(store, metric::kPcStreamL3Note) == "stream reset; waiting"); // the owner change was seen
+
+    mem.poke<uint16_t>(w2.srv + 0x88000, static_cast<uint16_t>(501));
+    reader.tick(20.5, store);
+    CHECK(noteOf(store, metric::kPcStreamL3Note).empty());
+    CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+}
+
+/** The chosen global is cleared and nothing else points at a server: an empty scan still re-arms the gate. */
+void testScanEmptyScanRearmsGate() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 1000);
+    setDataGlobal(mem, 0, w.srv);
+
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, false));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store);
+    CHECK(l1Live(store));
+
+    setDataGlobal(mem, 0, 0);
+    reader.tick(11.0, store); // gated
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server RTTI/map mismatch");
+    reader.tick(20.0, store); // scans, finds nothing: the gate moves to 30
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server RTTI/map mismatch");
+
+    setDataGlobal(mem, 1, w.srv); // a hit exists now, but the scan at 20 re-armed the gate
+    reader.tick(21.0, store);
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server RTTI/map mismatch");
+    CHECK(reader.serverHow().empty());
+    reader.tick(29.9, store);
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server RTTI/map mismatch");
+
+    reader.tick(30.0, store);
+    CHECK(reader.serverHow() == "RTTI scan (rva 3008)");
+    CHECK(l1Live(store));
+    CHECK(reader.resets() == 0); // same object as before, so not an owner change
+    CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+}
+
+void testScanAgreesWithCodePair() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    setActiveServer(mem, w.srv); // the code-pair global
+    setDataGlobal(mem, 2, w.srv);
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, true));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store);
+    CHECK(reader.serverHow() == "code pair, RTTI scan agrees (rva 2000)");
+    CHECK(l1Live(store));
+    CHECK(isOkF32(store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+}
+
+void testScanDisagreesWithCodePair() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w1 = buildWorld(mem, 0x10000, 300, 0, 1000);
+    const World w2 = buildWorld(mem, 0x300000, 500, 0, 5000);
+    setActiveServer(mem, w1.srv);
+    setDataGlobal(mem, 2, w2.srv);
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, true));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store);
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server globals disagree");
+    CHECK(reader.serverHow().empty());
+    CHECK(notOk(store, metric::kPcStreamNamedPing));
+}
+
+void testCodePairAloneWithEmptyScanArea() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    setActiveServer(mem, buildWorld(mem, 0x10000, 300, 0, 0).srv);
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, true)); // scan inputs set, .data holds no server
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store);
+    CHECK(reader.serverHow() == "code pair (rva 2000)");
+    CHECK(l1Live(store));
+}
+
+/** The code-pair global goes stale while a .data global points at the server: the scan takes over after its gate. */
+void testCodePairStaleFallsBackToScan() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w = buildWorld(mem, 0x10000, 300, 0, 0);
+    setActiveServer(mem, w.srv);
+    setDataGlobal(mem, 2, w.srv);
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, true));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store);
+    CHECK(reader.serverHow() == "code pair, RTTI scan agrees (rva 2000)");
+
+    setActiveServer(mem, 0);
+    reader.tick(11.0, store); // gated
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server RTTI/map mismatch");
+    CHECK(reader.serverHow().empty());
+    reader.tick(20.0, store);
+    CHECK(reader.serverHow() == "RTTI scan (rva 3010)");
+    CHECK(l1Live(store));
+    CHECK(reader.resets() == 0);
+}
+
+// ==================== findAnchors on a synthetic PE ====================
+
+/** A minimal PE32+ image: .text (rva 0x1000), .rdata (0x2000, optionally an SVLServer RTTI chain), .data (0x3000,
+ *  virtual size 0x1000). `text` is copied to the start of .text. Hand-built, no bytes from a real driver. */
+std::vector<uint8_t> buildPe(const std::vector<uint8_t>& text, bool rtti) {
+    constexpr uint64_t kImageBase = 0x180000000ULL;
+    std::vector<uint8_t> f(0xa00, 0);
+    const auto w16 = [&](size_t o, uint16_t v) { std::memcpy(f.data() + o, &v, 2); };
+    const auto w32 = [&](size_t o, uint32_t v) { std::memcpy(f.data() + o, &v, 4); };
+    const auto w64 = [&](size_t o, uint64_t v) { std::memcpy(f.data() + o, &v, 8); };
+    f[0] = 'M';
+    f[1] = 'Z';
+    w32(0x3c, 0x80);
+    const size_t p = 0x80;
+    w32(p, 0x4550);
+    w16(p + 4, 0x8664);
+    w16(p + 6, 3);
+    w32(p + 8, 0x5ee00001);
+    w16(p + 20, 0xf0);
+    const size_t opt = p + 24;
+    w16(opt, 0x20b);
+    w64(opt + 24, kImageBase);
+    w32(opt + 56, 0x5000);
+    struct Sec {
+        const char* name;
+        uint32_t vsize, rva, rsize, raw;
+    };
+    const Sec secs[3] = {{".text", 0x200, 0x1000, 0x200, 0x400},
+                         {".rdata", 0x200, 0x2000, 0x200, 0x600},
+                         {".data", 0x1000, 0x3000, 0x200, 0x800}};
+    for (size_t i = 0; i < 3; ++i) {
+        const size_t s = opt + 0xf0 + i * 40;
+        std::memcpy(f.data() + s, secs[i].name, std::strlen(secs[i].name));
+        w32(s + 8, secs[i].vsize);
+        w32(s + 12, secs[i].rva);
+        w32(s + 16, secs[i].rsize);
+        w32(s + 20, secs[i].raw);
+    }
+    std::memcpy(f.data() + 0x400, text.data(), text.size());
+    if (rtti) {
+        const std::string name = ".?AVSVLServer@@";
+        std::memcpy(f.data() + 0x600 + 0x10, name.c_str(), name.size() + 1); // type descriptor at rva 0x2000
+        const size_t col = 0x600 + 0x40;                                     // locator at rva 0x2040
+        w32(col, 1);
+        w32(col + 12, 0x2000);
+        w32(col + 20, 0x2040);
+        w64(0x600 + 0x80, kImageBase + 0x2040); // locator pointer; the vtable starts right after, rva 0x2088
+    }
+    return f;
+}
+
+/** `mov [rip+g1],r15` then `mov [rip+g2],rbx` back to back, the shape of the server global's store pair. */
+void storePair(std::vector<uint8_t>& text, uint32_t g1, uint32_t g2) {
+    const uint32_t rva = 0x1000 + static_cast<uint32_t>(text.size());
+    const int32_t r1 = static_cast<int32_t>(g1) - static_cast<int32_t>(rva + 7);
+    const int32_t r2 = static_cast<int32_t>(g2) - static_cast<int32_t>(rva + 14);
+    const uint8_t a[3] = {0x4c, 0x89, 0x3d}, b[3] = {0x48, 0x89, 0x1d};
+    text.insert(text.end(), a, a + 3);
+    text.insert(text.end(), reinterpret_cast<const uint8_t*>(&r1), reinterpret_cast<const uint8_t*>(&r1) + 4);
+    text.insert(text.end(), b, b + 3);
+    text.insert(text.end(), reinterpret_cast<const uint8_t*>(&r2), reinterpret_cast<const uint8_t*>(&r2) + 4);
+}
+
+void testFindAnchorsCodePairWithoutGapRule() {
+    // the second store is 0x7f0 bytes after the first (the old rule demanded exactly 0x40)
+    {
+        std::vector<uint8_t> text;
+        storePair(text, 0x3010, 0x3800);
+        const Anchors a = findAnchors(buildPe(text, true));
+        CHECK(a.serverGlobal == 0x3010);
+        CHECK(a.serverVtables.size() == 1 && a.serverVtables[0] == 0x2088);
+        CHECK(a.dataRva == 0x3000 && a.dataSize == 0x1000);
+        CHECK(a.serverHow == "code pair+RTTI scan");
+    }
+    // the second global below the first (build 1794602179 had -0xa18)
+    {
+        std::vector<uint8_t> text;
+        storePair(text, 0x3f00, 0x3008);
+        CHECK(findAnchors(buildPe(text, true)).serverGlobal == 0x3f00);
+    }
+    // no RTTI chain in the image: the pair alone still anchors, with no scan inputs
+    {
+        std::vector<uint8_t> text;
+        storePair(text, 0x3010, 0x3800);
+        const Anchors a = findAnchors(buildPe(text, false));
+        CHECK(a.serverGlobal == 0x3010);
+        CHECK(a.serverVtables.empty());
+        CHECK(a.serverHow == "code pair");
+    }
+    // the global must sit inside .data
+    {
+        std::vector<uint8_t> text;
+        storePair(text, 0x2100, 0x3800);
+        const Anchors a = findAnchors(buildPe(text, true));
+        CHECK(a.serverGlobal == 0);
+        CHECK(a.serverHow == "RTTI scan");
+    }
+    // two different pairs are ambiguous, not "pick the first"
+    {
+        std::vector<uint8_t> text;
+        storePair(text, 0x3010, 0x3800);
+        text.push_back(0xcc);
+        storePair(text, 0x3200, 0x3800);
+        CHECK(findAnchors(buildPe(text, true)).serverGlobal == 0);
+    }
+}
+
+// ==================== decodeCsvWriter / deriveLayout on a synthetic writer ====================
+
+/** Hand-assembled in the writer's shape (no bytes from any real driver). */
+struct Asm {
+    std::vector<uint8_t> b;
+    void u8(unsigned v) {
+        b.push_back(static_cast<uint8_t>(v));
+    }
+    void i32(int32_t v) {
+        for (unsigned k = 0; k < 4; ++k)
+            u8(static_cast<unsigned>(v >> (8 * k)) & 0xff);
+    }
+    void rex(bool w, unsigned reg, unsigned base) {
+        const unsigned r = 0x40 | (w ? 8 : 0) | (reg >= 8 ? 4 : 0) | (base >= 8 ? 1 : 0);
+        if (r != 0x40)
+            u8(r);
+    }
+    // [base+disp] operand, base not rsp/r12
+    void mem(unsigned regField, unsigned base, int32_t disp) {
+        const bool small = disp >= -128 && disp <= 127;
+        u8((small ? 0x40 : 0x80) | ((regField & 7) << 3) | (base & 7));
+        if (small)
+            u8(static_cast<uint8_t>(disp));
+        else
+            i32(disp);
+    }
+    // mov [rsp+disp], r32 (SIB form)
+    void stackStore(unsigned regField, int32_t disp) {
+        const bool small = disp >= -128 && disp <= 127;
+        rex(false, regField, 4);
+        u8(0x89);
+        u8((small ? 0x40 : 0x80) | ((regField & 7) << 3) | 4);
+        u8(0x24);
+        if (small)
+            u8(static_cast<uint8_t>(disp));
+        else
+            i32(disp);
+    }
+};
+
+struct Col {
+    std::string name, spec;
+    int32_t off;
+    bool direct; // loaded straight from [record+off] instead of from the stack copy
+};
+
+struct Writer {
+    std::vector<uint8_t> code;
+    size_t lea = 0;
+};
+
+constexpr uint32_t kWriterFileOffset = 0xa8080;
+
+/** imul reg,rax,stride; add reg,rcx; movups/movaps copy of the record to the stack; then the printf argument setup:
+ *  r8 = column 0, r9 = column 1, columns 2.. at [rsp+0x20+8k]; lea of the format string; mov rcx,[rsi+file]; call. */
+Writer emitWriter(uint32_t stride, bool imm8, unsigned reg, const std::vector<Col>& cols) {
+    constexpr int32_t kStack = -0x180;
+    Asm a;
+    a.rex(true, reg, 0);
+    a.u8(imm8 ? 0x6b : 0x69);
+    a.u8(0xc0 | ((reg & 7) << 3));
+    if (imm8)
+        a.u8(stride);
+    else
+        a.i32(static_cast<int32_t>(stride));
+    a.rex(true, reg, 0);
+    a.u8(0x03);
+    a.u8(0xc0 | ((reg & 7) << 3) | 1);
+    for (uint32_t c = 0; c < stride; c += 16) {
+        a.rex(false, 0, reg);
+        a.u8(0x0f);
+        a.u8(0x10);
+        a.mem(0, reg, static_cast<int32_t>(c));
+        a.u8(0x0f);
+        a.u8(0x29);
+        a.mem(0, 5, kStack + static_cast<int32_t>(c));
+    }
+    for (size_t k = 2; k < cols.size(); ++k)
+        if (cols[k].direct) {
+            a.rex(false, 11, reg);
+            a.u8(0x8b);
+            a.mem(11, reg, cols[k].off);
+            a.stackStore(11, 0x20 + 8 * static_cast<int32_t>(k - 2));
+        }
+    Writer w;
+    w.lea = a.b.size();
+    a.u8(0x48);
+    a.u8(0x8d);
+    a.u8(0x15);
+    a.i32(0x1234);
+    const auto load = [&](unsigned dst, const Col& c) {
+        const unsigned base = c.direct ? reg : 5;
+        a.rex(false, dst, base);
+        a.u8(0x8b);
+        a.mem(dst, base, c.direct ? c.off : kStack + c.off);
+    };
+    load(9, cols[1]);
+    load(8, cols[0]);
+    a.rex(true, 1, 6);
+    a.u8(0x8b);
+    a.mem(1, 6, static_cast<int32_t>(kWriterFileOffset));
+    for (size_t k = cols.size() - 1; k >= 2; --k)
+        if (!cols[k].direct) {
+            a.u8(0x8b);
+            a.mem(0, 5, kStack + cols[k].off);
+            a.stackStore(0, 0x20 + 8 * static_cast<int32_t>(k - 2));
+        }
+    a.u8(0xe8);
+    a.i32(0x100);
+    a.u8(0xc3);
+    w.code = a.b;
+    return w;
+}
+
+const char* const kColumnNames[15] = {"Present ID",   "WGP Release", "App Submit",     "Encode Start",
+                                      "Encode End",   "Send Start",  "Send End",       "Receive",
+                                      "Decode Start", "Decode End",  "Submit Illumination", "Predicted Display",
+                                      "Decode Query", "Ping At Send Start", "TX ID"};
+
+/** The 15 columns with record offsets: in column order when shuffle is 0, else scattered (Present ID stays at 0). */
+std::vector<Col> csvColumns(uint32_t stride, unsigned shuffle, const std::vector<unsigned>& direct,
+                            bool predicted = true) {
+    std::vector<Col> cols;
+    for (unsigned k = 0; k < 15; ++k) {
+        if (!predicted && k == 11)
+            continue;
+        const int32_t off = k == 0 ? 0
+                            : shuffle == 0 ? static_cast<int32_t>(4 * k)
+                                           : static_cast<int32_t>(4 * (1 + (k * shuffle) % (stride / 4 - 1)));
+        const bool isDirect = std::find(direct.begin(), direct.end(), k) != direct.end();
+        cols.push_back({kColumnNames[k], k == 13 || k == 14 ? "%d" : "%u", off, isDirect});
+    }
+    return cols;
+}
+
+int32_t colOffset(const std::vector<Col>& cols, const std::string& name) {
+    for (const auto& c : cols)
+        if (c.name == name)
+            return c.off;
+    return -1;
+}
+
+struct Derived {
+    WriterShape shape;
+    DerivedLayout d;
+    std::string note;
+    bool decoded = false, ok = false;
+};
+
+void deriveFrom(Derived& r, uint32_t stride, bool imm8, unsigned reg, const std::vector<Col>& cols) {
+    const Writer w = emitWriter(stride, imm8, reg, cols);
+    std::string header, row;
+    for (size_t k = 0; k < cols.size(); ++k) {
+        header += (k ? "," : "") + cols[k].name;
+        row += (k ? "," : "") + cols[k].spec;
+    }
+    header += "\n";
+    row += "\n";
+    r.decoded = decodeCsvWriter(w.code.data(), w.code.size(), w.lea, r.shape);
+    r.ok = r.decoded && deriveLayout(header, row, r.shape, r.d, r.note);
+}
+
+/** The derived layout against the offsets the fixture chose, then a record built from those offsets (not from the
+ *  layout) through parseFrame: the mapping has to be by column name. */
+void checkMapped(const Derived& r, const std::vector<Col>& cols, uint32_t stride) {
+    CHECK(r.decoded);
+    CHECK(r.ok);
+    CHECK(r.note.empty());
+    if (!r.ok)
+        return;
+    CHECK(r.shape.stride == stride);
+    CHECK(r.shape.fileOffset == kWriterFileOffset);
+    CHECK(r.shape.args.size() == cols.size());
+    for (size_t k = 0; k < cols.size() && k < r.shape.args.size(); ++k)
+        CHECK(r.shape.args[k] == cols[k].off);
+    const FrameLayout& l = r.d.layout;
+    CHECK(l.stride == stride && l.fileOffset == kWriterFileOffset && l.indexOffset == 0);
+    CHECK(std::strcmp(l.name, "derived") == 0);
+    CHECK(l.header == r.d.header.c_str() && l.row == r.d.row.c_str());
+    static const char* const stampNames[12] = {"WGP Release", "App Submit", "Encode Start", "Encode End",
+                                               "Send Start",  "Send End",   "Receive",      "Decode Start",
+                                               "Decode End",  "Submit Illumination", "Predicted Display",
+                                               "Decode Query"};
+    for (size_t j = 0; j < 12; ++j) {
+        int32_t expected = colOffset(cols, stampNames[j]);
+        if (expected < 0 && j == 10)
+            expected = colOffset(cols, "Decode Query"); // Predicted Display absent: falls back
+        CHECK(static_cast<int32_t>(l.stamps[j]) == expected);
+    }
+    CHECK(static_cast<int32_t>(l.pingOffset) == colOffset(cols, "Ping At Send Start"));
+
+    uint32_t t[13] = {};
+    baseFields(t);
+    t[12] = t[9] + 4000; // Decode Query 4 ms after Decode End
+    std::vector<uint8_t> raw(stride, 0);
+    const char* const fieldNames[13] = {"Present ID",   "WGP Release", "App Submit",   "Encode Start",
+                                        "Encode End",   "Send Start",  "Send End",     "Receive",
+                                        "Decode Start", "Decode End",  "Submit Illumination", "Predicted Display",
+                                        "Decode Query"};
+    for (size_t j = 0; j < 13; ++j) {
+        const int32_t off = colOffset(cols, fieldNames[j]);
+        if (off >= 0)
+            std::memcpy(raw.data() + off, &t[j], 4);
+    }
+    const int32_t ping = 2470;
+    std::memcpy(raw.data() + colOffset(cols, "Ping At Send Start"), &ping, 4);
+    Frame f;
+    CHECK(parseFrame(raw.data(), f, l));
+    CHECK(f.id == t[0] && f.illum == t[10]);
+    const unsigned pairs[7][2] = {{1, 2}, {3, 4}, {5, 6}, {6, 7}, {7, 9}, {9, 10}, {1, 10}};
+    for (unsigned j = 0; j < 7; ++j)
+        CHECK(std::fabs(f.ms[j] - (t[pairs[j][1]] - t[pairs[j][0]]) / 1000.0) < 1e-9);
+    CHECK(f.split && std::fabs(f.ms[7] - 4.0) < 1e-9 && std::fabs(f.ms[8] - 32.0) < 1e-9);
+    CHECK(std::fabs(f.ping - 2.47) < 1e-9);
+}
+
+void testWriterDecodeImm32ShuffledRecordDirectLoads() {
+    // imul rdi,rax,0xb0 (imm32 form); fields scattered through the record; Present ID's neighbours, the first stack
+    // argument, a register argument and the last stack argument are all read straight from [rdi+disp]
+    const auto cols = csvColumns(0xb0, 7, {1, 10, 12});
+    Derived r;
+    deriveFrom(r, 0xb0, false, 7, cols);
+    checkMapped(r, cols, 0xb0);
+    // the scatter really is scattered (guards against a fixture that happens to be in column order)
+    CHECK(colOffset(cols, "Receive") < colOffset(cols, "Send End"));
+}
+
+void testWriterDecodeImm8OtherRegister() {
+    // imul r10,rax,0x70 (imm8 form, a register that needs REX.R/B); no direct loads
+    const auto cols = csvColumns(0x70, 11, {});
+    Derived r;
+    deriveFrom(r, 0x70, true, 10, cols);
+    checkMapped(r, cols, 0x70);
+}
+
+void testWriterDecodeInOrderRegisterRbx() {
+    const auto cols = csvColumns(0x100, 0, {13});
+    Derived r;
+    deriveFrom(r, 0x100, false, 3, cols);
+    checkMapped(r, cols, 0x100);
+}
+
+void testWriterDecodeColumnOrderIsNotFieldOrder() {
+    // the header lists the columns backwards (Present ID last), the record keeps its own order: mapping is by name
+    auto cols = csvColumns(0xb0, 0, {});
+    std::reverse(cols.begin(), cols.end());
+    Derived r;
+    deriveFrom(r, 0xb0, false, 7, cols);
+    checkMapped(r, cols, 0xb0);
+    CHECK(r.ok && r.d.layout.stamps[0] == 4 && r.d.layout.pingOffset == 52); // WGP at 4*1, Ping at 4*13
+}
+
+void testWriterDecodePredictedDisplayAbsent() {
+    const auto cols = csvColumns(0xb0, 7, {}, /*predicted=*/false);
+    CHECK(colOffset(cols, "Predicted Display") < 0);
+    Derived r;
+    deriveFrom(r, 0xb0, false, 7, cols);
+    checkMapped(r, cols, 0xb0); // includes stamps[10] == Decode Query's offset
+    CHECK(r.ok && r.d.layout.stamps[10] == r.d.layout.stamps[11]);
+}
+
+void testWriterDeriveFailsClosed() {
+    // a needed column missing: false, with the column named; the writer itself still decodes
+    for (const char* missing : {"Encode End", "Decode Query", "Ping At Send Start", "WGP Release", "Present ID"}) {
+        auto cols = csvColumns(0xb0, 7, {});
+        cols.erase(std::remove_if(cols.begin(), cols.end(), [&](const Col& c) { return c.name == missing; }),
+                   cols.end());
+        Derived r;
+        deriveFrom(r, 0xb0, false, 7, cols);
+        CHECK(r.decoded);
+        CHECK(!r.ok);
+        CHECK(r.note == std::string("no column ") + missing);
+    }
+    // Present ID not at the record start
+    {
+        auto cols = csvColumns(0xb0, 7, {});
+        cols[0].off = 8;
+        Derived r;
+        deriveFrom(r, 0xb0, false, 7, cols);
+        CHECK(r.decoded && !r.ok);
+        CHECK(r.note == "Present ID not at record start");
+    }
+    // a needed column that is not a 32-bit printf field
+    {
+        auto cols = csvColumns(0xb0, 7, {});
+        cols[2].spec = "%llu";
+        Derived r;
+        deriveFrom(r, 0xb0, false, 7, cols);
+        CHECK(r.decoded && !r.ok);
+        CHECK(r.note == "App Submit not 32-bit");
+    }
+    // header and row disagree on the column count
+    {
+        WriterShape shape;
+        shape.stride = 0xb0;
+        DerivedLayout d;
+        std::string note;
+        CHECK(!deriveLayout("Present ID,WGP Release\n", "%u\n", shape, d, note));
+        CHECK(note == "CSV header/row count mismatch");
+    }
+}
+
+// ==================== Reader: write index found at runtime (derived layout) ====================
+
+constexpr uint32_t kIndexRingBytes = kFrameSlots * kFrameStride; // 0x78000: where the u16 hunt starts
+constexpr uint32_t kRealIndexAt = kIndexRingBytes + 0x2468;      // from the ring start, nowhere a known layout uses
+constexpr uint32_t kDecoyIndexAt = kIndexRingBytes + 0x0400;
+constexpr uint64_t kPingNodeValueOffset = 0x90100 + 0x40;        // sPingMS is the first map node
+
+/** A derived layout with the legacy record shape (so frameBytes-style fixtures apply) and no known index offset. */
+std::shared_ptr<DerivedLayout> legacyShapedDerived() {
+    auto d = std::make_shared<DerivedLayout>();
+    d->header = kFrameLayouts[0].header;
+    d->row = kFrameLayouts[0].row;
+    d->layout = kFrameLayouts[0];
+    d->layout.name = "derived";
+    d->layout.header = d->header.c_str();
+    d->layout.row = d->row.c_str();
+    d->layout.indexOffset = 0;
+    return d;
+}
+
+/** A world at index 300 whose real write index (and decoys) live outside any known layout's spot. */
+struct IndexRun {
+    FakeMemory mem;
+    std::shared_ptr<DerivedLayout> derived;
+    World w;
+    std::unique_ptr<Reader> reader;
+    MetricStore store;
+    uint32_t trackerAt = 0; // a second u16 that advances with the real index (ambiguity case)
+
+    explicit IndexRun(uint32_t secondTracker = 0)
+        : derived(legacyShapedDerived()), store(readerMetricDefs()), trackerAt(secondTracker) {
+        setupModule(mem, kKnownBuild);
+        // ring at srv+kLayoutAftmOffset (clear of the server's own fields); leaves a stale 300 at the legacy index
+        // spot: a decoy
+        w = buildWorldLayout(mem, 0x10000, kFrameLayouts[0], 300, 0, 1000);
+        setActiveServer(mem, w.srv);
+        mem.poke<uint16_t>(ringAt(kDecoyIndexAt), 300); // equals the expected value but never moves
+        mem.poke<uint16_t>(ringAt(kRealIndexAt), 300);
+        if (trackerAt)
+            mem.poke<uint16_t>(ringAt(trackerAt), 300);
+        Anchors a = anchorsForLayout(kKnownBuild, derived->layout);
+        a.layout = &derived->layout;
+        a.derived = derived;
+        a.layoutHow = "derived";
+        reader = std::make_unique<Reader>(mem, kModuleBase, a);
+    }
+    /** The ring moves on to `newIndex` (> 300): the newest record lands at slot newIndex-1, then the index follows. */
+    uint64_t ringAt(uint32_t offset) const {
+        return w.srv + kLayoutAftmOffset + offset;
+    }
+    void advance(uint32_t newIndex) {
+        const uint32_t slot = newIndex - 1, i = slot - 156; // the world wrote slots 156..299
+        uint32_t t[13] = {};
+        baseFields(t, i * gFixtureStepUs, 1000 + i);
+        const auto raw = frameBytesForLayout(kFrameLayouts[0], t, 2000);
+        mem.write(ringAt(slot * kFrameStride), raw.data(), raw.size());
+        mem.poke<uint16_t>(ringAt(kRealIndexAt), static_cast<uint16_t>(newIndex));
+        if (trackerAt)
+            mem.poke<uint16_t>(ringAt(trackerAt), static_cast<uint16_t>(newIndex));
+    }
+    void tick(double now) {
+        reader->tick(now, store);
+    }
+    std::string l3() const {
+        return noteOf(store, metric::kPcStreamL3Note);
+    }
+};
+
+void testIndexFinderPicksTheMovingIndexNotTheDecoy() {
+    IndexRun r;
+    r.tick(10.0); // candidates collected: the real index and both decoys all read 300
+    CHECK(r.l3() == "finding write index");
+    CHECK(r.reader->indexOffset() == 0);
+    CHECK(notOk(r.store, metric::kPcStreamFps));
+    CHECK(noteOf(r.store, metric::kPcStreamL1Note).empty() && noteOf(r.store, metric::kPcStreamL2Note).empty());
+
+    r.advance(301);
+    r.tick(10.5); // expected value changed: only the moving one survives
+    CHECK(r.l3() == "write index found");
+    CHECK(r.reader->indexOffset() == kRealIndexAt);
+    CHECK(notOk(r.store, metric::kPcStreamFps)); // the finding tick itself publishes nothing
+
+    r.tick(11.0); // first normal tick on the found index
+    CHECK(r.l3().empty());
+    CHECK(isOkF32(r.store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+    CHECK(isOkF32(r.store, metric::kPcStreamEncodeAvg, 2.6, 1e-6));
+    CHECK(r.reader->indexOffset() == kRealIndexAt);
+
+    r.advance(302);
+    r.tick(11.5);
+    CHECK(r.l3().empty());
+    CHECK(isOkF32(r.store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6));
+    CHECK(r.reader->resets() == 0);
+}
+
+void testIndexFinderAmbiguousStaysUnknown() {
+    IndexRun r(/*secondTracker=*/kRealIndexAt + 0x100); // two u16s advance in lockstep
+    r.tick(10.0);
+    CHECK(r.l3() == "finding write index");
+    r.advance(301);
+    r.tick(10.5); // two survivors: no pick
+    CHECK(r.l3() == "finding write index");
+    CHECK(r.reader->indexOffset() == 0);
+    r.advance(302);
+    r.tick(11.0);
+    CHECK(r.l3() == "finding write index");
+    CHECK(r.reader->indexOffset() == 0);
+    CHECK(notOk(r.store, metric::kPcStreamFps));
+}
+
+void testIndexFinderResetsWhenCrossCheckFails() {
+    IndexRun r;
+    r.tick(10.0);
+    r.advance(301);
+    r.tick(10.5);
+    CHECK(r.l3() == "write index found");
+    CHECK(r.reader->indexOffset() == kRealIndexAt);
+
+    // the first tick on the found index runs the cross-check: a sPingMS the frames disagree with fails it
+    r.mem.poke<double>(r.w.srv + kPingNodeValueOffset, 9.0);
+    r.tick(11.0);
+    CHECK(r.l3() == "frame/bandwidth cross-check");
+    CHECK(r.reader->indexOffset() == 0);
+    CHECK(notOk(r.store, metric::kPcStreamFps));
+}
+
+void testIndexFinderResetsWhenWindowEmpty() {
+    IndexRun r;
+    r.tick(10.0);
+    r.advance(301);
+    r.tick(10.5);
+    r.tick(11.0);
+    CHECK(r.l3().empty());
+    CHECK(isOkF32(r.store, metric::kPcStreamFps, kFixtureRecentCount, 1e-6)); // live on the found index
+    CHECK(r.reader->indexOffset() == kRealIndexAt);
+
+    // the index now points at an empty part of the ring (a forward jump under 2048, so not an owner change)
+    r.mem.poke<uint16_t>(r.ringAt(kRealIndexAt), 1802);
+    r.tick(13.0);
+    CHECK(r.reader->resets() == 0);
+    CHECK(r.l3() == "no frames");
+    CHECK(r.reader->indexOffset() == 0);
+    CHECK(notOk(r.store, metric::kPcStreamFps));
+
+    r.tick(13.5); // hunting again
+    CHECK(r.l3() == "finding write index");
+}
+
 } // namespace
 
 int main() {
@@ -1460,6 +2261,26 @@ int main() {
     testReadLinkEndpointWrongObjectType();
     testReaderEndpointSuccessPopulatesAddress();
     testReaderEndpointFailureDoesNotAffectL2Timing();
+    testScanAgreeingGlobalsPublish();
+    testScanDisagreeingGlobalsFailL1();
+    testScanNoHitFailsL1();
+    testScanStalePointerRecoversAfterGate();
+    testScanEmptyScanRearmsGate();
+    testScanAgreesWithCodePair();
+    testScanDisagreesWithCodePair();
+    testCodePairAloneWithEmptyScanArea();
+    testCodePairStaleFallsBackToScan();
+    testFindAnchorsCodePairWithoutGapRule();
+    testWriterDecodeImm32ShuffledRecordDirectLoads();
+    testWriterDecodeImm8OtherRegister();
+    testWriterDecodeInOrderRegisterRbx();
+    testWriterDecodeColumnOrderIsNotFieldOrder();
+    testWriterDecodePredictedDisplayAbsent();
+    testWriterDeriveFailsClosed();
+    testIndexFinderPicksTheMovingIndexNotTheDecoy();
+    testIndexFinderAmbiguousStaysUnknown();
+    testIndexFinderResetsWhenCrossCheckFails();
+    testIndexFinderResetsWhenWindowEmpty();
     if (failures == 0) {
         std::printf("pc streaming reader: all checks passed\n");
         return 0;

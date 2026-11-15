@@ -57,7 +57,9 @@ void testForceHeaderMismatchConstructDestruct() {
     // the forceHeaderMismatch flag only changes which anchors a (never-reached-here, demand-off) worker would
     // pick once it actually probes vrserver; construction/destruction must be identical either way.
     for (int i = 0; i < 10; ++i) {
-        Service svc(true);
+        ServiceProbe probe;
+        probe.headerMismatch = true;
+        Service svc(probe);
         MetricStore store;
         CHECK(!svc.take(store, 0.0));
         svc.stop();

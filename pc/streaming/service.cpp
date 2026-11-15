@@ -113,6 +113,34 @@ std::wstring runtimePath() {
         return {};
     return widen(paths->items[0].text);
 }
+// Opt-in (FPH_VRLINK_ARCHIVE names a folder): keep each driver_vrlink build seen, since Steam overwrites the old one
+// and the next break needs both to compare.
+void archive(const std::vector<uint8_t>& bytes, uint32_t stamp) {
+    wchar_t folder[32768];
+    const auto n = GetEnvironmentVariableW(L"FPH_VRLINK_ARCHIVE", folder, 32768);
+    if (!n || n >= 32768)
+        return;
+    std::error_code error;
+    const auto dir = std::filesystem::path(folder);
+    const auto target = dir / (L"driver_vrlink-" + std::to_wstring(stamp) + L".dll");
+    if (!std::filesystem::is_directory(dir, error) || std::filesystem::exists(target, error))
+        return;
+    const auto temp = std::filesystem::path(target).concat(L".part");
+    {
+        std::ofstream out(temp, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!out)
+            error = std::make_error_code(std::errc::io_error);
+    }
+    if (!error)
+        std::filesystem::rename(temp, target, error);
+    if (error) {
+        std::filesystem::remove(temp, error);
+        logLine("[stream] driver build %u archive failed", stamp);
+        return;
+    }
+    logLine("[stream] driver build %u archived (%zu bytes)", stamp, bytes.size());
+}
 std::wstring logPath() {
     wchar_t steam[32768]{};
     DWORD bytes = sizeof(steam);
@@ -324,12 +352,13 @@ struct Service::Runtime {
     DWORD pid = 0;
     double nextFind = 0, nextModule = 0;
     uint64_t lastResets = 0;
-    std::string lastNotes;
-    bool mismatch = false;
+    uint32_t lastIndex = 0;
+    std::string lastNotes, lastServerHow;
+    ServiceProbe probe;
     uint64_t cachedSize = 0;
     uint32_t cachedStamp = 0;
     Anchors cachedAnchors;
-    explicit Runtime(bool force) : mismatch(force) {}
+    explicit Runtime(ServiceProbe options) : probe(options) {}
     void closeReader() {
         if (pid)
             logLine("[stream] vrserver reader detached (pid %lu)", pid);
@@ -338,7 +367,9 @@ struct Service::Runtime {
         pid = 0;
         nextModule = 0;
         lastResets = 0;
+        lastIndex = 0;
         lastNotes.clear();
+        lastServerHow.clear();
     }
     void tick(double now) {
         using namespace metric;
@@ -383,18 +414,25 @@ struct Service::Runtime {
                             std::memcpy(&stamp, bytes.data() + pe + 8, 4);
                     }
                     if (cachedSize != bytes.size() || cachedStamp != stamp) {
-                        cachedAnchors = findAnchors(bytes);
-                        if (mismatch) {
+                        archive(bytes, stamp);
+                        cachedAnchors = findAnchors(bytes, probe.derive);
+                        if (probe.headerMismatch) {
                             cachedAnchors.l3 = false;
                             cachedAnchors.l3Note = "CSV header/stride mismatch";
+                        }
+                        if (probe.noCodePair) {
+                            cachedAnchors.serverGlobal = 0;
+                            cachedAnchors.serverHow = "RTTI scan (forced)";
+                            cachedAnchors.l1 = cachedAnchors.l1 && !cachedAnchors.serverVtables.empty();
                         }
                         cachedSize = bytes.size();
                         cachedStamp = stamp;
                     }
                     if (sameLoadedBuild(memory, base, cachedAnchors)) {
                         reader = std::make_unique<Reader>(memory, base, cachedAnchors);
-                        logLine("[stream] driver build %u anchors L1=%d L2=%d L3=%d", cachedAnchors.timestamp,
-                                cachedAnchors.l1, cachedAnchors.l2, cachedAnchors.l3);
+                        logLine("[stream] driver build %u anchors L1=%d L2=%d L3=%d server=%s layout=%s",
+                                cachedAnchors.timestamp, cachedAnchors.l1, cachedAnchors.l2, cachedAnchors.l3,
+                                cachedAnchors.serverHow.c_str(), cachedAnchors.layoutHow.c_str());
                     }
                 }
             }
@@ -404,6 +442,16 @@ struct Service::Runtime {
             const double before = clockSec();
             reader->tick(now, store);
             store.setF32(kPcStreamReadMs, (clockSec() - before) * 1000, now);
+            if (lastServerHow != reader->serverHow()) {
+                lastServerHow = reader->serverHow();
+                if (!lastServerHow.empty())
+                    logLine("[stream] server found by %s", lastServerHow.c_str());
+            }
+            if (lastIndex != reader->indexOffset()) {
+                lastIndex = reader->indexOffset();
+                if (lastIndex && cachedAnchors.derived)
+                    logLine("[stream] frame write index found at ring+%x", lastIndex);
+            }
             if (lastResets != reader->resets()) {
                 lastResets = reader->resets();
                 logLine("[stream] owner/index changed: caches reset, generation %llu",
@@ -429,7 +477,7 @@ struct Service::Runtime {
         log.tick(store, now);
     }
 };
-Service::Service(bool force) : runtime_(std::make_unique<Runtime>(force)) {
+Service::Service(ServiceProbe probe) : runtime_(std::make_unique<Runtime>(probe)) {
     // Every member (including the atomics, mutex and CV) must exist before run() can access it.
     worker_ = std::thread([this] { run(); });
 }
