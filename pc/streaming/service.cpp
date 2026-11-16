@@ -125,6 +125,7 @@ void archive(const std::vector<uint8_t>& bytes, uint32_t stamp) {
     const auto target = dir / (L"driver_vrlink-" + std::to_wstring(stamp) + L".dll");
     if (!std::filesystem::is_directory(dir, error) || std::filesystem::exists(target, error))
         return;
+    // Shared by the app and the probe: two processes archiving the same build at once can lose that attempt.
     const auto temp = std::filesystem::path(target).concat(L".part");
     {
         std::ofstream out(temp, std::ios::binary);

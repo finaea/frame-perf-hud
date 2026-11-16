@@ -123,6 +123,7 @@ private:
     Anchors anchors_;
     uint32_t global_ = 0, foundIndex_ = 0;
     double scanAt_ = 0;
+    bool disagree_ = false; // the last scan found conflicting servers
     std::string serverHow_, serverNote_;
     struct IndexCandidate {
         uint32_t offset;

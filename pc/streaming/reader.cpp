@@ -207,9 +207,11 @@ bool modRm(const uint8_t* b, size_t size, size_t i, unsigned rex, ModRm& m) {
     m.length += n;
     return true;
 }
-} // namespace
-bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out) {
+// One pass over the writer. `print` is the offset of the call that prints the row (unknown on the first pass, which
+// only reports where that call is in `printAt`).
+bool decodePass(const uint8_t* b, size_t size, size_t lea, size_t print, WriterShape& out, size_t& printAt) {
     out = {};
+    printAt = 0;
     std::array<int32_t, 16> gpr, xmm;
     gpr.fill(-1);
     xmm.fill(-1);
@@ -239,8 +241,21 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
         slots.erase(slots.lower_bound({r, std::numeric_limits<int32_t>::min()}),
                     slots.lower_bound({r + 1, std::numeric_limits<int32_t>::min()}));
     };
+    // Only the supported subset below is decoded; anything else fails the derivation, since an unknown instruction
+    // could change a value that still looks like a plain record field. Code a forward branch can skip may not run, so
+    // what it writes loses its provenance. Only a branch past the print call is an early-out that skips the row.
+    size_t skippable = 0;
+    const auto branch = [&](size_t next, int32_t rel) {
+        const int64_t target = static_cast<int64_t>(next) + rel;
+        if (target <= static_cast<int64_t>(next) - 1)
+            return false; // a loop: not this writer's shape
+        if (target <= static_cast<int64_t>(print))
+            skippable = std::max(skippable, static_cast<size_t>(target));
+        return true;
+    };
     for (size_t i = 0; i < size && !done;) {
-        const bool passed = i > lea;
+        const bool passed = i > lea, cond = i < skippable;
+        const auto known = [&](int32_t v) { return cond ? -1 : v; };
         unsigned rex = 0, rep = 0;
         bool op16 = false;
         while (i < size && (b[i] == 0x66 || b[i] == 0xf2 || b[i] == 0xf3)) {
@@ -260,28 +275,30 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
                 break;
             const uint8_t op2 = b[i + 1];
             if (op2 >= 0x80 && op2 <= 0x8f) {
+                if (i + 6 > size || !branch(i + 6, at<int32_t>(b, i + 2)))
+                    return false;
                 i += 6;
                 continue;
             }
             const bool move = op2 == 0x10 || op2 == 0x11 || op2 == 0x28 || op2 == 0x29;
             const bool other =
                 op2 == 0x1f || op2 == 0x57 || op2 == 0xaf || op2 == 0xb6 || op2 == 0xb7 || op2 == 0xbe || op2 == 0xbf;
-            if ((!move && !other) || !modRm(b, size, i + 2, rex, m)) {
-                ++i;
-                continue;
-            }
+            if ((!move && !other) || !modRm(b, size, i + 2, rex, m))
+                return false;
             i += 2 + m.length;
             if (move) {
                 const unsigned n = rep == 0xf3 ? 4 : rep == 0xf2 ? 8 : 16;
                 if (op2 == 0x10 || op2 == 0x28)
-                    xmm[m.reg] = !m.memory                             ? xmm[m.rm]
-                                 : !m.simple                           ? -1
-                                 : static_cast<int>(m.rm) == record ? m.disp
-                                                                       : fromSlot(m.rm, m.disp, n);
+                    xmm[m.reg] = known(!m.memory                             ? xmm[m.rm]
+                                       : !m.simple                           ? -1
+                                       : static_cast<int>(m.rm) == record ? m.disp
+                                                                             : fromSlot(m.rm, m.disp, n));
                 else if (!m.memory)
-                    xmm[m.rm] = xmm[m.reg];
+                    xmm[m.rm] = known(xmm[m.reg]);
                 else if (m.simple)
-                    setSlots(m.rm, m.disp, n, xmm[m.reg]);
+                    setSlots(m.rm, m.disp, n, known(xmm[m.reg]));
+                else
+                    return false; // an indexed store: can't tell which slots it changes
             } else if (op2 == 0x57)
                 xmm[m.reg] = -1;
             else if (op2 != 0x1f)
@@ -301,11 +318,11 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
             else if (m.simple) {
                 v = fromSlot(m.rm, m.disp, width);
                 // The FILE* the row goes to: mov rcx,[owner+disp] right before the call.
-                if (v < 0 && m.reg == 1 && width == 8 && m.rm != 4 && m.rm != 5 && m.disp >= 0x1000)
+                if (v < 0 && m.reg == 1 && width == 8 && m.rm != 4 && m.rm != 5 && m.disp >= 0x1000 && !cond)
                     out.fileOffset = static_cast<uint32_t>(m.disp);
             }
             write(m.reg);
-            gpr[m.reg] = v;
+            gpr[m.reg] = known(v);
             continue;
         }
         case 0x89: { // mov r/m, r
@@ -313,14 +330,16 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
                 return false;
             i += 1 + m.length;
             if (!m.memory) {
-                const auto v = gpr[m.reg];
+                const auto v = known(gpr[m.reg]);
                 write(m.rm);
                 gpr[m.rm] = v;
             } else if (m.simple && m.rm == 4) {
                 if (m.disp >= 0x20 && (m.disp - 0x20) % 8 == 0)
-                    stack[(m.disp - 0x20) / 8] = gpr[m.reg];
+                    stack[(m.disp - 0x20) / 8] = known(gpr[m.reg]);
             } else if (m.simple)
-                setSlots(m.rm, m.disp, width, gpr[m.reg]);
+                setSlots(m.rm, m.disp, width, known(gpr[m.reg]));
+            else
+                return false;
             continue;
         }
         case 0x69:
@@ -333,7 +352,7 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
             const int32_t imm = n == 4 ? at<int32_t>(b, immAt) : static_cast<int8_t>(b[immAt]);
             i = immAt + n;
             write(m.reg);
-            if (!m.memory && imm > 0) {
+            if (!m.memory && imm > 0 && !cond) {
                 conflict = conflict || (out.stride && out.stride != static_cast<uint32_t>(imm));
                 out.stride = static_cast<uint32_t>(imm);
                 record = static_cast<int>(m.reg);
@@ -366,12 +385,13 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
             const bool compare = (op >= 0x38 && op <= 0x3b) || op == 0x84 || op == 0x85;
             const bool toRm = op == 0x01 || op == 0x09 || op == 0x21 || op == 0x29 || op == 0x31 || op == 0x88;
             const unsigned dest = toRm ? m.rm : m.reg;
-            const bool keep = (op == 0x03 || op == 0x01) && !m.memory && static_cast<int>(dest) == record;
+            const bool keep = (op == 0x03 || op == 0x01) && !m.memory && static_cast<int>(dest) == record && !cond;
             if (compare || keep)
                 continue;
             if (toRm && m.memory) {
-                if (m.simple)
-                    setSlots(m.rm, m.disp, width, -1);
+                if (!m.simple)
+                    return false;
+                setSlots(m.rm, m.disp, width, -1);
             } else
                 write(dest);
             continue;
@@ -386,7 +406,10 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
             const size_t n = op == 0x81 || op == 0xc7 ? (op16 ? 2 : 4) : 1;
             i += 1 + m.length + n;
             if (m.memory) {
-                if (m.simple && (op == 0xc6 || op == 0xc7 || (m.reg & 7) != 7))
+                const bool writes = op == 0xc6 || op == 0xc7 || (m.reg & 7) != 7;
+                if (writes && !m.simple)
+                    return false;
+                if (writes)
                     setSlots(m.rm, m.disp, op == 0xc6 || op == 0x80 ? 1 : width, -1);
             } else if (op == 0xc6 || op == 0xc7 || (m.reg & 7) != 7)
                 write(m.rm);
@@ -395,6 +418,7 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
         case 0xe8:
             if (passed) {
                 done = true;
+                printAt = i;
                 break;
             }
             for (unsigned r : {0u, 1u, 2u, 8u, 9u, 10u, 11u})
@@ -404,14 +428,25 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
             i += 5;
             continue;
         case 0xe9:
+            if (i + 5 > size || !branch(i + 5, at<int32_t>(b, i + 1)))
+                return false;
             i += 5;
             continue;
         case 0xeb:
+            if (i + 2 > size || !branch(i + 2, static_cast<int8_t>(b[i + 1])))
+                return false;
             i += 2;
             continue;
+        case 0x90:
+            ++i;
+            continue;
         default:
-            if (op >= 0x70 && op <= 0x7f)
+            if (op >= 0x70 && op <= 0x7f) {
+                if (i + 2 > size || !branch(i + 2, static_cast<int8_t>(b[i + 1])))
+                    return false;
                 i += 2;
+            } else if (op >= 0x50 && op <= 0x57)
+                ++i;
             else if (op >= 0x58 && op <= 0x5f) {
                 write((op & 7) | (rex & 1 ? 8 : 0));
                 ++i;
@@ -419,7 +454,7 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
                 write((op & 7) | (rex & 1 ? 8 : 0));
                 i += 1 + (rex & 8 ? 8 : 4);
             } else
-                ++i;
+                return false;
             continue;
         }
     }
@@ -434,6 +469,13 @@ bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out
         out.args.push_back(s == stack.end() ? -1 : s->second);
     }
     return true;
+}
+} // namespace
+bool decodeCsvWriter(const uint8_t* b, size_t size, size_t lea, WriterShape& out) {
+    // First find the print call (no branch skips anything yet), then decode knowing which branches jump past it.
+    size_t print = 0;
+    decodePass(b, size, lea, 0, out, print);
+    return print && decodePass(b, size, lea, print, out, print);
 }
 bool deriveLayout(const std::string& header, const std::string& row, const WriterShape& w, DerivedLayout& out,
                   std::string& note) {
@@ -872,11 +914,12 @@ bool Reader::serverAt(uint32_t global, uint64_t& srv) {
            rttiIs(memory_, srv, module_, anchors_.imageSize, ".?AVSVLServer@@");
 }
 bool Reader::locateServer(double now, uint64_t& srv) {
+    // Only a failed RTTI check rescans: a chosen global still holding an intact old server while another global moved
+    // on is not caught here (SVLServer lifetime across HMD re-activation is unverified).
     if (serverAt(global_, srv))
         return true;
     global_ = 0;
     serverHow_.clear();
-    serverNote_.clear();
     uint64_t code = 0;
     const bool haveCode = serverAt(anchors_.serverGlobal, code);
     // Every .data qword that points at an SVLServer (six globals on build 1794602179, all the same object). Only
@@ -884,10 +927,12 @@ bool Reader::locateServer(double now, uint64_t& srv) {
     // activates.
     std::set<uint64_t> objects;
     uint32_t first = 0;
+    bool scanned = false; // a scan ran and its .data read succeeded
     if (!anchors_.serverVtables.empty() && anchors_.dataSize >= 8 && now >= scanAt_) {
         scanAt_ = now + 10;
         std::vector<uint8_t> data(anchors_.dataSize & ~7u);
         if (readLarge(module_ + anchors_.dataRva, data.data(), data.size())) {
+            scanned = true;
             const std::set<uint32_t> vtables(anchors_.serverVtables.begin(), anchors_.serverVtables.end());
             std::map<uint64_t, bool> checked;
             for (size_t off = 0; off + 8 <= data.size(); off += 8) {
@@ -910,10 +955,15 @@ bool Reader::locateServer(double now, uint64_t& srv) {
             }
         }
     }
-    if (objects.size() > 1 || (haveCode && !objects.empty() && *objects.begin() != code)) {
+    // A disagreement holds until a later completed scan resolves it: between scans, or after a failed read, nothing
+    // tells which server is current.
+    if (scanned)
+        disagree_ = objects.size() > 1 || (haveCode && !objects.empty() && *objects.begin() != code);
+    if (disagree_) {
         serverNote_ = "server globals disagree";
         return false;
     }
+    serverNote_.clear();
     char rva[32];
     if (haveCode) {
         global_ = anchors_.serverGlobal;
@@ -931,7 +981,7 @@ bool Reader::locateServer(double now, uint64_t& srv) {
 }
 bool Reader::findIndex(uint64_t ring) {
     // The u16 after the ring that equals (slot of the newest record + 1) and advances with it. The known layouts sit
-    // at ring end +0x10000 and +0x10050.
+    // at ring end +0x10000 and +0x10050. Reads ~736 KiB per hunting tick at stride 0x98; derived layouts only.
     constexpr size_t kSpan = 0x20000;
     const size_t stride = anchors_.layout->stride, ringBytes = kFrameSlots * stride;
     std::vector<uint8_t> region(kSpan), records(ringBytes);

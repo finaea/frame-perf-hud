@@ -1820,9 +1820,23 @@ constexpr uint32_t kWriterFileOffset = 0xa8080;
 
 /** imul reg,rax,stride; add reg,rcx; movups/movaps copy of the record to the stack; then the printf argument setup:
  *  r8 = column 0, r9 = column 1, columns 2.. at [rsp+0x20+8k]; lea of the format string; mov rcx,[rsi+file]; call. */
-Writer emitWriter(uint32_t stride, bool imm8, unsigned reg, const std::vector<Col>& cols) {
+/** Instructions mixed into the writer that change what an argument holds (or that the decoder cannot follow). The
+ *  mutated column is Receive (7), read against Decode End (9). */
+enum class Mut { None, Cmov, BranchSelect, Loop, IndexedStore, SkippableErrorPath, AfterLeaBranch, BranchIntoArgs };
+
+Writer emitWriter(uint32_t stride, bool imm8, unsigned reg, const std::vector<Col>& cols, Mut mut = Mut::None) {
     constexpr int32_t kStack = -0x180;
+    constexpr size_t kMutCol = 7, kOtherCol = 9;
     Asm a;
+    size_t earlyOutAt = 0;
+    if (mut == Mut::SkippableErrorPath) { // the real writer's early-out: test eax,eax; je <past the print>
+        a.u8(0x85);
+        a.u8(0xc0);
+        a.u8(0x0f);
+        a.u8(0x84);
+        earlyOutAt = a.b.size();
+        a.i32(0);
+    }
     a.rex(true, reg, 0);
     a.u8(imm8 ? 0x6b : 0x69);
     a.u8(0xc0 | ((reg & 7) << 3));
@@ -1847,8 +1861,32 @@ Writer emitWriter(uint32_t stride, bool imm8, unsigned reg, const std::vector<Co
             a.rex(false, 11, reg);
             a.u8(0x8b);
             a.mem(11, reg, cols[k].off);
+            if (mut == Mut::BranchSelect && k == kMutCol) {
+                // r11d = Receive; if (r11d != edx (Decode End)) r11d = edx -- as a branch, not a cmov
+                a.rex(false, 2, reg);
+                a.u8(0x8b);
+                a.mem(2, reg, cols[kOtherCol].off);
+                for (const unsigned x : {0x41u, 0x39u, 0xd3u, 0x75u, 0x03u, 0x41u, 0x89u, 0xd3u})
+                    a.u8(x); // cmp r11d,edx; jne +3; mov r11d,edx
+            }
             a.stackStore(11, 0x20 + 8 * static_cast<int32_t>(k - 2));
         }
+    size_t intoArgsAt = 0;
+    if (mut == Mut::BranchIntoArgs) { // test eax,eax; je <start of the stack arguments>: skips the lea and r8/r9/FILE*
+        for (const unsigned x : {0x85u, 0xc0u, 0x0fu, 0x84u})
+            a.u8(x);
+        intoArgsAt = a.b.size();
+        a.i32(0);
+    }
+    if (mut == Mut::Loop)
+        for (const unsigned x : {0x85u, 0xc0u, 0x75u, 0xfcu}) // test eax,eax; jne -4
+            a.u8(x);
+    if (mut == Mut::IndexedStore)
+        for (const unsigned x : {0x89u, 0x44u, 0x8du, 0xc0u}) // mov [rbp+rcx*4-0x40],eax
+            a.u8(x);
+    if (mut == Mut::SkippableErrorPath) // test eax,eax; je +7; mov ecx,eax; call rel32
+        for (const unsigned x : {0x85u, 0xc0u, 0x74u, 0x07u, 0x89u, 0xc1u, 0xe8u, 0u, 0u, 0u, 0u})
+            a.u8(x);
     Writer w;
     w.lea = a.b.size();
     a.u8(0x48);
@@ -1866,15 +1904,39 @@ Writer emitWriter(uint32_t stride, bool imm8, unsigned reg, const std::vector<Co
     a.rex(true, 1, 6);
     a.u8(0x8b);
     a.mem(1, 6, static_cast<int32_t>(kWriterFileOffset));
+    if (mut == Mut::BranchIntoArgs) {
+        const int32_t rel = static_cast<int32_t>(a.b.size() - (intoArgsAt + 4));
+        std::memcpy(a.b.data() + intoArgsAt, &rel, 4);
+    }
     for (size_t k = cols.size() - 1; k >= 2; --k)
         if (!cols[k].direct) {
             a.u8(0x8b);
             a.mem(0, 5, kStack + cols[k].off);
+            if (mut == Mut::AfterLeaBranch && k == kMutCol) {
+                // after the lea: edx = Decode End; if (record flag != 0) eax = edx is SKIPPED, as a branch over a mov
+                a.u8(0x8b);
+                a.mem(2, 5, kStack + cols[kOtherCol].off);
+                a.u8(0x83);
+                a.mem(7, 5, kStack + cols[14].off); // cmp dword [rbp+flag],0
+                for (const unsigned x : {0u, 0x75u, 0x02u, 0x89u, 0xd0u})
+                    a.u8(x); // imm8 0; jne +2; mov eax,edx
+            }
+            if (mut == Mut::Cmov && k == kMutCol) {
+                // eax = Receive; if (eax != edx (Decode End)) eax = edx -- a value-changing cmov
+                a.u8(0x8b);
+                a.mem(2, 5, kStack + cols[kOtherCol].off);
+                for (const unsigned x : {0x39u, 0xd0u, 0x0fu, 0x45u, 0xc2u})
+                    a.u8(x); // cmp eax,edx; cmovne eax,edx
+            }
             a.stackStore(0, 0x20 + 8 * static_cast<int32_t>(k - 2));
         }
     a.u8(0xe8);
     a.i32(0x100);
     a.u8(0xc3);
+    if (mut == Mut::SkippableErrorPath) { // the early-out jumps past everything, the call included
+        const int32_t rel = static_cast<int32_t>(a.b.size() - (earlyOutAt + 4));
+        std::memcpy(a.b.data() + earlyOutAt, &rel, 4);
+    }
     w.code = a.b;
     return w;
 }
@@ -1914,8 +1976,9 @@ struct Derived {
     bool decoded = false, ok = false;
 };
 
-void deriveFrom(Derived& r, uint32_t stride, bool imm8, unsigned reg, const std::vector<Col>& cols) {
-    const Writer w = emitWriter(stride, imm8, reg, cols);
+void deriveFrom(Derived& r, uint32_t stride, bool imm8, unsigned reg, const std::vector<Col>& cols,
+                Mut mut = Mut::None) {
+    const Writer w = emitWriter(stride, imm8, reg, cols, mut);
     std::string header, row;
     for (size_t k = 0; k < cols.size(); ++k) {
         header += (k ? "," : "") + cols[k].name;
@@ -2065,6 +2128,193 @@ void testWriterDeriveFailsClosed() {
         CHECK(!deriveLayout("Present ID,WGP Release\n", "%u\n", shape, d, note));
         CHECK(note == "CSV header/row count mismatch");
     }
+}
+
+/** Writer instructions that change a value, or that the decoder cannot follow, must fail the derivation instead of
+ *  mapping a column to the slot the value merely started in. */
+void testWriterDecodeRejectsValueChangingCode() {
+    const auto cols = csvColumns(0xb0, 7, {});
+    {   // (a) cmovne between loading Receive and storing it: an opcode outside the decoded subset
+        Derived r;
+        deriveFrom(r, 0xb0, false, 7, cols, Mut::Cmov);
+        CHECK(!r.decoded);
+        CHECK(!r.ok);
+    }
+    {   // (c) a backward jump (a loop)
+        Derived r;
+        deriveFrom(r, 0xb0, false, 7, cols, Mut::Loop);
+        CHECK(!r.decoded);
+    }
+    {   // (d) a store through an index register: unknown which slots it changes
+        Derived r;
+        deriveFrom(r, 0xb0, false, 7, cols, Mut::IndexedStore);
+        CHECK(!r.decoded);
+    }
+}
+
+void testWriterDecodeBranchSelectLosesProvenance() {
+    // (b) Receive passes through `cmp; jne +3; mov r11d,edx` before the print: it decodes, but the argument may be
+    // either slot, so it maps to nothing and deriveLayout names the column
+    const auto cols = csvColumns(0xb0, 7, {7});
+    Derived r;
+    deriveFrom(r, 0xb0, false, 7, cols, Mut::BranchSelect);
+    CHECK(r.decoded); // the shape itself is still recognised (stride, FILE*)
+    CHECK(r.shape.stride == 0xb0 && r.shape.fileOffset == kWriterFileOffset);
+    CHECK(r.shape.args.size() == cols.size());
+    CHECK(r.shape.args.size() > 7 && r.shape.args[7] == -1);
+    CHECK(r.shape.args.size() > 9 && r.shape.args[9] == cols[9].off); // untouched neighbours still map
+    CHECK(!r.ok);
+    CHECK(r.note == "Receive no offset");
+}
+
+void testWriterDecodeKeepsRealWritersEarlyOutAndErrorPath() {
+    // (e) positive control: a forward je past the print at the start, and a skippable `test; je; mov; call` error path
+    // before the lea. Neither changes an argument, so the mapping is exact.
+    const auto cols = csvColumns(0xb0, 7, {1, 10});
+    Derived r;
+    deriveFrom(r, 0xb0, false, 7, cols, Mut::SkippableErrorPath);
+    checkMapped(r, cols, 0xb0);
+}
+
+/** A scan that finds conflicting servers keeps the disagreement across the gated ticks, rescans at the gate, and only
+ *  accepts a server once a scan finds them agreeing. */
+void testScanDisagreementIsSticky() {
+    FakeMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w1 = buildWorld(mem, 0x10000, 300, 0, 1000);
+    const World w2 = buildWorld(mem, 0x300000, 500, 0, 5000);
+    setActiveServer(mem, w1.srv);  // code pair -> server 1
+    setDataGlobal(mem, 2, w2.srv); // a .data global -> server 2
+
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, true));
+    MetricStore store(readerMetricDefs());
+    reader.tick(10.0, store); // scan: disagree, next scan at 20
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server globals disagree");
+    for (const double now : {10.5, 19.9, 20.0, 50.0}) { // gated ticks keep it; the scans at 20 and 50 still see it
+        reader.tick(now, store);
+        CHECK(noteOf(store, metric::kPcStreamL1Note) == "server globals disagree");
+        CHECK(notOk(store, metric::kPcStreamNamedPing));
+        CHECK(reader.serverHow().empty());
+    }
+
+    // resolve: the conflicting global now points at the code-pair server. The last scan was at 50, so not before 60.
+    setDataGlobal(mem, 2, w1.srv);
+    reader.tick(51.0, store);
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server globals disagree");
+    CHECK(notOk(store, metric::kPcStreamNamedPing));
+    reader.tick(59.9, store);
+    CHECK(noteOf(store, metric::kPcStreamL1Note) == "server globals disagree");
+    reader.tick(60.0, store);
+    CHECK(reader.serverHow() == "code pair, RTTI scan agrees (rva 2000)");
+    CHECK(l1Live(store));
+
+    // the same, resolved by clearing the conflicting global instead
+    FakeMemory mem2;
+    setupModule(mem2, kKnownBuild);
+    const World v1 = buildWorld(mem2, 0x10000, 300, 0, 1000);
+    const World v2 = buildWorld(mem2, 0x300000, 500, 0, 5000);
+    setActiveServer(mem2, v1.srv);
+    setDataGlobal(mem2, 2, v2.srv);
+    Reader reader2(mem2, kModuleBase, scanAnchors(kKnownBuild, true));
+    MetricStore store2(readerMetricDefs());
+    reader2.tick(10.0, store2);
+    reader2.tick(10.5, store2);
+    CHECK(noteOf(store2, metric::kPcStreamL1Note) == "server globals disagree");
+    setDataGlobal(mem2, 2, 0);
+    reader2.tick(19.9, store2);
+    CHECK(noteOf(store2, metric::kPcStreamL1Note) == "server globals disagree");
+    reader2.tick(20.0, store2);
+    CHECK(reader2.serverHow() == "code pair (rva 2000)");
+    CHECK(l1Live(store2));
+
+    // two scan hits and no code pair: the gated tick must keep saying "disagree", not fall back to "no server"
+    FakeMemory mem3;
+    setupModule(mem3, kKnownBuild);
+    const World u1 = buildWorld(mem3, 0x10000, 300, 0, 1000);
+    const World u2 = buildWorld(mem3, 0x300000, 500, 0, 5000);
+    setDataGlobal(mem3, 2, u1.srv);
+    setDataGlobal(mem3, 9, u2.srv);
+    Reader reader3(mem3, kModuleBase, scanAnchors(kKnownBuild, false));
+    MetricStore store3(readerMetricDefs());
+    reader3.tick(10.0, store3);
+    CHECK(noteOf(store3, metric::kPcStreamL1Note) == "server globals disagree");
+    reader3.tick(10.5, store3);
+    CHECK(noteOf(store3, metric::kPcStreamL1Note) == "server globals disagree");
+    CHECK(notOk(store3, metric::kPcStreamNamedPing));
+}
+
+/** Refuses every read that touches the fake .data block, as a failed ReadProcessMemory would. */
+class DataRefusingMemory : public FakeMemory {
+public:
+    bool refuse = false;
+    bool read(uint64_t address, void* dest, size_t bytes) override {
+        if (refuse && address < kModuleBase + kScanDataRva + kScanDataSize && address + bytes > kModuleBase + kScanDataRva)
+            return false;
+        return FakeMemory::read(address, dest, bytes);
+    }
+};
+
+/** A rescan whose .data read fails is no evidence: the disagreement stays, the gate re-arms, nothing is cached. */
+void testScanFailedReadKeepsDisagreement() {
+    DataRefusingMemory mem;
+    setupModule(mem, kKnownBuild);
+    const World w1 = buildWorld(mem, 0x10000, 300, 0, 1000);
+    const World w2 = buildWorld(mem, 0x300000, 500, 0, 5000);
+    setActiveServer(mem, w1.srv);  // code pair -> server 1 (still readable throughout)
+    setDataGlobal(mem, 2, w2.srv); // a .data global -> server 2
+
+    Reader reader(mem, kModuleBase, scanAnchors(kKnownBuild, true));
+    MetricStore store(readerMetricDefs());
+    const auto stillDisagree = [&](double now) {
+        reader.tick(now, store);
+        CHECK(noteOf(store, metric::kPcStreamL1Note) == "server globals disagree");
+        CHECK(notOk(store, metric::kPcStreamNamedPing));
+        CHECK(reader.serverHow().empty());
+    };
+    stillDisagree(10.0); // scan ok: disagree, next scan 20
+
+    mem.refuse = true;
+    stillDisagree(20.0); // the scan is due, its read fails: no new evidence, the latch stays
+    stillDisagree(20.5); // gated (next scan 30)
+    mem.refuse = false;
+    stillDisagree(29.9); // still gated
+    stillDisagree(30.0); // a good scan, the conflict is still there
+
+    setDataGlobal(mem, 2, w1.srv); // resolved; the scan at 30 re-armed the gate to 40
+    stillDisagree(35.0);
+    stillDisagree(39.9);
+    reader.tick(40.0, store);
+    CHECK(reader.serverHow() == "code pair, RTTI scan agrees (rva 2000)");
+    CHECK(l1Live(store));
+}
+
+/** Branches after the lea: a conditional skip of an assignment on the way to the print makes that argument depend on a
+ *  flag, so it must not map to either slot. */
+void testWriterDecodeBranchAfterLeaLosesProvenance() {
+    const auto cols = csvColumns(0xb0, 7, {});
+    Derived r;
+    deriveFrom(r, 0xb0, false, 7, cols, Mut::AfterLeaBranch);
+    CHECK(r.decoded);
+    CHECK(r.shape.args.size() == cols.size());
+    CHECK(r.shape.args.size() > 7 && r.shape.args[7] == -1);
+    CHECK(r.shape.args.size() > 9 && r.shape.args[9] == cols[9].off); // the neighbour it was compared with is intact
+    CHECK(!r.ok);
+    CHECK(r.note == "Receive no offset");
+}
+
+/** A branch before the lea that lands between the lea and the print skips the lea and the register arguments: they
+ *  must not map to fields (the stack arguments after the landing point still do). */
+void testWriterDecodeBranchIntoArgumentSetup() {
+    const auto cols = csvColumns(0xb0, 7, {});
+    Derived r;
+    deriveFrom(r, 0xb0, false, 7, cols, Mut::BranchIntoArgs);
+    CHECK(r.decoded);
+    CHECK(r.shape.args.size() == cols.size());
+    CHECK(r.shape.args.size() > 1 && r.shape.args[0] == -1 && r.shape.args[1] == -1); // r8, r9 may be skipped
+    CHECK(r.shape.args.size() > 2 && r.shape.args[2] == cols[2].off);                  // after the landing point
+    CHECK(r.shape.fileOffset == 0);                                                    // the FILE* load may be skipped too
+    CHECK(!r.ok);
+    CHECK(r.note == "Present ID no offset");
 }
 
 // ==================== Reader: write index found at runtime (derived layout) ====================
@@ -2277,6 +2527,13 @@ int main() {
     testWriterDecodeColumnOrderIsNotFieldOrder();
     testWriterDecodePredictedDisplayAbsent();
     testWriterDeriveFailsClosed();
+    testWriterDecodeRejectsValueChangingCode();
+    testWriterDecodeBranchSelectLosesProvenance();
+    testWriterDecodeKeepsRealWritersEarlyOutAndErrorPath();
+    testScanDisagreementIsSticky();
+    testScanFailedReadKeepsDisagreement();
+    testWriterDecodeBranchAfterLeaLosesProvenance();
+    testWriterDecodeBranchIntoArgumentSetup();
     testIndexFinderPicksTheMovingIndexNotTheDecoy();
     testIndexFinderAmbiguousStaysUnknown();
     testIndexFinderResetsWhenCrossCheckFails();
