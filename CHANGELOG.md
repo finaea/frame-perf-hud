@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.5 — 2026-11-16
+
+- **Streaming (Windows app): works again with the SteamVR beta of 2026-11-13.** That beta rearranged SteamVR's
+  internals, so the Windows app couldn't find the streaming stats and every streaming number went N/A except ping and
+  the refresh rate.
+- **Streaming (Windows app): sturdier against future SteamVR updates.** The app now finds the stats by the names
+  SteamVR gives them (its class names and its frame-timing column names) instead of by details that change whenever
+  SteamVR is rebuilt. If a future update still moves something it can't follow, the affected rows show N/A rather
+  than wrong numbers, as before.
+- The `pc.log` line for the streaming reader now says how the stats were found, which helps when reporting a problem
+  after a SteamVR update.
+- Only the Windows app changed in this release. The headset part is the same as 0.4.4 apart from its version number.
+
 ## 0.4.4 — 2026-11-03
 
 - **Streaming (Windows app): works with the SteamVR beta of 2026-11-03.** That beta changed how SteamVR keeps each
